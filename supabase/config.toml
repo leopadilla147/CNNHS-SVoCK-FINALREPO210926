@@ -1,0 +1,32 @@
+# Supabase CLI configuration for the CNNHS Student Online Voting and
+# Complaints Kiosk (SVoCK) project.
+#
+# Local-development only. The linked hosted project is managed manually by
+# the user (AGENTS.md) — this file only drives `supabase start` /
+# `supabase db reset` / `supabase test db` on a local stack.
+#
+# Seed behavior (HYGI-02 / D-07): demo data lives in supabase/seed-demo.sql
+# and runs ONLY on first start and every `supabase db reset`. `supabase db
+# push` never executes seed files — the migration chain ends seed-free by
+# 021's clamps and by this configuration.
+#
+# D-07 guard: sql_paths relative to the supabase/ directory. Verified for
+# CLI 2.117.0. If a future CLI version is confirmed to ignore a non-default
+# sql_paths entry, fall back to the standard name `seed.sql` (rename or
+# copy) and document it in the Plan 04 apply-runbook.
+project_id = "cnnhs-svock"
+
+[db.seed]
+enabled = true
+sql_paths = ['./seed-demo.sql']
+
+# create_commissioner authenticates via the x-session-token side channel
+# (03-01 port, T-03-03) — same reasoning as change_password above.
+[functions.create_commissioner]
+verify_jwt = false
+
+# create_sslg_adviser authenticates via the x-session-token side channel
+# (05-01 rewrite — the old auth.getUser() path is dead under verify_jwt
+# = false; same reasoning as change_password/create_commissioner above).
+[functions.create_sslg_adviser]
+verify_jwt = false

@@ -1,0 +1,1109 @@
+import { emptyElectionPeriod } from "../context/AppContext";
+import type {
+  Candidate,
+  Commissioner,
+  CommissionerRole,
+  Complaint,
+  CurrentUser,
+  ElectionPeriod,
+  KioskStatus,
+  LogEntry,
+  ReportTemplate,
+  Student,
+  StudentMasterlistEntry,
+  UserRole,
+} from "../context/AppContext";
+import { isSupabaseConfigured, supabase } from "./supabase";
+import { clearSessionToken, saveSessionToken } from "./session";
+
+export const toDate = (value?: string) => value ? value.slice(0, 10) : "";
+// v1.1 election_periods stores start_time/end_time as PostgreSQL `time`
+// values ("08:00:00"), which `new Date()` cannot parse.  Accept a bare
+// HH:MM[:SS] string first and fall back to the timestamp path so the
+// helper keeps working for both `time` and `timestamptz` inputs.
+export const toTime = (value?: string) => {
+  if (!value) return "";
+  const bare = /^(\d{2}:\d{2})/.exec(value);
+  if (bare) return bare[1];
+  return new Date(value).toTimeString().slice(0, 5);
+};
+export const isUuid = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+export const normalize = (value?: string) => (value || "").trim().toLowerCase().replace(/\s+/g, " ");
+
+const requireSupabase = () => {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  return supabase;
+};
+
+/**
+ * The commissioner_role CHECK set (035) — used to narrow the raw
+ * adminprofiles.commissioner_role string before it reaches the typed
+ * CurrentUser.commissionerRole field (login_staff_direct_v2 returns an
+ * untyped DB string).
+ */
+const COMMISSIONER_ROLES: CommissionerRole[] = [
+  "chief",
+  "screening_validation",
+  "electoral_board",
+  "grievance",
+];
+
+function toCommissionerRole(value?: string | null): CommissionerRole | undefined {
+  return value && (COMMISSIONER_ROLES as string[]).includes(value)
+    ? (value as CommissionerRole)
+    : undefined;
+}
+
+export interface StaffLoginRow {
+  token?: string | null;
+  id: string;
+  role_type: string;
+  commissioner_role?: string | null;
+  full_name?: string | null;
+  email?: string | null;
+}
+
+export function mapStaffLoginRow(row: StaffLoginRow, fallbackEmail: string): CurrentUser {
+  let role: string;
+  if (row.role_type === "chief" || row.role_type === "commissioner" || row.role_type === "co_commissioner") {
+    role = "admin";
+  } else if (row.role_type === "sslg_adviser") {
+    role = "sslg_adviser";
+  } else {
+    throw new Error("This account does not have admin privileges.");
+  }
+
+  if (role === "admin") {
+    return {
+      id: row.id,
+      name: row.full_name || "Chief Commissioner",
+      role: "admin",
+      email: row.email || fallbackEmail,
+      commissionerRole: toCommissionerRole(row.commissioner_role) || "chief",
+      mustChangePassword: false,
+    };
+  }
+
+  return {
+    id: row.id,
+    name: row.full_name || "",
+    role: "sslg_adviser",
+    email: row.email || fallbackEmail,
+    commissionerRole: undefined,
+    mustChangePassword: false,
+  };
+}
+
+export async function signInWithSupabase(email: string, password: string): Promise<CurrentUser> {
+  const client = requireSupabase();
+
+  // Single Phase 2 staff-login RPC: one token minted per success server-side,
+  // no client-supplied identity parameter (AUTH-05). Forced-change flag removed
+  // in v1.1 — the 035 return does not contain it.
+  const { data, error } = await client.rpc("login_staff_direct_v2", {
+    p_email: email,
+    p_password: password,
+  });
+
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) throw new Error("Invalid email or password.");
+  const row = data[0];
+
+  const user = mapStaffLoginRow(row, email);
+
+  if (row.token) saveSessionToken(row.token);
+
+  return user;
+}
+
+async function hashPassword(password: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(password);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export async function registerStudentDirect(input: {
+  firstName: string;
+  middleName?: string;
+  lastName: string;
+  gradeLevel: string;
+  gender: string;
+  birthdate: string;
+  lrn: string;
+  email: string;
+  password: string;
+}): Promise<Student> {
+  const client = requireSupabase();
+  const lrn = input.lrn.trim();
+  const passwordHash = await hashPassword(input.password);
+  const id = crypto.randomUUID();
+
+  const { data: master, error: masterError } = await client
+    .from("student_masterlist")
+    .select("id, first_name, last_name, birthdate, grade_level")
+    .eq("lrn", lrn)
+    .eq("enrollment_status", "enrolled")
+    .maybeSingle();
+
+  if (masterError) throw new Error(masterError.message);
+
+  let status: "pending" | "approved" | "rejected";
+  let verificationStatus: "autoApproved" | "forReview" | "blocked" | undefined;
+  let mismatchCount: number;
+  let masterlistId: string | null;
+
+  if (master) {
+    const mismatchChecks = [
+      normalize(master.first_name) !== normalize(input.firstName),
+      normalize(master.last_name) !== normalize(input.lastName),
+      toDate(master.birthdate) !== input.birthdate,
+      normalize(master.grade_level) !== normalize(input.gradeLevel),
+    ];
+    mismatchCount = mismatchChecks.filter(Boolean).length;
+
+    if (mismatchCount >= 2) {
+      throw new Error("The registration information does not match school enrollment records.");
+    }
+
+    status = mismatchCount === 0 ? "approved" : "pending";
+    verificationStatus = mismatchCount === 0 ? "autoApproved" : "forReview";
+    masterlistId = master.id;
+  } else {
+    status = "pending";
+    verificationStatus = "forReview";
+    mismatchCount = 0;
+    masterlistId = null;
+  }
+
+  // v1.1 (036) trimmed students: verification_status / mismatch_count /
+  // reviewed_at / must_change_password / session_version were DROPPED, so
+  // they must NOT appear in the insert (PGRST204 column-not-found -> 400).
+  // The match result still drives `status`; the verification badge is now
+  // derived on the client only (see the returned Student below).
+  const { error } = await client
+    .from("students")
+    .insert({
+      id,
+      masterlist_id: masterlistId,
+      first_name: input.firstName,
+      middle_name: input.middleName || null,
+      last_name: input.lastName,
+      grade_level: input.gradeLevel,
+      gender: input.gender,
+      birthdate: input.birthdate,
+      lrn,
+      email: input.email,
+      password_hash: passwordHash,
+      status,
+    });
+
+  if (error) {
+    if (error.message.includes("duplicate key")) {
+      if (error.message.includes("email")) throw new Error("This email is already registered.");
+      if (error.message.includes("lrn")) throw new Error("This LRN is already registered.");
+    }
+    throw new Error(error.message);
+  }
+
+  return {
+    id,
+    firstName: input.firstName,
+    middleName: input.middleName || undefined,
+    lastName: input.lastName,
+    gradeLevel: input.gradeLevel,
+    gender: input.gender,
+    birthdate: input.birthdate,
+    lrn,
+    email: input.email,
+    status,
+    verificationStatus,
+    mismatchCount,
+    registeredAt: new Date().toISOString().slice(0, 10),
+  };
+}
+
+export async function signInStudentDirect(email: string, password: string): Promise<CurrentUser> {
+  const client = requireSupabase();
+
+  // v2 entrypoint (022): the server verifies the plaintext password against
+  // the stored SHA-256 and mints the session token — the hash never leaves
+  // the database.
+  const { data, error } = await client.rpc("login_student_direct_v2", {
+    p_email: email,
+    p_password: password,
+  });
+
+  // A PostgREST 400 here is a RAISED SQL error, not a transport failure.
+  // The RPC deliberately emits a single identical 'Invalid credentials'
+  // text for both a bad password AND a lockout (SEC-03), so surface that
+  // text instead of masking every error as a generic credential failure —
+  // otherwise a stale schema-cache / lockout is indistinguishable to the
+  // user and to us.
+  if (error) {
+    const msg = error.message || "";
+    if (/invalid credentials/i.test(msg)) {
+      throw new Error(
+        "Invalid email or password. If you have tried several times, the account is temporarily locked for 15 minutes."
+      );
+    }
+    const detail = [error.message, (error as { details?: string }).details, (error as { hint?: string }).hint]
+      .filter(Boolean)
+      .join(" | ");
+    throw new Error(detail || "Login failed. Please try again.");
+  }
+  if (!data || data.length === 0) throw new Error("Invalid email or password.");
+  const session = data[0];
+
+  if (session.status !== "approved") {
+    throw new Error(
+      session.status === "pending"
+        ? "Your account is still pending Commissioner approval."
+        : "Your account has been rejected. Please contact the Commissioner of Grievance."
+    );
+  }
+
+  // Persist the raw 64-hex token; the transport interceptor attaches it to
+  // /rest/v1 requests as the "x-session-token" side-channel header
+  // (fallback transport, migration 039 — the edge 401s a non-JWT bearer).
+  saveSessionToken(session.token);
+
+  return {
+    id: session.id,
+    name: `${session.first_name} ${session.last_name}`,
+    role: "student",
+    email: session.email,
+    // v1.1 (036) dropped students.must_change_password — the login RPC no
+    // longer returns it, so the flag is always false on this path.
+    mustChangePassword: false,
+  };
+}
+
+type CsvImportResult = { imported: number; skipped: number; errors: string[] };
+
+export async function importStudentMasterlistCsv(csvText: string, schoolYear: string): Promise<CsvImportResult> {
+  const client = requireSupabase();
+  const rows = parseCsv(csvText);
+  const [header, ...body] = rows;
+  if (!header?.length) return { imported: 0, skipped: 0, errors: ["CSV is empty."] };
+
+  const columns = header.map((h) => normalize(h).replace(/[^a-z0-9]+/g, "_"));
+  const required = ["lrn", "first_name", "last_name", "birthdate", "grade_level"];
+  const missing = required.filter((key) => !columns.includes(key));
+  if (missing.length) return { imported: 0, skipped: 0, errors: [`Missing required columns: ${missing.join(", ")}`] };
+
+  const payload: Record<string, string>[] = [];
+  const errors: string[] = [];
+  let skipped = 0;
+
+  body.forEach((row, index) => {
+    if (!row.some((cell) => cell.trim())) return;
+    const record = Object.fromEntries(columns.map((col, colIndex) => [col, row[colIndex]?.trim() || ""]));
+    if (!/^\d{12}$/.test(record.lrn)) {
+      skipped += 1;
+      errors.push(`Row ${index + 2}: LRN must be 12 digits.`);
+      return;
+    }
+    payload.push({
+      lrn: record.lrn,
+      first_name: record.first_name,
+      last_name: record.last_name,
+      birthdate: record.birthdate,
+      grade_level: record.grade_level,
+      gender: record.gender || "",
+      school_year: schoolYear,
+      enrollment_status: record.enrollment_status || "enrolled",
+    });
+  });
+
+  if (!payload.length) return { imported: 0, skipped, errors };
+
+  const { error } = await client
+    .from("student_masterlist")
+    .upsert(payload, { onConflict: "lrn,school_year" });
+
+  if (error) throw new Error(error.message);
+  return { imported: payload.length, skipped, errors };
+}
+
+export async function fetchSupabaseState() {
+  if (!isSupabaseConfigured || !supabase) return null;
+
+  // v1.1 domain trim (036/037) removed surfaces the original loader read,
+  // which made the boot load throw 404/400:
+  //   * public.commissioners  — dropped by 037 (staff identity now lives in
+  //                             public.adminprofiles, read via the staff RPCs)
+  //   * public.kiosk_devices  — dropped by 037 (kiosk build is a separate project)
+  //   * election_periods.start_at — dropped by 036 (schedule is election_date
+  //                             + start_time/end_time now)
+  //   * candidates ... votes(id)  — the votes->candidates FK was dropped by
+  //                             018 (abstain votes), so PostgREST can no longer
+  //                             resolve the embed (400).  Vote counts for the
+  //                             candidate card are not part of this boot load.
+  // Every select below now targets a surviving table/column only.
+  const [
+    studentsRes,
+    masterlistRes,
+    electionRes,
+    candidatesRes,
+    complaintsRes,
+    reportsRes,
+    logsRes,
+  ] = await Promise.all([
+    safeSelect("students", "*", "registered_at"),
+    safeSelect("student_masterlist", "*", "imported_at"),
+    safeSelect("election_periods", "*", "election_date", 1),
+    safeSelect("candidates", "*, parties(name)", "submitted_at"),
+    safeSelect("complaints", "*, students(first_name,last_name)", "submitted_at"),
+    safeSelect("report_templates", "*", "enclosure"),
+    safeSelect("audit_logs", "*", "timestamp", 150),
+  ]);
+
+  return {
+    students: studentsRes.map(mapStudent),
+    studentMasterlist: masterlistRes.map(mapMasterlistEntry),
+    // No commissioner/kiosk tables in v1.1 — keep the state shape without
+    // firing a request at a dropped relation.
+    commissioners: [] as Commissioner[],
+    electionPeriod: electionRes[0] ? mapElectionPeriod(electionRes[0]) : emptyElectionPeriod,
+    candidates: candidatesRes.map(mapCandidate),
+    complaints: complaintsRes.map(mapComplaint),
+    reportTemplates: reportsRes.map(mapReportTemplate),
+    kioskStatuses: [] as KioskStatus[],
+    logs: logsRes.map(mapLog),
+  };
+}
+
+export async function syncStudents(next: Student[], previous: Student[]) {
+  if (!supabase) return;
+  const db = supabase;
+  await Promise.all(next.map((student) => {
+    if (!isUuid(student.id)) return Promise.resolve();
+    const before = previous.find((s) => s.id === student.id);
+    if (before && JSON.stringify(before) === JSON.stringify(student)) return Promise.resolve();
+    // 036 trimmed students.reviewed_at — write only surviving columns.
+    return db.from("students").update({
+      first_name: student.firstName,
+      middle_name: student.middleName || null,
+      last_name: student.lastName,
+      grade_level: student.gradeLevel,
+      gender: student.gender,
+      birthdate: student.birthdate,
+      lrn: student.lrn,
+      email: student.email,
+      status: student.status,
+    }).eq("id", student.id);
+  }));
+}
+
+/**
+ * Pure builder for the election_periods UPDATE payload.
+ *
+ * v1.1 (036) reworked the schedule: the legacy timestamptz window is gone
+ * and election_date (date) + start_time (time) + end_time (time) replace it.
+ * Only the surviving workflow flags are written.  Referencing a trimmed
+ * column (start_at, end_at, campaign_*, nomination_open, rules_discussion_at,
+ * official_list_posted, plan_finalized) would 400 (PGRST204 column not found).
+ */
+export function buildElectionPeriodSyncPayload(period: ElectionPeriod) {
+  return {
+    election_date: period.startDate || null,
+    start_time: period.startTime || null,
+    end_time: period.endTime || null,
+    is_active: period.isActive,
+    venue: period.venue || null,
+    candidacy_open: Boolean(period.candidacyOpen),
+    results_published: Boolean(period.resultsPublished),
+    proclaimed: Boolean(period.proclaimed),
+    proclaimed_at: period.proclaimedAt ? `${period.proclaimedAt}` : null,
+    voting_method: period.votingMethod || "plurality",
+  };
+}
+
+export async function syncElectionPeriod(period: ElectionPeriod) {
+  if (!supabase) return;
+  const { data } = await supabase.from("election_periods").select("id").order("election_date", { ascending: false }).limit(1).maybeSingle();
+  if (!data?.id) return;
+
+  await supabase.from("election_periods").update(buildElectionPeriodSyncPayload(period)).eq("id", data.id);
+}
+
+export async function syncComplaints(next: Complaint[], previous: Complaint[]) {
+  if (!supabase) return;
+  const db = supabase;
+  await Promise.all(next.map((complaint) => {
+    if (!isUuid(complaint.id)) return Promise.resolve();
+    const before = previous.find((c) => c.id === complaint.id);
+    if (before && JSON.stringify(before) === JSON.stringify(complaint)) return Promise.resolve();
+    return db.from("complaints").update({
+      status: complaint.status,
+      resolution_note: complaint.rejectionReason || null,
+      incident_date: complaint.incidentDate || null,
+      resolved_at: complaint.resolvedAt || null,
+    }).eq("id", complaint.id);
+  }));
+}
+
+/** Insert a complaint as the current student (028 RLS owner-keyed insert leg; status defaults to 'filed'). */
+export async function insertComplaint(row: {
+  studentId: string;
+  title: string;
+  description: string;
+  incidentDate?: string;
+}): Promise<Complaint> {
+  const db = requireSupabase();
+  const { data, error } = await db.from("complaints").insert({
+    student_id: row.studentId,
+    subject: row.title,
+    description: row.description,
+    incident_date: row.incidentDate || null,
+  }).select("*, students(first_name,last_name)").single();
+  if (error) throw new Error(error.message);
+  return mapComplaint(data);
+}
+
+/** Decide a complaint via the 028 role-guarded RPC — the ONLY complaints mutation path (security R2). */
+export async function decideComplaintRpc(
+  complaintId: string,
+  action: "accepted" | "rejected",
+  reason?: string
+): Promise<void> {
+  const db = requireSupabase();
+  const { error } = await db.rpc("decide_complaint_rpc", {
+    p_complaint_id: complaintId,
+    p_action: action,
+    p_reason: reason || null,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function insertAuditLog(entry: Omit<LogEntry, "id" | "timestamp">, actorId?: string) {
+  if (!supabase) return;
+  try {
+    await supabase.rpc("insert_audit_log_rpc", {
+      p_actor_id: actorId && isUuid(actorId) ? actorId : null,
+      p_actor_name: entry.user,
+      p_actor_role: entry.role.toLowerCase(),
+      p_action: entry.action,
+      p_details: entry.details,
+      p_type: entry.type,
+    });
+  } catch {
+    // silently fail — audit log is best-effort
+  }
+}
+
+async function safeSelect(table: string, select: string, orderBy: string, limit?: number) {
+  if (!supabase) return [];
+  let query = supabase.from(table).select(select).order(orderBy, { ascending: false });
+  if (limit) query = query.limit(limit);
+  const { data, error } = await query;
+  if (error) {
+    console.warn(`Supabase table skipped (${table}):`, error.message);
+    return [];
+  }
+  return data || [];
+}
+
+function mapStudent(row: any): Student {
+  return {
+    id: row.id,
+    firstName: row.first_name,
+    middleName: row.middle_name || undefined,
+    lastName: row.last_name,
+    gradeLevel: row.grade_level,
+    gender: row.gender,
+    birthdate: toDate(row.birthdate),
+    lrn: row.lrn,
+    status: row.status,
+    email: row.email,
+    registeredAt: toDate(row.registered_at),
+    verificationStatus: row.verification_status || undefined,
+    mismatchCount: row.mismatch_count ?? undefined,
+  };
+}
+
+function mapMasterlistEntry(row: any): StudentMasterlistEntry {
+  return {
+    id: row.id,
+    lrn: row.lrn,
+    firstName: row.first_name,
+    lastName: row.last_name,
+    birthdate: toDate(row.birthdate),
+    gradeLevel: row.grade_level,
+    gender: row.gender || undefined,
+    schoolYear: row.school_year,
+    enrollmentStatus: row.enrollment_status,
+    importedAt: toDate(row.imported_at),
+  };
+}
+
+function mapCommissioner(row: any): Commissioner {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    role: row.commissioner_role,
+    status: row.status,
+    appointedAt: toDate(row.appointed_at),
+  };
+}
+
+function mapElectionPeriod(row: any): ElectionPeriod {
+  // v1.1 (036) shape: election_date + start_time/end_time replace the legacy
+  // start_at/end_at window.  The campaign_* / nomination_open /
+  // rules_discussion_at / official_list_posted / plan_finalized columns were
+  // dropped, so each maps to an explicit empty/false default.
+  return {
+    startDate: toDate(row.election_date),
+    startTime: toTime(row.start_time),
+    endDate: toDate(row.election_date),
+    endTime: toTime(row.end_time),
+    isActive: Boolean(row.is_active),
+    venue: row.venue || undefined,
+    candidacyOpen: Boolean(row.candidacy_open),
+    nominationOpen: false,
+    resultsPublished: Boolean(row.results_published),
+    officialListPosted: false,
+    campaignStartDate: "",
+    campaignStartTime: "",
+    campaignEndDate: "",
+    campaignEndTime: "",
+    planFinalized: false,
+    proclaimed: Boolean(row.proclaimed),
+    proclaimedAt: row.proclaimed_at ? row.proclaimed_at : undefined,
+    rulesDiscussionAt: undefined,
+    votingMethod: row.voting_method || undefined,
+  };
+}
+
+function mapCandidate(row: any): Candidate {
+  return {
+    id: row.id,
+    surname: row.surname,
+    givenName: row.given_name,
+    middleName: row.middle_name || undefined,
+    extensionName: row.extension_name || undefined,
+    gradeLevel: row.grade_level,
+    position: row.position,
+    partyAffiliation: row.parties?.name || undefined,
+    partyId: row.party_id || undefined,
+    gender: row.gender,
+    dateOfBirth: toDate(row.date_of_birth),
+    age: row.age,
+    email: row.email,
+    mobileNumber: row.mobile_number,
+    landline: row.landline || undefined,
+    homeAddress: row.home_address,
+    parentGuardianName: row.parent_guardian_name || undefined,
+    parentGuardianContact: row.parent_guardian_contact || undefined,
+    picture: row.picture_url || undefined,
+    documents: {
+      applicationForm: row.doc_application_form,
+      introductoryProfile: row.doc_introductory_profile,
+      screeningForm: row.doc_screening_form,
+      reportCard: row.doc_report_card,
+      goodMoralCert: row.doc_good_moral_cert,
+      eafFront: row.doc_eaf_front,
+      eafBack: row.doc_eaf_back,
+    },
+    eafFrontImage: row.eaf_front_url || undefined,
+    eafBackImage: row.eaf_back_url || undefined,
+    positionApprovalStatus: row.position_approval_status || undefined,
+    leadershipProfile: row.leadership_profile || undefined,
+    rejectionReason: row.rejection_reason || undefined,
+    rejectionDetails: row.rejection_details || undefined,
+    rejectionTier: row.rejection_tier || undefined,
+    status: row.status,
+    submittedAt: toDate(row.submitted_at),
+    votes: row.votes?.length || 0,
+    studentId: row.student_id,
+  };
+}
+
+function mapComplaint(row: any): Complaint {
+  const studentName = row.students ? `${row.students.first_name} ${row.students.last_name}` : "Student";
+  return {
+    id: row.id,
+    studentName,
+    subject: row.subject,
+    description: row.description,
+    status: row.status,
+    submittedAt: toDate(row.submitted_at),
+    rejectionReason: row.resolution_note || undefined,
+    incidentDate: row.incident_date ? toDate(row.incident_date) : undefined,
+    resolvedAt: row.resolved_at ? toDate(row.resolved_at) : undefined,
+  };
+}
+
+function mapReportTemplate(row: any): ReportTemplate {
+  return {
+    id: row.id,
+    enclosure: row.enclosure,
+    title: row.title,
+    ownerRole: row.owner_role,
+    category: row.category,
+  };
+}
+
+function mapKioskStatus(row: any): KioskStatus {
+  return {
+    id: row.id,
+    name: row.name,
+    location: row.location,
+    lastSeenAt: row.last_seen_at?.replace("T", " ").slice(0, 19),
+    syncStatus: row.sync_status,
+    queuedVotes: row.queued_votes || 0,
+  };
+}
+
+function mapLog(row: any): LogEntry {
+  return {
+    id: row.id,
+    timestamp: row.timestamp?.replace("T", " ").slice(0, 19) || "",
+    user: row.actor_name,
+    role: row.actor_role,
+    action: row.action,
+    details: row.details,
+    type: row.type,
+  };
+}
+
+export async function uploadCandidateImage(
+  bucket: "candidate-pictures" | "candidate-documents",
+  file: File | Blob,
+  fileName: string
+): Promise<string> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.storage.from(bucket).upload(fileName, file, { upsert: true });
+  if (error) throw new Error(`Storage upload failed: ${error.message}`);
+  const { data: { publicUrl } } = supabase.storage.from(bucket).getPublicUrl(fileName);
+  return publicUrl;
+}
+
+export async function submitCandidacyRpc(payload: {
+  p_action: "create" | "update" | "finalize";
+  p_candidate_data?: Record<string, unknown>;
+  p_candidate_id?: string;
+  p_picture_url?: string;
+  p_eaf_front_url?: string;
+  p_eaf_back_url?: string;
+}): Promise<any> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("submit_candidacy_rpc", payload);
+  if (error) {
+    const msg = [error.message, error.details, error.hint].filter(Boolean).join(" | ");
+    throw new Error(msg);
+  }
+  return data;
+}
+
+export async function reviewStudentRpc(
+  p_student_id: string,
+  p_action: "approve" | "reject",
+  // Retained for call-site compatibility; 036 (AUTH-05) removed the
+  // server-side p_actor_id parameter — the actor derives exclusively from
+  // the session spine — so it is intentionally NOT sent.
+  _p_actor_id?: string
+): Promise<any> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("review_student_rpc", {
+    p_student_id,
+    p_action,
+  });
+  if (error) {
+    const msg = [error.message, error.details, error.hint].filter(Boolean).join(" | ");
+    throw new Error(msg);
+  }
+  return data;
+}
+
+export async function reviewCandidacyRpc(
+  p_candidate_id: string,
+  p_action: "approve" | "reject",
+  p_rejection_reason?: string,
+  p_rejection_details?: string,
+  p_rejection_tier?: "low" | "high",
+  // Retained for call-site compatibility; 036 (AUTH-05) removed the
+  // server-side p_actor_id parameter — the actor derives exclusively from
+  // the session spine — so it is intentionally NOT sent (sending it makes
+  // PostgREST fail the signature match with PGRST202 → 404).
+  _p_actor_id?: string
+): Promise<any> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("review_candidacy_rpc", {
+    p_candidate_id,
+    p_action,
+    p_rejection_reason: p_action === "reject" ? p_rejection_reason : null,
+    p_rejection_details: p_action === "reject" ? p_rejection_details : null,
+    p_rejection_tier: p_action === "reject" ? p_rejection_tier : null,
+  });
+  if (error) {
+    const msg = [error.message, error.details, error.hint].filter(Boolean).join(" | ");
+    throw new Error(msg);
+  }
+  return data;
+}
+
+export async function signInSslgAdviser(email: string, password: string): Promise<CurrentUser> {
+  const client = requireSupabase();
+
+  // 035 consolidated EVERY staff identity onto public.adminprofiles and
+  // dropped the legacy login_sslg_adviser_direct_v2 surface (035:459).
+  // login_staff_direct_v2 is now the single staff login; it returns
+  // role_type 'sslg_adviser' for advisers, so this entrypoint delegates to
+  // it and rejects any non-adviser account (the UI gate stays intact).
+  const { data, error } = await client.rpc("login_staff_direct_v2", {
+    p_email: email,
+    p_password: password,
+  });
+
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) throw new Error("Invalid email or password.");
+  const row = data[0];
+
+  if (row.role_type !== "sslg_adviser") {
+    throw new Error("This account is not an SSLG Adviser. Use the correct login type.");
+  }
+
+  const user = mapStaffLoginRow(row, email);
+
+  // The 035 staff login mints the session token once per success.
+  if (row.token) saveSessionToken(row.token);
+
+  return user;
+}
+
+/**
+ * 030 (D-14) bootstrap/profile refresh: re-read the acting user's profile
+ * (incl. must_change_password) from the server.  The session spine derives
+ * the actor from the stored token, so a page reload cannot bypass the
+ * forced-change gate by replaying a stale stored user.
+ */
+export interface CurrentProfile {
+  id: string;
+  role: string;
+  commissioner_role: string | null;
+  full_name: string | null;
+  email: string | null;
+  must_change_password: boolean;
+}
+
+export async function getCurrentProfileRpc(): Promise<CurrentProfile | null> {
+  if (!supabase) return null;
+  const { data, error } = await supabase.rpc("get_current_profile_rpc");
+  if (error || !data || data.length === 0) return null;
+  const row = data[0];
+  return {
+    id: row.id,
+    role: row.role,
+    commissioner_role: row.commissioner_role ?? null,
+    full_name: row.full_name ?? null,
+    email: row.email ?? null,
+    must_change_password: Boolean(row.must_change_password),
+  };
+}
+
+/**
+ * D-22 dispatch: the password-change path branches on the acting user's
+ * role. Students change via the change_my_password RPC (actor derived from
+ * the session spine); admin/commissioner/adviser change via the
+ * change_password edge function (identity from the x-session-token header
+ * the 02-01 transport interceptor attaches to /functions/v1/ calls).
+ *
+ * The new password travels PLAINTEXT over TLS to the server, which hashes
+ * it — no client-side hashing on any password-change path (D-22/D-23).
+ * On success the dead session token is cleared client-side (ACCT-05 half);
+ * the caller additionally resets the app user state so the UI routes to
+ * login (DashboardLayout guard).
+ */
+export async function changePasswordForCurrentUser(
+  currentPassword: string,
+  newPassword: string
+): Promise<void> {
+  const client = requireSupabase();
+
+  let currentRole: string | null = null;
+  try {
+    const raw = localStorage.getItem("svock_current_user");
+    currentRole = raw ? ((JSON.parse(raw) as { role?: string | null }).role ?? null) : null;
+  } catch {
+    currentRole = null;
+  }
+
+  if (currentRole === "student") {
+    const { error } = await client.rpc("change_my_password", {
+      p_current_password: currentPassword,
+      p_new_password: newPassword,
+    });
+    if (error) throw new Error(error.message);
+  } else {
+    // Staff/commissioner/adviser — the interceptor supplies the session
+    // token in the x-session-token header; none is passed from here.
+    const { data, error } = await client.functions.invoke("change_password", {
+      body: { currentPassword, newPassword },
+    });
+    if (error) throw new Error(error.message);
+    if (data && (data as { error?: string }).error) throw new Error((data as { error?: string }).error!);
+  }
+
+  // ACCT-05 client half: a successful change killed the server-side
+  // sessions; never keep a dead token around.
+  clearSessionToken();
+}
+
+export async function updateStudentPassword(
+  _studentId: string,
+  currentPassword: string,
+  newPassword: string
+): Promise<void> {
+  await changePasswordForCurrentUser(currentPassword, newPassword);
+}
+
+export async function updateAdminPassword(
+  currentPassword: string,
+  newPassword: string
+): Promise<void> {
+  await changePasswordForCurrentUser(currentPassword, newPassword);
+}
+
+export async function requestPartyMembershipRpc(
+  pPartyId: string,
+  pStudentId: string
+): Promise<any> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("request_party_membership_rpc", {
+    p_party_id: pPartyId,
+    p_student_id: pStudentId,
+  });
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function reviewPartyMembershipRpc(
+  pMemberId: string,
+  pAction: "approve" | "reject",
+  pReviewerStudentId: string
+): Promise<any> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("review_party_membership_rpc", {
+    p_member_id: pMemberId,
+    p_action: pAction,
+    p_reviewer_student_id: pReviewerStudentId,
+  });
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function createSslgAdviser(
+  name: string,
+  email: string
+): Promise<{ email: string; password: string }> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.functions.invoke("create_sslg_adviser", {
+    body: { name, email },
+  });
+  if (error) throw new Error(error.message);
+  if (data?.error) throw new Error(data.error);
+  return { email: data.adviser.email, password: data.password };
+}
+
+export async function createCommissioner(
+  name: string,
+  email: string,
+  role: CommissionerRole
+): Promise<{ email: string; password: string }> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.functions.invoke("create_commissioner", {
+    body: { name, email, role },
+  });
+  if (error) throw new Error(error.message);
+  if (data?.error) throw new Error(data.error);
+  return { email: data.commissioner.email, password: data.password };
+}
+
+/** D-05 target roles the reset_password edge fn accepts. */
+export type ResetTargetRole = "commissioner" | "co_commissioner" | "student";
+
+/**
+ * 05-02 (D-05 / ACCT-04): admin/adviser-initiated password reset.
+ * Invokes the reset_password edge function; the transport interceptor
+ * attaches the stored x-session-token to /functions/v1/ calls (same as
+ * createCommissioner/createSslgAdviser).  The edge fn enforces the reset
+ * scope (admin -> commissioners/co-commissioners; sslg_adviser -> approved
+ * students) and returns the one-time temp password — displayed exactly once
+ * via the D-03 modal.  On success the target's must_change_password flag is
+ * set and every existing session is dead (D-04/D-14).
+ */
+export async function resetPassword(
+  targetRole: ResetTargetRole,
+  targetId: string
+): Promise<{ name: string; email: string; password: string }> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.functions.invoke("reset_password", {
+    body: { targetRole, targetId },
+  });
+  if (error) throw new Error(error.message);
+  if (data?.error) throw new Error(data.error);
+  return { name: data.name, email: data.email, password: data.password };
+}
+
+export async function updateCommissionerStatus(
+  commissionerId: string,
+  status: "active" | "inactive"
+): Promise<void> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("update_commissioner_status", {
+    p_commissioner_id: commissionerId,
+    p_status: status,
+  });
+  if (error) throw new Error(error.message);
+}
+
+// Chief-gated live results (03-01). The blanket grant on
+// live_results_restricted was revoked in migration 027; the only
+// read path is this RPC, which enforces chief role server-side
+// (T-03-01 / T-03-05). Mirror of the get_live_results_rpc return
+// columns (migration 027), kept in the same shape as the view.
+export interface LiveResultRow {
+  election_period_id: string;
+  position: string;
+  candidate_id: string;
+  given_name: string;
+  surname: string;
+  party_name: string | null;
+  votes: number;
+}
+
+export async function getLiveResultsRpc(): Promise<LiveResultRow[]> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("get_live_results_rpc");
+  if (error) throw new Error(error.message);
+  return (data || []) as LiveResultRow[];
+}
+
+/**
+ * 046 — Chief-gated staff roster (Officer Management).  037 dropped
+ * commissioners/sslg_advisers and 038 revoked direct SELECT on
+ * adminprofiles, so this SECURITY DEFINER RPC is the only client-readable
+ * roster; it never exposes password material.
+ */
+export interface StaffRosterRow {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  role_type: string;
+  commissioner_role: string | null;
+  status: string;
+  appointed_at: string | null;
+}
+
+export async function listStaffRosterRpc(): Promise<StaffRosterRow[]> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("list_staff_roster_rpc");
+  if (error) throw new Error(error.message);
+  return (data || []) as StaffRosterRow[];
+}
+
+/**
+ * 046 — Chief-gated per-position abstain counts (Election Reports).
+ * 018 stores an abstain as a votes row with abstained=true and
+ * candidate_id NULL; the client never reads public.votes directly, so
+ * the abstain percentage is computed from this RPC.
+ */
+export interface AbstainSummaryRow {
+  election_period_id: string;
+  position: string;
+  abstain_count: number;
+}
+
+export async function getAbstainSummaryRpc(): Promise<AbstainSummaryRow[]> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("get_abstain_summary_rpc");
+  if (error) throw new Error(error.message);
+  return (data || []).map((row: AbstainSummaryRow) => ({
+    ...row,
+    abstain_count: Number(row.abstain_count) || 0,
+  }));
+}
+
+export async function getCurrentElectionId(): Promise<string | null> {
+  if (!supabase) return null;
+  const { data } = await supabase
+    .from("election_periods")
+    .select("id")
+    .order("election_date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data?.id || null;
+}
+
+export async function openElectionRpc(pElectionId: string): Promise<void> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("open_election_rpc", {
+    p_election_id: pElectionId,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function closeElectionRpc(pElectionId: string): Promise<void> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("close_election_rpc", {
+    p_election_id: pElectionId,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function publishResultsRpc(pElectionId: string): Promise<void> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("publish_results_rpc", {
+    p_election_id: pElectionId,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function proclaimWinnersRpc(pElectionId: string): Promise<{ position: string; winnerName: string; votes: number }[]> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("proclaim_winners_rpc", {
+    p_election_id: pElectionId,
+  });
+  if (error) throw new Error(error.message);
+  return (data || []).map((row: any) => ({
+    position: row.winning_position,
+    winnerName: row.winner_name,
+    votes: row.votes,
+  }));
+}
+
+export function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const next = text[i + 1];
+    if (char === '"' && quoted && next === '"') {
+      field += '"';
+      i += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === "," && !quoted) {
+      row.push(field);
+      field = "";
+    } else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && next === "\n") i += 1;
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+    } else {
+      field += char;
+    }
+  }
+  row.push(field);
+  rows.push(row);
+  return rows.filter((r) => r.some((cell) => cell.trim()));
+}

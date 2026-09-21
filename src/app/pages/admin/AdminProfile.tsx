@@ -1,0 +1,142 @@
+import { useState } from "react";
+import { motion } from "motion/react";
+import { Shield, User, Mail, Lock, Save, Eye, EyeOff, AlertCircle, CheckCircle } from "lucide-react";
+import { useApp } from "../../context/AppContext";
+import { updateAdminPassword } from "../../lib/supabaseData";
+import { useConfirm } from "../../lib/useConfirm";
+
+const commissionerLabels: Record<string, string> = {
+  chief: "Chief Commissioner",
+  screening_validation: "Commissioner of Screening & Validation",
+  electoral_board: "Commissioner of Electoral Board",
+  appointment: "Commissioner of Appointment",
+  grievance: "Commissioner of Grievance",
+};
+
+export default function AdminProfile() {
+  const { currentUser, addLog, setCurrentUser } = useApp();
+  const passwordConfirm = useConfirm({
+    title: "Change Password?",
+    description: "Are you sure you want to update your password?",
+    confirmText: "Update",
+  });
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [showCurrent, setShowCurrent] = useState(false);
+  const [showNew, setShowNew] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [passwordError, setPasswordError] = useState("");
+
+  if (!currentUser) return null;
+
+  const handlePasswordChange = async () => {
+    const confirmed = await passwordConfirm.confirm();
+    if (!confirmed) return;
+    setPasswordError("");
+    if (!newPassword) { setPasswordError("New password is required."); return; }
+    if (newPassword.length < 6) { setPasswordError("New password must be at least 6 characters."); return; }
+    if (newPassword !== confirmNewPassword) { setPasswordError("New passwords do not match."); return; }
+    try {
+      await updateAdminPassword(currentPassword, newPassword);
+      setSaved(true);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+      addLog({
+        user: currentUser.name,
+        role: "Admin",
+        action: "Password Changed",
+        details: "Admin password updated successfully.",
+        type: "success",
+      });
+      // ACCT-05 client half: the server killed the active session on the
+      // password change; reset the user state so the layout routes to login
+      // (persistCurrentUser also clears the dead session token).
+      setCurrentUser(null);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setPasswordError(err instanceof Error ? err.message : "Password update failed.");
+    }
+  };
+
+  return (
+    <div className="p-6 md:p-8 max-w-3xl mx-auto">
+      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
+        <h1 className="text-gray-900 mb-1">My Profile</h1>
+        <p className="text-gray-500 text-sm">View your account information and change your password.</p>
+      </motion.div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden mb-6">
+        <div className="p-6 text-white" style={{ backgroundColor: "#5C0102" }}>
+          <div className="flex items-center gap-4">
+            <div className="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center text-2xl font-bold">
+              {currentUser.name.charAt(0)}
+            </div>
+            <div>
+              <h2 className="text-white text-lg">{currentUser.name}</h2>
+              <p className="text-white/70 text-sm">{currentUser.commissionerRole ? commissionerLabels[currentUser.commissionerRole] : "Administrator"}</p>
+            </div>
+          </div>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="flex items-center gap-3">
+            <Mail size={16} className="text-gray-400" />
+            <div><div className="text-sm text-gray-900">{currentUser.email}</div><div className="text-xs text-gray-500">Email</div></div>
+          </div>
+          <div className="flex items-center gap-3">
+            <Shield size={16} className="text-gray-400" />
+            <div><div className="text-sm text-gray-900 capitalize">{currentUser.commissionerRole?.replace(/_/g, " ") || "Admin"}</div><div className="text-xs text-gray-500">Role</div></div>
+          </div>
+          <div className="flex items-center gap-3">
+            <User size={16} className="text-gray-400" />
+            <div><div className="text-sm text-gray-900 capitalize">{currentUser.role}</div><div className="text-xs text-gray-500">Account Type</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <h3 className="text-gray-900 text-sm flex items-center gap-2 mb-5">
+          <Lock size={16} style={{ color: "#5C0102" }} /> Change Password
+        </h3>
+        <div className="space-y-4 max-w-sm">
+          <div>
+            <label className="block text-xs text-gray-600 mb-1">Current Password</label>
+            <div className="relative">
+              <input type={showCurrent ? "text" : "password"} value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 pr-10" />
+              <button type="button" onClick={() => setShowCurrent(!showCurrent)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">{showCurrent ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs text-gray-600 mb-1">New Password</label>
+            <div className="relative">
+              <input type={showNew ? "text" : "password"} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 pr-10" />
+              <button type="button" onClick={() => setShowNew(!showNew)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">{showNew ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs text-gray-600 mb-1">Confirm New Password</label>
+            <div className="relative">
+              <input type={showConfirm ? "text" : "password"} value={confirmNewPassword} onChange={(e) => setConfirmNewPassword(e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 pr-10" />
+              <button type="button" onClick={() => setShowConfirm(!showConfirm)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">{showConfirm ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+            </div>
+          </div>
+          {passwordError && (
+            <p className="text-xs text-red-500 flex items-center gap-1">
+              <AlertCircle size={12} /> {passwordError}
+            </p>
+          )}
+          <button
+            onClick={handlePasswordChange}
+            className="px-4 py-2.5 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:opacity-90"
+            style={{ backgroundColor: "#5C0102" }}
+          >
+            {saved ? <><CheckCircle size={14} /> Saved</> : <><Save size={14} /> Update Password</>}
+          </button>
+        </div>
+      </div>
+      {passwordConfirm.dialog}
+    </div>
+  );
+}

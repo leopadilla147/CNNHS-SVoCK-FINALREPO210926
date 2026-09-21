@@ -1,0 +1,48 @@
+Students/Candidates
+- Update the Approve candidate for the incoming meeting for the discussion of rules using Email and candidate tab
+	(COMEA President or Chairperson)
+	(Moritorium (No Campaign))
+	(Chairperson or Electoral Board)
+- Existing Grade 7 will run for Grade 8 Representative and so on (Voting will happen in ~April) while Incoming grade 7 will run for Grade 7 representative (Voting will have in ~August)
+- Set Minimum 50 words for Paragraph type questions.
+- New Tab for Reporting a complaint (use the "CNNHS-Grievance-Form-for-SSLG-Elections.docx" inside based document folder as a template)
+- Remove Nomination Tab. (Complete Delete for this tab)
+
+Commissioner of Screening and Validation
+- Remove Official List (Approval of Chief Commissioner/Confirm thru Screening and Validation Commissioner)
+- Auto Delete of Student Files from archive after 1 year. (Following the Data Privacy Act)
+
+Commissioner of Grievance
+- If there is a complaint received the Grievance commissioner then the commissioner have the ability to accept or reject (Rejection will have reason)
+- If Accepted, the complaint student will received a letter (Use the "CNNHS-Grievance-Commissioner-Response-Form.docx" inside the Based Document as a template)
+- If rejected, the complaint rejected reason will be sent back to the complainant.
+- The Grievance page will also have Log of rejected/accepted. (Complaint Tab, sort it, pending first)
+- Remove Hearings Tab.
+
+Commissioner of Electoral board.
+- Remove Election Planning Hub.
+- Remove Campaign Timeline.
+- Remove Live Result.
+- Set Date for Rules discussion and Election Date (Including what type of Voting method).
+- If there is a Existing complaint, Final Result announcement will be halt.
+- Recomendation: Include COMEA Student organization officer. Certificate "Job Well Done" for COMEA Student organization officers. (Use the "COMEACertificate.png" as a template for this certificate)
+
+SSLG Adviser
+- Add the Masterlist for mass Enrollment. (Use the "CNNHS-MASTER-LIST-FORMAT.docx" inside Based Document folder as a template)
+- Should have a discussion page for possible future plans with the students officer.
+- Remove the other commissioner tab in SSLG adviser account.
+- Sort the student (pending student should be first on the list)
+- Remove the "verification" in student enrollment tab.
+
+Chief Commissioner
+- Remove Student Enrollment.
+- remove other commissioner tab
+- Live result
+- Appointing Commissioner With Co-Commissioner(Non-Changeable Password)
+- Election Report for the chief commissioner that can be printed (Use the "LG-COMEA_ACCOMPLISHMENT-REPORT.SSLG-AND-YES-O-26-27.docx"inside Based Document folder as a template)
+
+Commissioner of Appointment (Remove Appointment for now)
+
+Completely remove the SSLG Officers in the system.
+
+Update/Clean the Database Supabase.

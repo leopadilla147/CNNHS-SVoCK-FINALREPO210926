@@ -70,7 +70,6 @@ export default function AdminElectionSetup() {
     endDate: electionPeriod.endDate,
     endTime: electionPeriod.endTime,
     venue: electionPeriod.venue || "IoT biometric kiosk precinct",
-    rulesDiscussionAt: electionPeriod.rulesDiscussionAt || "",
     votingMethod: electionPeriod.votingMethod || "plurality",
   });
 
@@ -104,24 +103,32 @@ export default function AdminElectionSetup() {
 
   const handleSave = async () => {
     setError(null);
-    if (!form.startDate || !form.endDate) {
-      showError("Voting period start and end dates are required.");
+    if (!form.startDate || !form.startTime || !form.endDate || !form.endTime) {
+      showError("Complete all voting period fields before saving.");
       return;
     }
     if (form.endDate < form.startDate) {
       showError("End date must be after start date.");
       return;
     }
+    if (form.endTime <= form.startTime) {
+      showError("End time must be after start time.");
+      return;
+    }
     const ok = await saveConfirm.confirm();
     if (!ok) return;
-    setElectionPeriod({
+    const res = await setElectionPeriod({
       ...electionPeriod,
       ...form,
     });
+    if (!res.ok) {
+      showError(res.message || "Failed to save election schedule.");
+      return;
+    }
     addLog({
       user: logUser, role: "Admin",
       action: "Election Schedule Updated",
-      details: `Voting period: ${form.startDate} ${form.startTime} - ${form.endDate} ${form.endTime}, Rules discussion: ${form.rulesDiscussionAt || "TBD"}, Voting method: ${form.votingMethod}`,
+      details: `Voting period: ${form.startDate} ${form.startTime} - ${form.endDate} ${form.endTime}, Voting method: ${form.votingMethod}`,
       type: "info",
     });
     showSuccess("Election schedule saved.");
@@ -137,12 +144,17 @@ export default function AdminElectionSetup() {
       showError("End date must be after start date.");
       return;
     }
+    if (form.endTime <= form.startTime) {
+      showError("End time must be after start time.");
+      return;
+    }
     const ok = await finalizeConfirm.confirm();
     if (!ok) return;
 
     setLoading(true);
     try {
-      setElectionPeriod({ ...electionPeriod, ...form });
+      const res = await setElectionPeriod({ ...electionPeriod, ...form });
+      if (!res.ok) throw new Error(res.message || "Failed to finalize election schedule.");
       addLog({
         user: logUser, role: "Admin",
         action: "Election Schedule Finalized",
@@ -403,28 +415,18 @@ export default function AdminElectionSetup() {
               </div>
 
               <div className="space-y-4">
-                <h4 className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Rules & Voting Method</h4>
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  <div>
-                    <label className="block text-xs text-gray-600 mb-1">Rules Discussion Date</label>
-                    <input type="date" value={form.rulesDiscussionAt}
-                      onChange={(e) => setForm({ ...form, rulesDiscussionAt: e.target.value })}
-                      disabled={!!electionPeriod.startDate}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed" />
-                    <p className="text-xs text-gray-400 mt-1">Date the election rules are discussed with candidates and party representatives.</p>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-600 mb-1">Voting Method</label>
-                    <select value={form.votingMethod}
-                      onChange={(e) => setForm({ ...form, votingMethod: e.target.value })}
-                      disabled={!!electionPeriod.startDate}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">
-                      <option value="plurality">Plurality (highest votes wins)</option>
-                      <option value="plurality_with_run_off">Plurality with Run-off</option>
-                      <option value="ranked_choice">Ranked Choice</option>
-                    </select>
-                    <p className="text-xs text-gray-400 mt-1">How winners are determined for each position.</p>
-                  </div>
+                <h4 className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Voting Method</h4>
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Voting Method</label>
+                  <select value={form.votingMethod}
+                    onChange={(e) => setForm({ ...form, votingMethod: e.target.value })}
+                    disabled={!!electionPeriod.startDate}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">
+                    <option value="plurality">Plurality (highest votes wins)</option>
+                    <option value="plurality_with_run_off">Plurality with Run-off</option>
+                    <option value="ranked_choice">Ranked Choice</option>
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">How winners are determined for each position.</p>
                 </div>
               </div>
             </div>

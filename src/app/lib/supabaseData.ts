@@ -409,6 +409,7 @@ export async function syncStudents(next: Student[], previous: Student[]) {
 export function buildElectionPeriodSyncPayload(period: ElectionPeriod) {
   return {
     election_date: period.startDate || null,
+    end_date: period.endDate || null,
     start_time: period.startTime || null,
     end_time: period.endTime || null,
     is_active: period.isActive,
@@ -421,12 +422,39 @@ export function buildElectionPeriodSyncPayload(period: ElectionPeriod) {
   };
 }
 
-export async function syncElectionPeriod(period: ElectionPeriod) {
-  if (!supabase) return;
+export async function syncElectionPeriod(period: ElectionPeriod): Promise<{ ok: boolean; message?: string }> {
+  if (!supabase) return { ok: false, message: "Supabase is not configured." };
   const { data } = await supabase.from("election_periods").select("id").order("election_date", { ascending: false }).limit(1).maybeSingle();
-  if (!data?.id) return;
 
-  await supabase.from("election_periods").update(buildElectionPeriodSyncPayload(period)).eq("id", data.id);
+  let electionId = data?.id ?? null;
+
+  if (!electionId) {
+    // No election_periods row exists yet (e.g. a project where migration 020's
+    // guard row is absent): create one first.  The remaining columns fall to
+    // their DB defaults, so start_time/end_time (NOT NULL) avoid a violation.
+    const { data: created, error: createError } = await supabase
+      .from("election_periods")
+      .insert({ school_year: "2026-2027" })
+      .select("id")
+      .maybeSingle();
+    if (createError) return { ok: false, message: createError.message };
+    electionId = created?.id ?? null;
+  }
+
+  if (!electionId) return { ok: false, message: "No election period row found to update." };
+
+  // Null values in the payload ("no value yet") leave the column unchanged —
+  // required for the NOT NULL start_time/end_time columns when a caller
+  // toggles a flag before any schedule is recorded.
+  const payload = buildElectionPeriodSyncPayload(period);
+  const updateData: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (value !== null) updateData[key] = value;
+  }
+
+  const { error } = await supabase.from("election_periods").update(updateData).eq("id", electionId);
+  if (error) return { ok: false, message: error.message };
+  return { ok: true };
 }
 
 export async function syncComplaints(next: Complaint[], previous: Complaint[]) {
@@ -558,7 +586,7 @@ function mapElectionPeriod(row: any): ElectionPeriod {
   return {
     startDate: toDate(row.election_date),
     startTime: toTime(row.start_time),
-    endDate: toDate(row.election_date),
+    endDate: toDate(row.end_date) || toDate(row.election_date),
     endTime: toTime(row.end_time),
     isActive: Boolean(row.is_active),
     venue: row.venue || undefined,

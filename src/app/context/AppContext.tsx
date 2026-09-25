@@ -251,7 +251,7 @@ interface AppContextType {
   commissioners: Commissioner[];
   setCommissioners: (commissioners: Commissioner[]) => void;
   electionPeriod: ElectionPeriod;
-  setElectionPeriod: (period: ElectionPeriod) => void;
+  setElectionPeriod: (period: ElectionPeriod) => Promise<{ ok: boolean; message?: string }>;
   complaints: Complaint[];
   setComplaints: (complaints: Complaint[]) => void;
   reportTemplates: ReportTemplate[];
@@ -429,7 +429,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const setElectionPeriod = (period: ElectionPeriod) => {
     setElectionPeriodState(period);
-    if (isSupabaseConfigured) void syncElectionPeriod(period);
+    if (isSupabaseConfigured) return syncElectionPeriod(period);
+    return Promise.resolve({ ok: true });
   };
 
   const setComplaints = (next: Complaint[]) => {

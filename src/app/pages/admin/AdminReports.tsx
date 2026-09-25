@@ -1,10 +1,13 @@
 import { motion } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
-import { Printer, Trophy, Award, ChevronDown } from "lucide-react";
+import { Printer, Trophy, ChevronDown, Download, FileText, FileCheck } from "lucide-react";
 import { useApp, Candidate, ElectionPeriod, LogEntry } from "../../context/AppContext";
 import {
-  generateComeaCertificate, generateChiefElectionReport, openPrintWindow,
+  generateChiefElectionReport, openPrintWindow,
 } from "../../lib/reports";
+import {
+  saveAccomplishmentReportDocx,
+} from "../../lib/docxAccomplishmentReport";
 import {
   getLiveResultsRpc, getAbstainSummaryRpc, type LiveResultRow,
 } from "../../lib/supabaseData";
@@ -129,8 +132,6 @@ export default function AdminReports() {
   const abstainPct = totalBallots > 0 ? Math.round((totalAbstains / totalBallots) * 1000) / 10 : 0;
 
   const ctx: ReportContext = { candidates, electionPeriod, logs };
-  const [certWinnerId, setCertWinnerId] = useState("");
-  const certWinner = approved.find((c) => c.id === certWinnerId) ?? approved[0];
 
   const startYear = new Date(electionPeriod.startDate).getFullYear();
   const schoolYear = Number.isNaN(startYear) ? "2026-2027" : `${startYear}-${startYear + 1}`;
@@ -155,15 +156,6 @@ export default function AdminReports() {
     })
     .filter((r): r is NonNullable<typeof r> => r !== null);
 
-  const handleComeaPrint = () => {
-    if (!certWinner) return;
-    openPrintWindow(generateComeaCertificate({
-      studentName: `${certWinner.givenName} ${certWinner.surname}`,
-      position: certWinner.position,
-      academicYear: schoolYear,
-    }));
-  };
-
   // Participation estimate for the accomplishment report: the busiest
   // position's ballot count is the best available participation measure
   // (each voter casts one ballot per position).
@@ -173,9 +165,13 @@ export default function AdminReports() {
   }));
   const turnoutPct = electionPeriodIsActiveGuard(busiestBallots);
 
+  const [isDownloadingDocx, setIsDownloadingDocx] = useState(false);
+
   const handleChiefReportPrint = () => {
     openPrintWindow(generateChiefElectionReport({
       periodLabel: schoolYear,
+      dateTime: electionPeriod.startDate ? `${electionPeriod.startDate} ${electionPeriod.startTime}` : undefined,
+      venue: electionPeriod.venue,
       totals: {
         totalVoters: approved.length,
         voted: busiestBallots,
@@ -187,21 +183,61 @@ export default function AdminReports() {
     }));
   };
 
+  const handleDownloadDocx = async () => {
+    try {
+      setIsDownloadingDocx(true);
+      await saveAccomplishmentReportDocx(
+        {
+          periodLabel: schoolYear,
+          dateTime: electionPeriod.startDate ? `${electionPeriod.startDate} ${electionPeriod.startTime}` : undefined,
+          venue: electionPeriod.venue,
+          totals: {
+            totalVoters: approved.length,
+            voted: busiestBallots,
+            notVoted: Math.max(approved.length - busiestBallots, 0),
+            turnoutPct,
+          },
+          approvedCandidates: approved,
+          results,
+        },
+        `LG-COMEA_ACCOMPLISHMENT-REPORT-SSLG-${schoolYear}.docx`
+      );
+    } catch (err) {
+      console.error("Failed to generate docx report:", err);
+    } finally {
+      setIsDownloadingDocx(false);
+    }
+  };
+
   return (
     <div className="p-6 md:p-8 max-w-7xl mx-auto">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <h1 className="text-gray-900 mb-1">Election Reports</h1>
-            <p className="text-gray-500 text-sm">Live results, abstain percentage, and winners summary for the CNNHS Student Election.</p>
+            <p className="text-gray-500 text-sm">Live results, abstain percentage, and official LG-COMEA Accomplishment Report for the CNNHS Student Election.</p>
           </div>
-          <button
-            onClick={handleChiefReportPrint}
-            className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm transition-all hover:opacity-90"
-            style={{ backgroundColor: "#5C0102" }}
-          >
-            <Printer size={16} /> Print Report
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={handleChiefReportPrint}
+              className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm transition-all hover:opacity-90 cursor-pointer shadow-xs"
+              style={{ backgroundColor: "#5C0102" }}
+            >
+              <Printer size={16} /> Print Report
+            </button>
+            <button
+              onClick={handleDownloadDocx}
+              disabled={isDownloadingDocx}
+              className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 text-gray-800 rounded-xl text-sm font-medium transition-all hover:bg-gray-50 cursor-pointer shadow-xs disabled:opacity-60"
+            >
+              {isDownloadingDocx ? (
+                <div className="w-4 h-4 border-2 border-gray-400 border-t-gray-800 rounded-full animate-spin" />
+              ) : (
+                <Download size={16} className="text-[#5C0102]" />
+              )}
+              Export .docx
+            </button>
+          </div>
         </div>
       </motion.div>
 
@@ -211,47 +247,62 @@ export default function AdminReports() {
         </div>
       )}
 
-      {/* COMEA Certificate & Chief Election Report */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 mb-6">
-        <h3 className="text-gray-900 mb-4 text-sm flex items-center gap-2">
-          <Award size={16} style={{ color: "#5C0102" }} /> COMEA Certificate & Election Report
-        </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div className="border border-gray-100 rounded-xl p-3 flex flex-col">
-            <div className="text-xs font-bold" style={{ color: "#5C0102" }}>COMEA Certificate</div>
-            <div className="text-sm text-gray-800 mt-1 flex-1">Certificate of recognition for an elected candidate.</div>
-            <div className="text-xs text-gray-400 mt-1 capitalize">Winner</div>
-            <select
-              value={certWinner?.id ?? ""}
-              onChange={(e) => setCertWinnerId(e.target.value)}
-              className="mt-1 rounded-lg border border-gray-200 px-2 py-1.5 text-sm bg-white"
-            >
-              {approved.map((c) => (
-                <option key={c.id} value={c.id}>{c.givenName} {c.surname} — {c.position}</option>
-              ))}
-            </select>
-            <button
-              onClick={handleComeaPrint}
-              disabled={approved.length === 0}
-              className="mt-2 px-3 py-1.5 text-white rounded-lg text-xs font-medium self-start hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ backgroundColor: "#5C0102" }}
-            >
-              Print Certificate
-            </button>
+      {/* Chief Commissioner Election Report Card (LG-COMEA Accomplishment Report) */}
+      <div className="bg-white rounded-2xl shadow-xs border border-gray-200/90 p-6 mb-6">
+        <div className="flex items-start justify-between flex-wrap gap-4 mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center text-[#5C0102]">
+              <FileCheck size={22} />
+            </div>
+            <div>
+              <h3 className="font-bold text-gray-900 text-base">
+                Chief Commissioner Election Report (LG-COMEA Accomplishment Report)
+              </h3>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Official DepEd LG-COMEA Accomplishment Report based on <span className="font-mono text-gray-700 font-semibold">LG-COMEA_ACCOMPLISHMENT-REPORT.SSLG-AND-YES-O-26-27.docx</span>
+              </p>
+            </div>
           </div>
+          <span className="text-xs font-semibold px-3 py-1 rounded-full bg-red-50 text-[#5C0102] border border-red-200/60">
+            S.Y. {schoolYear} SSLG Election
+          </span>
+        </div>
 
-          <div className="border border-gray-100 rounded-xl p-3 flex flex-col">
-            <div className="text-xs font-bold" style={{ color: "#5C0102" }}>Chief Commissioner Election Report</div>
-            <div className="text-sm text-gray-800 mt-1 flex-1">Accomplishment report mirroring the LG-COMEA template with results and participation.</div>
-            <div className="text-xs text-gray-400 mt-1 capitalize">Election period {schoolYear}</div>
-            <button
-              onClick={handleChiefReportPrint}
-              className="mt-2 px-3 py-1.5 text-white rounded-lg text-xs font-medium self-start hover:opacity-90"
-              style={{ backgroundColor: "#5C0102" }}
-            >
-              Print Report
-            </button>
-          </div>
+        <p className="text-xs text-gray-600 leading-relaxed mb-5 bg-gray-50/70 p-3.5 rounded-xl border border-gray-100">
+          This report compiles the official Rationale, 5 Objectives, Activity Highlights, Summary Participation Metrics (Approved Candidates, Registered Voters, Already Voted, Not Yet Voted, Turnout %), Official Winners Roster, Financial Liquidation (NONE), 5 COMEA Recommendations, and complete Commission Signatories (Student Chairperson, Student Secretary, Electoral Commissioner, Screening Commissioner, Co-commissioner, Grievance Commissioner, Appointed Commissioner, and School Head / Chief Commissioner).
+        </p>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={handleChiefReportPrint}
+            className="flex items-center gap-2 px-4 py-2 text-white rounded-xl text-xs font-semibold transition-all hover:opacity-90 cursor-pointer shadow-xs"
+            style={{ backgroundColor: "#5C0102" }}
+          >
+            <Printer size={15} />
+            <span>Print Official Report</span>
+          </button>
+
+          <button
+            onClick={handleDownloadDocx}
+            disabled={isDownloadingDocx}
+            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold transition-colors cursor-pointer shadow-xs disabled:opacity-60"
+          >
+            {isDownloadingDocx ? (
+              <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            ) : (
+              <Download size={15} />
+            )}
+            <span>Download Filled Report (.docx)</span>
+          </button>
+
+          <a
+            href="/templates/LG-COMEA_ACCOMPLISHMENT-REPORT.SSLG-AND-YES-O-26-27.docx"
+            download="LG-COMEA_ACCOMPLISHMENT-REPORT.SSLG-AND-YES-O-26-27.docx"
+            className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+          >
+            <FileText size={15} className="text-gray-500" />
+            <span>Download Base Template (.docx)</span>
+          </a>
         </div>
       </div>
 

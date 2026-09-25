@@ -26,9 +26,10 @@ const basePeriod = (overrides: Partial<ElectionPeriod> = {}): ElectionPeriod => 
 const D06_METHODS = ["plurality", "plurality_with_run_off", "ranked_choice"];
 
 describe("buildElectionPeriodSyncPayload", () => {
-  it("writes the v1.1 schedule columns (election_date + start_time/end_time)", () => {
+  it("writes the v1.1 schedule columns (election_date + end_date + start_time/end_time)", () => {
     const payload = buildElectionPeriodSyncPayload(basePeriod());
     expect(payload).toHaveProperty("election_date", "2026-10-12");
+    expect(payload).toHaveProperty("end_date", "2026-10-12");
     expect(payload).toHaveProperty("start_time", "08:00");
     expect(payload).toHaveProperty("end_time", "17:00");
   });

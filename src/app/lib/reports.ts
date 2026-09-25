@@ -558,6 +558,8 @@ export function generateEnclosure21(logs: LogEntry[]) {
 
   export interface ChiefElectionReportInput {
     periodLabel: string;
+    dateTime?: string;
+    venue?: string;
     totals: {
       totalVoters: number;
       voted: number;
@@ -569,7 +571,12 @@ export function generateEnclosure21(logs: LogEntry[]) {
   }
 
   export function generateChiefElectionReport(input: ChiefElectionReportInput): string {
-    const { periodLabel, totals, approvedCandidates, results } = input;
+    const { periodLabel, dateTime, venue, totals, approvedCandidates, results } = input;
+    const eventDateTime = dateTime || "February 11, 2026 7:30 AM";
+    const eventVenue =
+      venue ||
+      "Camarines Norte National High School at the School's Computer Laboratory using the CNNHS SVoCK Online Voting System";
+
     const rows = results.map((r) => `<tr>
       <td>${escapeHtml(r.position)}</td>
       <td>${escapeHtml(r.winnerName)}</td>
@@ -578,36 +585,194 @@ export function generateEnclosure21(logs: LogEntry[]) {
       <td style="text-align:center;">${r.votes}</td>
     </tr>`).join('');
 
-    const html = `${depEdHeader('Accomplishment Report of the COMEA — Elections', `&nbsp;`)}
-      <h2>ACCOMPLISHMENT REPORT — ${escapeHtml(periodLabel)} SSLG STUDENT ELECTION</h2>
-      <p class="note">Accomplishment Report of the LG-COMEA (Commission on Election and Appointment) — Supreme Secondary Learner Government (SSLG).</p>
-      <h3>DETAILS OF THE ACTIVITY (Rationale &amp; Objectives)</h3>
-      <p style="font-size:10pt;">The conduct of the ${escapeHtml(periodLabel)} Student Election aims to promote democratic participation and leadership among the students of Camarines Norte National High School. Through this activity, students exercise their right to vote and select capable student leaders who represent their interests and contribute to the improvement of the school community — using the CNNHS Online Voting System as the digital platform for an organized, efficient, and transparent election process.</p>
-      <h3>Election Summary / Highlights</h3>
-      <table><thead><tr>
-        <th>Metric</th><th>Value</th>
-      </tr></thead><tbody>
-        <tr><td>Approved Candidates</td><td style="text-align:center;">${approvedCandidates.length}</td></tr>
-        <tr><td>Registered Voters</td><td style="text-align:center;">${totals.totalVoters}</td></tr>
-        <tr><td>Already Voted</td><td style="text-align:center;">${totals.voted}</td></tr>
-        <tr><td>Not Yet Voted</td><td style="text-align:center;">${totals.notVoted}</td></tr>
-        <tr><td>Voter Turnout</td><td style="text-align:center;">${totals.turnoutPct}%</td></tr>
-      </tbody></table>
-      <h3>The Result of the Election and Elected SSLG Candidates</h3>
-      <table><thead><tr>
-        <th>Position</th><th>Name of Winner</th><th>Party</th><th>Grade</th><th>Total Votes</th>
-      </tr></thead><tbody>${rows || '<tr><td colspan="5" style="text-align:center;">No results to report</td></tr>'}</tbody></table>
-      <h3>Financial Accomplishment / Liquidation Report</h3>
-      <p style="font-size:10pt;">NONE</p>
-      <h3>Recommendations</h3>
-      <ul style="font-size:10pt;">
-        <li>Continue to utilize the digital voting platform to ensure a faster, more organized, and transparent election process.</li>
-        <li>Provide a more reliable internet connection and additional computer units or laptops during future student elections.</li>
-        <li>Strengthen student participation in future elections by encouraging active involvement from all grade levels.</li>
-      </ul>
-      <div class="signature">
-        <div><div class="line">LG-COMEA Student Chairperson</div><div>Prepared by</div></div>
-        <div><div class="line">School Head / LG-COMEA Chief Commissioner</div><div>Approved by</div></div>
+    const html = `
+      <div style="text-align:center; font-family:'Times New Roman',serif; margin-bottom:15px;">
+        <div style="font-size:11pt; font-weight:bold;">Republic of the Philippines</div>
+        <div style="font-size:12pt; font-weight:bold;">DEPARTMENT OF EDUCATION</div>
+        <div style="font-size:11pt;">Region V – Bicol Region</div>
+        <div style="font-size:11pt; font-weight:bold;">SCHOOLS DIVISION OFFICE OF CAMARINES NORTE</div>
+        <div style="font-size:12pt; font-weight:bold; margin-top:2px;">CAMARINES NORTE NATIONAL HIGH SCHOOL</div>
+        <div style="font-size:10pt;">Daet, Camarines Norte</div>
+        <hr style="border:1.5px solid #000; margin:10px 0 16px;" />
+        <h2 style="font-size:13pt; margin:4px 0;">ACCOMPLISHMENT REPORT</h2>
+        <div style="font-size:11pt; font-weight:bold; letter-spacing:0.5px;">${escapeHtml(periodLabel)} SUPREME SECONDARY LEARNER GOVERNMENT (SSLG) ELECTION</div>
+      </div>
+
+      <!-- Top DepEd Activity Metadata Table -->
+      <table style="width:100%; border-collapse:collapse; margin-bottom:15px; font-size:10pt;">
+        <thead>
+          <tr>
+            <th style="width:33%; text-align:left; background:#f0f0f0;">Region</th>
+            <th style="width:33%; text-align:left; background:#f0f0f0;">Division</th>
+            <th style="width:34%; text-align:left; background:#f0f0f0;">School</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Region V-Bicol</td>
+            <td>SDO-Camarines Norte</td>
+            <td>Camarines Norte National High School</td>
+          </tr>
+          <tr>
+            <th style="text-align:left; background:#f0f0f0;">Title of the Activity</th>
+            <th style="text-align:left; background:#f0f0f0;">Date/Time</th>
+            <th style="text-align:left; background:#f0f0f0;">Place/Venue/Platform</th>
+          </tr>
+          <tr>
+            <td>${escapeHtml(periodLabel)} Student Election for SSLG (Supreme Secondary Learner Government)</td>
+            <td>${escapeHtml(eventDateTime)}</td>
+            <td>${escapeHtml(eventVenue)}</td>
+          </tr>
+          <tr>
+            <th colspan="3" style="text-align:center; background:#e8e8e8; padding:8px;">
+              DETAILS OF THE ACTIVITY<br/>
+              <span style="font-weight:normal; font-size:9.5pt;">(Rationale &amp; Objectives)</span>
+            </th>
+          </tr>
+          <tr>
+            <td colspan="3" style="padding:12px; font-size:10pt; line-height:1.45;">
+              <div style="font-weight:bold; margin-bottom:4px;">1. Rationale</div>
+              <p style="font-weight:bold; margin:2px 0 6px;">Accomplishment Report of (COMEA) Learners Government — Commission on Election and Appointment.</p>
+              <p style="text-align:justify; margin:0 0 8px;">The conduct of the ${escapeHtml(periodLabel)} Student Election for the Supreme Secondary Learner Government (SSLG) aims to promote democratic participation and leadership among students of Camarines Norte National High School. Through this activity, students are given the opportunity to exercise their right to vote and select capable student leaders who will represent their interests and initiate programs that contribute to the improvement of the school community.</p>
+              <p style="text-align:justify; margin:0 0 8px;">This election also encourages students to become responsible citizens by understanding the importance of leadership, accountability, and active involvement in school governance. The use of a digital voting platform through the CNNHS SVoCK Online Voting System ensures an organized, efficient, and transparent election process while promoting responsible use of technology among learners.</p>
+              <p style="text-align:justify; margin:0 0 8px;">Furthermore, the activity strengthens student engagement and cooperation in school organizations such as SSLG which play vital roles in implementing programs related to student welfare and environmental awareness. Through this election, the school ensures that student representation remains active, inclusive, and responsive to the needs of the learners.</p>
+
+              <div style="font-weight:bold; margin:10px 0 4px;">2. Objectives</div>
+              <ol style="margin:2px 0 6px; padding-left:22px; text-align:justify;">
+                <li style="margin-bottom:4px;">To conduct a fair, honest, and organized election for the selection of Supreme Secondary Learner Government (SSLG) officers for School Year ${escapeHtml(periodLabel)}.</li>
+                <li style="margin-bottom:4px;">To encourage students to actively participate in school governance through responsible voting.</li>
+                <li style="margin-bottom:4px;">To develop leadership, responsibility, and cooperation among students through participation in student organizations.</li>
+                <li style="margin-bottom:4px;">To promote awareness of the importance of democratic processes and environmental responsibility in the school community.</li>
+                <li style="margin-bottom:4px;">To utilize digital technology such as the CNNHS SVoCK Online Voting System to ensure a systematic and efficient election process.</li>
+              </ol>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- Highlights Section -->
+      <table style="width:100%; border-collapse:collapse; margin-bottom:15px; font-size:10pt;">
+        <thead>
+          <tr>
+            <th style="text-align:left; background:#e8e8e8; padding:8px;">Highlights</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:12px; font-size:10pt; line-height:1.45; text-align:justify;">
+              <p style="font-style:italic; margin:0 0 8px;">The ${escapeHtml(periodLabel)} Student Election for SSLG was successfully conducted at Camarines Norte National High School using the CNNHS SVoCK Online Voting System as the official voting platform. Students from different grade levels in high school participated actively in the election, demonstrating enthusiasm and cooperation throughout the activity. The election process was organized and supervised by the adviser of the Organization and student officers of COMEA to ensure fairness and transparency. Students were oriented on the proper voting procedures before the activity started. The use of an online voting system made the process faster, more convenient, and well-organized, helping students understand the value of leadership, responsibility, and participation in school governance.</p>
+              <p style="font-style:italic; margin:0;">Even after facing challenges such as the limited designated area available for catering to voters, the officers and members of the organization showcased their ability to communicate clearly and implement a strategic scheduling system to accommodate all high school voters. The voting day was held successfully and every objective of the event was accomplished and fulfilled with great participation from the officers and members of the organization of COMEA. Overall, the activity was conducted smoothly and achieved its intended objectives.</p>
+            </td>
+          </tr>
+          <tr>
+            <th style="text-align:left; background:#e8e8e8; padding:8px;">Financial Accomplishment / Liquidation Report (if any)</th>
+          </tr>
+          <tr>
+            <td style="padding:8px 12px; font-size:10pt; font-weight:bold;">NONE</td>
+          </tr>
+          <tr>
+            <th style="text-align:left; background:#e8e8e8; padding:8px;">Recommendation/s:</th>
+          </tr>
+          <tr>
+            <td style="padding:10px 12px; font-size:10pt; line-height:1.45;">
+              <ul style="margin:2px 0 4px; padding-left:20px;">
+                <li style="margin-bottom:4px;">It is recommended that future SSLG elections continue to utilize digital voting platforms such as the CNNHS SVoCK Online Voting System to ensure a faster, more organized, and transparent election process.</li>
+                <li style="margin-bottom:4px;">It is recommended that the school provide a more reliable network connection and additional computer units or laptops during future student elections to improve the efficiency and accessibility of the digital voting process.</li>
+                <li style="margin-bottom:4px;">It is also recommended that students be given prior orientation regarding the roles and responsibilities of SSLG officers to help them choose qualified and responsible leaders.</li>
+                <li style="margin-bottom:4px;">The school may continue to strengthen student participation in future elections by encouraging active involvement across all grade levels.</li>
+                <li style="margin-bottom:4px;">Continuous supervision and proper coordination among teachers, advisers, and student officers are also recommended to maintain the credibility and orderliness of the election process.</li>
+              </ul>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- Election Summary / Highlights Participation Metrics Table -->
+      <h3 style="margin-top:16px;">Election Summary / Highlights</h3>
+      <table style="width:100%; border-collapse:collapse; margin-bottom:15px; font-size:10pt;">
+        <thead>
+          <tr>
+            <th style="width:60%; text-align:left;">Metric</th>
+            <th style="width:40%; text-align:center;">Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Approved Candidates</td><td style="text-align:center;">${approvedCandidates.length}</td></tr>
+          <tr><td>Registered Voters</td><td style="text-align:center;">${totals.totalVoters}</td></tr>
+          <tr><td>Already Voted</td><td style="text-align:center;">${totals.voted}</td></tr>
+          <tr><td>Not Yet Voted</td><td style="text-align:center;">${totals.notVoted}</td></tr>
+          <tr><td>Voter Turnout</td><td style="text-align:center;">${totals.turnoutPct}%</td></tr>
+        </tbody>
+      </table>
+
+      <!-- Official Results Table -->
+      <h3 style="margin-top:16px;">The Result of the Election and Elected Candidates for Supreme Secondary Learners Government (SSLG) Election</h3>
+      <table style="width:100%; border-collapse:collapse; margin-bottom:20px; font-size:10pt;">
+        <thead>
+          <tr>
+            <th>Position</th>
+            <th>Name of Winner</th>
+            <th>Party</th>
+            <th style="text-align:center;">Grade</th>
+            <th style="text-align:center;">Total Votes</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows || '<tr><td colspan="5" style="text-align:center;">No results to report</td></tr>'}
+        </tbody>
+      </table>
+
+      <!-- Official COMEA Signatories -->
+      <div style="margin-top:28px; page-break-inside:avoid; font-family:'Times New Roman',serif;">
+        <div style="font-weight:bold; font-size:10pt; margin-bottom:8px;">Prepared by:</div>
+        <table style="width:100%; border:none; margin-bottom:20px;">
+          <tr style="border:none;">
+            <td style="width:50%; border:none; text-align:center; padding-top:20px;">
+              <div style="font-weight:bold; border-top:1px solid #000; width:75%; margin:0 auto; padding-top:4px;">MARIEL D. PAULAR</div>
+              <div style="font-size:9pt; font-style:italic;">LG-COMEA Student Chairperson</div>
+            </td>
+            <td style="width:50%; border:none; text-align:center; padding-top:20px;">
+              <div style="font-weight:bold; border-top:1px solid #000; width:75%; margin:0 auto; padding-top:4px;">MARIA ZAIRA L. RIVERA</div>
+              <div style="font-size:9pt; font-style:italic;">LG-COMEA Student Secretary</div>
+            </td>
+          </tr>
+        </table>
+
+        <div style="font-weight:bold; font-size:10pt; margin-bottom:8px;">Noted by:</div>
+        <table style="width:100%; border:none; margin-bottom:15px;">
+          <tr style="border:none;">
+            <td style="width:50%; border:none; text-align:center; padding-top:20px;">
+              <div style="font-weight:bold; border-top:1px solid #000; width:85%; margin:0 auto; padding-top:4px;">MELISSA M. MELENDREZ</div>
+              <div style="font-size:9pt; font-style:italic;">LG-COMEA Electoral Commissioner</div>
+            </td>
+            <td style="width:50%; border:none; text-align:center; padding-top:20px;">
+              <div style="font-weight:bold; border-top:1px solid #000; width:85%; margin:0 auto; padding-top:4px;">MA. LOURDES M. BALANE, HT-III</div>
+              <div style="font-size:9pt; font-style:italic;">LG-COMEA Screening and Validation Commissioner</div>
+            </td>
+          </tr>
+          <tr style="border:none;">
+            <td style="width:50%; border:none; text-align:center; padding-top:35px;">
+              <div style="font-weight:bold; border-top:1px solid #000; width:85%; margin:0 auto; padding-top:4px;">RAY DUOVANI N. REGONDOLA</div>
+              <div style="font-size:9pt; font-style:italic;">LG-COMEA Electoral Co-commissioner</div>
+            </td>
+            <td style="width:50%; border:none; text-align:center; padding-top:35px;">
+              <div style="font-weight:bold; border-top:1px solid #000; width:85%; margin:0 auto; padding-top:4px;">IVY DENICE M. ABOGADO, RGC</div>
+              <div style="font-size:9pt; font-style:italic;">LG-COMEA Grievance Commissioner</div>
+            </td>
+          </tr>
+          <tr style="border:none;">
+            <td colspan="2" style="border:none; text-align:center; padding-top:35px;">
+              <div style="font-weight:bold; border-top:1px solid #000; width:50%; margin:0 auto; padding-top:4px;">WILSON ANGEL H. VILLARIN, ASP-II</div>
+              <div style="font-size:9pt; font-style:italic;">LG-COMEA Appointed Commissioner</div>
+            </td>
+          </tr>
+        </table>
+
+        <div style="font-weight:bold; font-size:10pt; margin-bottom:8px;">Approved by:</div>
+        <div style="text-align:center; width:60%; margin:0 auto; padding-top:24px;">
+          <div style="font-weight:bold; border-top:1px solid #000; padding-top:4px;">FRANCISCO D. TORRERO, SSP-II</div>
+          <div style="font-size:9.5pt; font-style:italic;">School Head / LG-COMEA Chief Commissioner</div>
+        </div>
       </div>
       ${footer()}`;
     return html;

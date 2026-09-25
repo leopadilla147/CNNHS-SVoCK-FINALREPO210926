@@ -1,0 +1,24 @@
+-- ---------------------------------------------------------------------
+-- 048_fix_login_attempts_identifier_nullable.sql
+-- ---------------------------------------------------------------------
+-- Root cause of the login crash:
+--   null value in column "user_identifier" of relation "login_attempts"
+--   violates not-null constraint
+--   Failing row contains (24, null, 136.158.100.244, 1, ...)
+--
+-- 023 declared  login_attempts.user_identifier text not null, yet the
+-- per-IP lockout family (record_login_outcome, 023) deliberately inserts
+-- rows where user_identifier IS NULL and ip_address is set.  Those two
+-- partial unique indexes that make per-IP lockout work
+--   * login_attempts_account_key on (user_identifier) where ip_address IS NULL
+--   * login_attempts_ip_key      on (ip_address)      where user_identifier IS NULL
+-- both *require* a NULL user_identifier.  The NOT NULL on the column is a
+-- schema contradiction introduced in 023 — a 2nd consecutive failed login
+-- from the same IP inserts the per-IP row (nil user_identifier) and blows up.
+--
+-- Fix: make the column nullable (matching the design the partial indexes
+-- already encode).  Account rows keep their enforced non-NULL identifier
+-- via the partial unique index.
+-- ---------------------------------------------------------------------
+alter table public.login_attempts
+  alter column user_identifier drop not null;

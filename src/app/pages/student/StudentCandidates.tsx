@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Search, Trophy, Mail, Phone, MapPin, EyeOff } from "lucide-react";
 import { motion } from "motion/react";
 import { useApp } from "../../context/AppContext";
+import { candidatesInLivePeriod } from "../../lib/partyScope";
 
 // Full canonical position order (001 candidates CHECK) — includes grade-level
 // representatives so every approved candidate is visible on the student side.
@@ -18,7 +19,8 @@ export default function StudentCandidates() {
   const [selectedCandidate, setSelectedCandidate] = useState<typeof candidates[0] | null>(null);
 
   // Determine the student's party from their own candidacy application
-  const myApplication = candidates.find((c) => c.studentId === currentUser?.id);
+  const periodCandidates = candidatesInLivePeriod(candidates, electionPeriod);
+  const myApplication = periodCandidates.find((c) => c.studentId === currentUser?.id);
   const myParty = myApplication?.status === "approved" ? (myApplication.partyAffiliation ?? null) : null;
 
   // Candidates visible only if admin posted the official list, or student is an approved candidate
@@ -27,7 +29,7 @@ export default function StudentCandidates() {
   // Only show approved candidates from the student's own party.
   // Independent candidates (no party / declared "Independent") are hidden
   // from the student side.
-  const partyApproved = candidates.filter(
+  const partyApproved = periodCandidates.filter(
     (c) =>
       c.status === "approved" &&
       !!c.partyAffiliation &&

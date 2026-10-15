@@ -3,22 +3,21 @@ import { AlertCircle, Upload, CheckCircle, XCircle, FileImage, FileDown, Pencil,
 import { motion, AnimatePresence } from "motion/react";
 import { useApp, Candidate } from "../../context/AppContext";
 import { EAFPreviewDocument } from "../../components/EAFPreviewDocument";
-import { submitCandidacyRpc, uploadCandidateImage } from "../../lib/supabaseData";
+import { reapplyPartyCandidacyRpc, submitCandidacyRpc, uploadCandidateImage, fetchCandidateGate } from "../../lib/supabaseData";
 import { isSupabaseConfigured, supabase } from "../../lib/supabase";
 import { useConfirm } from "../../lib/useConfirm";
 import { escapeHtml } from "../../lib/escapeHtml";
 import { MIN_WORDS, countWords as wordCount, wordCountError } from "../../lib/wordCount";
-
-const EXECUTIVE_POSITIONS = ["President", "Vice President", "Secretary", "Treasurer", "Auditor", "PRO", "PIO", "Protocol Officer"];
-const GRADE_LEVELS = ["Grade 7", "Grade 8", "Grade 9", "Grade 10", "Grade 11", "Grade 12"];
-
-function getPositionsForGrade(gradeLevel: string): string[] {
-  const base = [...EXECUTIVE_POSITIONS];
-  if (gradeLevel && GRADE_LEVELS.includes(gradeLevel)) {
-    base.push(`${gradeLevel} Representative`);
-  }
-  return base;
-}
+import {
+  EXECUTIVE_POSITIONS,
+  GRADE_LEVELS,
+  buildPartyOptions,
+  candidatesInLivePeriod,
+  isPartyFounder,
+  isSeatSelectable,
+  partyApprovalBlockForSubmit,
+  partySeatSummaries,
+} from "../../lib/partyScope";
 
 const GENDERS = ["Male", "Female"];
 const LEADERSHIP_SKILLS = ["Motivational", "Problem Solving", "Values-Oriented", "Communication", "Goal-Oriented", "Service-Oriented"];
@@ -249,22 +248,37 @@ const InputField = ({
 );
 
 export default function StudentApplyCandidacy() {
-  const { candidates, setCandidates, currentUser, students, addLog, insertNotification } = useApp();
+  const { candidates, setCandidates, currentUser, students, addLog, insertNotification, electionPeriod, parties } = useApp();
   const currentStudent = students.find((s) => s.id === currentUser?.id);
-  const existing = candidates.find((c) => c.studentId === currentUser?.id);
   const generateEafConfirm = useConfirm({ title: "Generate EAF?", description: "This will create or update your candidacy application based on the information provided.", confirmText: "Generate" });
   const finalSubmitConfirm = useConfirm({ title: "Submit Completed EAF?", description: "This will finalize your candidacy application and submit it to the Commissioner on Screening and Validation for review. You will not be able to edit it afterward.", confirmText: "Submit", destructive: true });
-  const existingParties = Array.from(
-    new Set(candidates.map((c) => c.partyAffiliation).filter(Boolean) as string[])
-  ).sort();
+  // Parties belong to a single election period, so the picker must offer the
+  // parties of the live period only — never a past period's slate.  For the
+  // same reason the application being edited is the live period's one: a
+  // candidacy from an earlier election is history and stays untouched.
+  const periodCandidates = candidatesInLivePeriod(candidates, electionPeriod);
+  const existing = periodCandidates.find((c) => c.studentId === currentUser?.id);
 
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(false);
   const [finalLoading, setFinalLoading] = useState(false);
+  const [reapplyLoading, setReapplyLoading] = useState(false);
+  const [reapplyError, setReapplyError] = useState<string | null>(null);
+  // The party President decides in their own browser session, so the approval
+  // only reaches this page through an explicit re-read.
+  const [gateCheckLoading, setGateCheckLoading] = useState(false);
+  const [gateCheckError, setGateCheckError] = useState<string | null>(null);
+  const [gateCheckedAt, setGateCheckedAt] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [partyMode, setPartyMode] = useState<"existing" | "new" | "independent">(
-    existingParties.length > 0 ? "existing" : "independent"
+    parties.length > 0 ? "existing" : "independent"
   );
+  // The party list arrives with the rest of the Supabase state, so the mode
+  // cannot be settled once at mount: a student who opens this page while the
+  // fetch is still in flight would be parked on "Independent" and never shown
+  // the picker they are meant to use.  Keep following the list until they
+  // choose for themselves.
+  const [partyModeChosen, setPartyModeChosen] = useState(false);
   const [editingExisting, setEditingExisting] = useState(false);
 
   const [provinces, setProvinces] = useState<Province[]>([]);
@@ -280,7 +294,9 @@ export default function StudentApplyCandidacy() {
     extensionName: "",
     gradeLevel: currentStudent?.gradeLevel || "",
     position: "",
-    partyAffiliation: existingParties[0] || "",
+    // Filled in once the roster is known, so it can prefer a party this
+    // student can actually join rather than the first name alphabetically.
+    partyAffiliation: "",
     newPartyName: "",
     gender: currentStudent?.gender || "",
     dateOfBirth: currentStudent?.birthdate || "",
@@ -314,6 +330,36 @@ export default function StudentApplyCandidacy() {
     picture: null as File | null,
     picturePreview: "",
   });
+
+  // Every party of the live period, joinable or not, so the picker can show the
+  // whole slate with a reason rather than hiding parties the student cannot use.
+  // Derived from form.gradeLevel because a party's offices — and therefore
+  // whether it is full — depend on the grade the student is running for.
+  const partyOptions = buildPartyOptions(parties, candidates, electionPeriod, form.gradeLevel);
+  const existingParties = partyOptions.map((party) => party.name);
+  const joinableParties = partyOptions.filter((party) => !party.blockedReason);
+  const selectedParty = partyOptions.find((party) => party.name === form.partyAffiliation);
+  const independentSeats = partySeatSummaries(
+    candidates,
+    electionPeriod,
+    undefined,
+    form.gradeLevel,
+    editingExisting ? existing?.id : undefined
+  );
+  // Joining a slate never offers the President seat: it is only claimable by
+  // creating the party, and 055 blocks a second President server-side.
+  const partySeats =
+    partyMode === "existing"
+      ? partySeatSummaries(
+          candidates,
+          electionPeriod,
+          selectedParty?.id,
+          form.gradeLevel,
+          editingExisting ? existing?.id : undefined
+        )
+      : [];
+  const openPartySeats = partySeats.filter((seat) => isSeatSelectable(seat, true));
+  const openIndependentSeats = independentSeats.filter((seat) => isSeatSelectable(seat));
 
   // Auto-fill any already-known student information (registration record /
   // logged-in account) into the form.  Students load asynchronously from
@@ -436,10 +482,22 @@ export default function StudentApplyCandidacy() {
       setForm((f) => ({
         ...f,
         position: f.position || "",
-        partyAffiliation: f.partyAffiliation || existingParties[0] || "",
+        // Prefer a party the student can actually join, and fall back to the
+        // full roster so a blocked party can still be inspected (it renders
+        // disabled, with the reason shown beside it).
+        partyAffiliation: f.partyAffiliation || joinableParties[0]?.name || existingParties[0] || "",
       }));
     }
   }, [partyMode]);
+
+  // Follow the party list as it loads, until the student picks a mode.  Only a
+  // party they can join is worth defaulting to; when every party is blocked the
+  // student is better served on Independent than on a dead dropdown.
+  useEffect(() => {
+    if (!partyModeChosen && joinableParties.length > 0) {
+      setPartyMode("existing");
+    }
+  }, [partyModeChosen, joinableParties.length]);
 
   const capitalizeFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
@@ -512,12 +570,20 @@ export default function StudentApplyCandidacy() {
                 errs.position = `${form.gradeLevel} students can only apply for ${form.gradeLevel} Representative.`;
               }
               if (partyMode === "existing") {
-                const occupied = new Set(
-                  candidates
-                    .filter((c) => c.partyAffiliation === form.partyAffiliation && c.status !== "rejected" && (!editingExisting || c.id !== existing?.id))
-                    .map((c) => c.position)
-                );
-                if (occupied.has(form.position)) errs.position = "This position is already occupied for the selected party.";
+                // Only a WON seat blocks an applicant.  A seat that merely has
+                // other requests in it is still open, because 055 lets several
+                // students contest one office and the President picks a winner.
+                if (selectedParty?.blockedReason === "awaiting-president") {
+                  errs.party = `${selectedParty.name} has no approved President yet, so nobody can approve requests for that party.`;
+                } else if (selectedParty?.blockedReason === "full") {
+                  errs.party = `${selectedParty.name} already has a candidate for every ${form.gradeLevel} position.`;
+                } else if (form.position === "President") {
+                  errs.position = "The President seat is only open to the student who creates a party.";
+                } else if (form.position && !openPartySeats.some((seat) => seat.position === form.position)) {
+                  errs.position = "That position already has an approved candidate in this party.";
+                }
+              } else if (form.position && !openIndependentSeats.some((seat) => seat.position === form.position)) {
+                errs.position = "That position already has an approved candidate.";
               }
             }
         }
@@ -564,15 +630,15 @@ export default function StudentApplyCandidacy() {
     setStep((s) => Math.max(s - 1, 0));
   };
 
-  const activePartyCandidates = (party: string) =>
-    candidates.filter(
-      (c) =>
-        c.partyAffiliation === party &&
-        c.status !== "rejected" &&
-        (!editingExisting || c.id !== existing?.id)
-    );
-  const occupiedPositions = partyMode === "existing" ? new Set(activePartyCandidates(form.partyAffiliation).map((c) => c.position)) : new Set<string>();
-  const availablePositions = partyMode === "new" ? ["President"] : getPositionsForGrade(form.gradeLevel).filter((p) => !occupiedPositions.has(p));
+  // The seats shown in the position dropdown.  Won seats stay in the list but
+  // disabled, so the roster is honest about what the party has already filled
+  // instead of silently hiding offices the student cannot enter.
+  const seatChoices =
+    partyMode === "new"
+      ? [{ position: "President", state: "open" as const, requestCount: 0, requesters: [] }]
+      : partyMode === "existing"
+        ? partySeats
+        : independentSeats;
 
   const buildCandidate = (baseCandidate?: Candidate): Candidate => {
     const isNewParty = partyMode === "new";
@@ -607,6 +673,9 @@ export default function StudentApplyCandidacy() {
       },
       eafFrontImage: undefined,
       eafBackImage: undefined,
+      // Preview-only: the UI needs a gate to render before the row exists.
+      // It is stripped from p_candidate_data before the RPC is called, and the
+      // RPC derives the real gate server-side regardless of what a client says.
       positionApprovalStatus: (isNewParty || isIndependent) ? "notRequired" : "presidentApprovalRequired",
       leadershipProfile: {
         qualities: form.leadershipQualities.trim(),
@@ -651,7 +720,12 @@ export default function StudentApplyCandidacy() {
 
         const result = await submitCandidacyRpc({
           p_action: editingExisting ? "update" : "create",
-          p_candidate_data: editingExisting ? undefined : (newCandidate as any),
+          // The gate is stripped before it leaves the browser.  It is a local
+          // preview only — submit_candidacy_rpc derives the real value from the
+          // position and party it finds itself, and ignoring the payload is a
+          // safety property, not an accident of naming.  Sending it would only
+          // invite someone to read the field as something they can assert.
+          p_candidate_data: editingExisting ? undefined : ({ ...newCandidate, positionApprovalStatus: undefined } as any),
           p_candidate_id: editingExisting ? existing?.id : undefined,
           p_picture_url: pictureUrl,
         });
@@ -693,8 +767,12 @@ export default function StudentApplyCandidacy() {
   };
 
   const handleEditExisting = (candidate: Candidate) => {
-    const isNewParty = candidate.positionApprovalStatus === "notRequired" && candidate.partyAffiliation;
+    // A founder is whoever registered the slate by running for its President.
+    // Inferring it from positionApprovalStatus breaks the moment that founder
+    // is approved, since the gate then reads 'presidentApproved'.
+    const isNewParty = isPartyFounder(candidate);
     const isIndependent = !candidate.partyAffiliation;
+    setPartyModeChosen(true);
     setPartyMode(isNewParty ? "new" : isIndependent ? "independent" : "existing");
     const addrParts = candidate.homeAddress.split(", ");
     let houseStreet = "", barangay = "", city = "", province = "";
@@ -819,6 +897,25 @@ export default function StudentApplyCandidacy() {
       setErrors({ eafUpload: "Upload clear photos of both the front and back of the completed EAF." });
       return;
     }
+    // The party President signs off BEFORE the EAF reaches Screening, so the
+    // completed form cannot be submitted out from under them.  The button is
+    // already disabled in that state; this is the same rule re-checked at the
+    // one place that matters, and it fails instantly instead of round-tripping
+    // to 057's guard_party_approval_before_finalize trigger.
+    const block = partyApprovalBlockForSubmit(candidate);
+    if (block === "seat-closed") {
+      setErrors({
+        eafUpload: `Another candidate was approved for ${candidate.position} in your party. You can only re-apply if the position opens up again.`,
+      });
+      return;
+    }
+    if (block === "awaiting-party-president") {
+      setGateCheckError(null);
+      setErrors({
+        eafUpload: `The President of ${candidate.partyAffiliation || "your party"} has to approve this candidacy before you can submit the completed EAF.`,
+      });
+      return;
+    }
     const ok = await finalSubmitConfirm.confirm();
     if (!ok) return;
     setFinalLoading(true);
@@ -938,6 +1035,10 @@ export default function StudentApplyCandidacy() {
 
   const renderEafStep = (candidate: Candidate) => {
     if (!currentStudent) return <div className="p-6 text-sm text-red-600">Student record not found.</div>;
+    // The party President's approval is a precondition for submitting, not for
+    // filing: a party candidate who has not been approved yet can still upload
+    // both photos, but the submit button stays locked until they are.
+    const submitBlock = partyApprovalBlockForSubmit(candidate);
     return (
       <div className="p-6 md:p-8 max-w-6xl mx-auto">
         <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
@@ -946,7 +1047,8 @@ export default function StudentApplyCandidacy() {
           </h1>
           <p className="text-gray-500 text-sm">
             Print the EAF, complete the missing fields and signatures, then upload front and
-            back photos before final submission.
+            back photos. Party candidates submit to the Commissioner only after their party
+            President has approved the candidacy.
           </p>
         </motion.div>
 
@@ -964,13 +1066,15 @@ export default function StudentApplyCandidacy() {
                 <li>Export the generated Election Application Form as a PDF.</li>
                 <li>Fill in every required signature and any missing handwritten input.</li>
                 <li>Answer Part IV on the back of the EAF.</li>
+                <li>Take clear photos of the completed EAF front and back, then upload both here.</li>
                 <li>
-                  {candidate.positionApprovalStatus === "presidentApprovalRequired"
-                    ? "Secure the party president's approval to guarantee the selected position."
-                    : "As creator of this new party, your position is set as President."}
+                  {isPartyFounder(candidate)
+                    ? "As creator of this new party, your position is set as President. No party approval is needed — you can submit as soon as both photos are uploaded. Your party becomes visible to other students once Screening approves you."
+                    : candidate.partyAffiliation
+                      ? "Wait for the President of your party to approve your candidacy. They decide from their own dashboard, so use \"Check approval status\" above once they tell you it is done."
+                      : "As an Independent candidate, no party approval is needed — you can submit as soon as both photos are uploaded."}
                 </li>
-                <li>Take clear photos of the completed EAF front and back.</li>
-                <li>Upload both photos here, then submit the EAF to the Commissioner on Screening and Validation.</li>
+                <li>Submit the EAF to the Commissioner on Screening and Validation.</li>
               </ol>
             </div>
 
@@ -1015,9 +1119,74 @@ export default function StudentApplyCandidacy() {
                 </p>
               )}
 
+              {submitBlock === "awaiting-party-president" && (
+                <div className="mt-4 p-3 rounded-xl bg-amber-50 border border-amber-200">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-amber-900 uppercase tracking-wide">
+                    <AlertCircle size={13} className="text-amber-600" />
+                    Awaiting your party President
+                  </div>
+                  <p className="text-xs text-amber-900 mt-1.5 leading-relaxed">
+                    Both photos can be uploaded now, but the completed EAF cannot be submitted until
+                    the President of <strong>{candidate.partyAffiliation || "your party"}</strong>{" "}
+                    approves your candidacy for <strong>{candidate.position}</strong>.
+                  </p>
+                  <button
+                    onClick={() => handleCheckApproval(candidate)}
+                    disabled={gateCheckLoading}
+                    className="mt-2.5 w-full py-2 rounded-lg border border-amber-300 bg-white text-amber-900 text-xs font-semibold hover:bg-amber-100 transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {gateCheckLoading ? (
+                      <>
+                        <div className="w-3 h-3 border-2 border-amber-300 border-t-amber-700 rounded-full animate-spin" />
+                        Checking...
+                      </>
+                    ) : (
+                      "Check approval status"
+                    )}
+                  </button>
+                  {gateCheckedAt && (
+                    <p className="text-[11px] text-amber-700 mt-1.5">
+                      Last checked at {gateCheckedAt} — still waiting.
+                    </p>
+                  )}
+                  {gateCheckError && (
+                    <p className="text-[11px] text-red-600 mt-1.5">{gateCheckError}</p>
+                  )}
+                </div>
+              )}
+
+              {submitBlock === "seat-closed" && (
+                <div className="mt-4 p-3 rounded-xl bg-red-50 border border-red-200">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-red-800 uppercase tracking-wide">
+                    <XCircle size={13} className="text-red-600" />
+                    Position already filled
+                  </div>
+                  <p className="text-xs text-red-900 mt-1.5 leading-relaxed">
+                    Another candidate was approved for <strong>{candidate.position}</strong> in your
+                    party, so this EAF cannot be submitted. You can re-apply if the position opens up
+                    again.
+                  </p>
+                  {reapplyError && (
+                    <p className="text-[11px] text-red-700 mt-1.5">{reapplyError}</p>
+                  )}
+                  {/* Re-apply lives here as well as in partyGateBanner: the
+                      President now decides while the candidate is still in
+                      'ongoingSubmission', which is exactly the branch that
+                      partyGateBanner never renders. */}
+                  <button
+                    onClick={handleReapply}
+                    disabled={reapplyLoading}
+                    className="mt-2.5 w-full py-2 rounded-lg text-white text-xs font-semibold hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
+                    style={{ backgroundColor: "#5C0102" }}
+                  >
+                    {reapplyLoading ? "Re-applying..." : "Re-apply for this position"}
+                  </button>
+                </div>
+              )}
+
               <button
                 onClick={() => handleFinalSubmit(candidate)}
-                disabled={finalLoading || candidate.status !== "ongoingSubmission"}
+                disabled={finalLoading || candidate.status !== "ongoingSubmission" || !!submitBlock}
                 className="w-full mt-4 py-3 text-white rounded-xl text-sm font-medium transition-all hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 style={{ backgroundColor: "#5C0102" }}
               >
@@ -1026,6 +1195,10 @@ export default function StudentApplyCandidacy() {
                     <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                     Submitting...
                   </>
+                ) : submitBlock === "awaiting-party-president" ? (
+                  "Waiting for your party President's approval"
+                ) : submitBlock === "seat-closed" ? (
+                  "Submission closed — position already filled"
                 ) : (
                   "Submit Completed EAF to Commissioner on Screening and Validation"
                 )}
@@ -1048,6 +1221,126 @@ export default function StudentApplyCandidacy() {
         </div>
       </div>
     );
+  };
+
+  const handleReapply = async () => {
+    if (!existing) return;
+    setReapplyLoading(true);
+    setReapplyError(null);
+    try {
+      const updated = await reapplyPartyCandidacyRpc(existing.id);
+      // The RPC returns the raw row, which has no parties(name) join — so
+      // patch just the gate fields instead of replacing the whole candidate.
+      setCandidates(
+        candidates.map((c) =>
+          c.id === existing.id
+            ? {
+                ...c,
+                positionApprovalStatus: updated?.position_approval_status ?? c.positionApprovalStatus,
+                partyDecidedAt: updated?.party_decided_at ?? undefined,
+              }
+            : c
+        )
+      );
+    } catch (err) {
+      setReapplyError(err instanceof Error ? err.message : "Could not re-apply");
+    } finally {
+      setReapplyLoading(false);
+    }
+  };
+
+  /**
+   * Re-read this candidacy to pick up the party President's decision.
+   *
+   * The President approves from their own dashboard, so the write lands in the
+   * database with nothing to push it into this page's already-hydrated state.
+   * The full mapped row comes back, so the gate, the decision timestamp and the
+   * document flags all settle from one read rather than a full page reload.
+   */
+  const handleCheckApproval = async (candidate: Candidate) => {
+    setGateCheckLoading(true);
+    setGateCheckError(null);
+    try {
+      const fresh = await fetchCandidateGate(candidate.id);
+      if (!fresh) {
+        setGateCheckError("Could not read your application. Please try again.");
+        return;
+      }
+      setCandidates(candidates.map((c) => (c.id === fresh.id ? fresh : c)));
+      setGateCheckedAt(new Date().toLocaleTimeString());
+      if (fresh.positionApprovalStatus === "presidentApproved") {
+        setErrors({});
+      }
+    } catch (err) {
+      setGateCheckError(err instanceof Error ? err.message : "Could not check approval status");
+    } finally {
+      setGateCheckLoading(false);
+    }
+  };
+
+  /**
+   * Where a party candidacy sits with the President.  Independents and
+   * Presidents carry 'notRequired' and get nothing here.
+   */
+  const partyGateBanner = (candidate: Candidate) => {
+    if (!candidate.partyAffiliation) return null;
+
+    if (candidate.positionApprovalStatus === "presidentApprovalRequired") {
+      return (
+        <div className="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-xl text-left">
+          <div className="text-xs font-medium text-amber-800 mb-1 uppercase tracking-wide">
+            Waiting for your party President
+          </div>
+          <p className="text-sm text-amber-900">
+            Your candidacy for <strong>{candidate.position}</strong> is with the President of{" "}
+            <strong>{candidate.partyAffiliation}</strong>. Once they approve it you can submit your
+            completed EAF to the Commissioner on Screening and Validation.
+          </p>
+        </div>
+      );
+    }
+
+    if (candidate.positionApprovalStatus === "presidentApproved") {
+      return (
+        <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-xl text-left">
+          <div className="text-xs font-medium text-green-800 mb-1 uppercase tracking-wide">
+            Approved by your party President
+          </div>
+          <p className="text-sm text-green-900">
+            The President of <strong>{candidate.partyAffiliation}</strong> approved your candidacy
+            for <strong>{candidate.position}</strong>, so the completed EAF has been submitted to
+            the Commissioner on Screening and Validation.
+          </p>
+        </div>
+      );
+    }
+
+    if (candidate.positionApprovalStatus === "presidentRejected") {
+      return (
+        <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-xl text-left">
+          <div className="text-xs font-medium text-red-800 mb-1 uppercase tracking-wide">
+            Position already filled
+          </div>
+          <p className="text-sm text-red-900">
+            Another candidate was approved for <strong>{candidate.position}</strong> in your party.
+            You can re-apply if that position opens up again.
+          </p>
+          {reapplyError && (
+            <p className="mt-2 text-xs text-red-700">{reapplyError}</p>
+          )}
+          <button
+            onClick={handleReapply}
+            disabled={reapplyLoading}
+            className="mt-3 px-4 py-2 text-white rounded-lg text-xs font-medium hover:opacity-90 transition-all disabled:opacity-60 flex items-center gap-2"
+            style={{ backgroundColor: "#5C0102" }}
+          >
+            {reapplyLoading ? "Re-applying..." : "Re-apply for this position"}
+          </button>
+        </div>
+      );
+    }
+
+    return null;
   };
 
   if (existing?.status === "ongoingSubmission" && !editingExisting) {
@@ -1125,11 +1418,64 @@ export default function StudentApplyCandidacy() {
                 <p>Party: <strong>{existing.status === "approved" ? (existing.partyAffiliation || "Independent") : "Pending approval"}</strong></p>
                 <p>Submitted on: <strong>{existing.submittedAt}</strong></p>
               </div>
+              {partyGateBanner(existing)}
             </>
           )}
         </div>
         {generateEafConfirm.dialog}
         {finalSubmitConfirm.dialog}
+      </div>
+    );
+  }
+
+  // 058: new applications are only accepted while the Candidate Application
+  // Period is open. The RPC enforces this too — this is the friendly version.
+  // A student who already started an application is never locked out of it.
+  if (!electionPeriod.candidacyOpen && !editingExisting) {
+    const meeting = electionPeriod.rulesDiscussionAt
+      ? new Date(electionPeriod.rulesDiscussionAt)
+      : null;
+    const meetingText =
+      meeting && !Number.isNaN(meeting.getTime())
+        ? meeting.toLocaleString(undefined, {
+            year: "numeric", month: "long", day: "numeric",
+            hour: "2-digit", minute: "2-digit",
+          })
+        : null;
+    return (
+      <div className="p-6 md:p-8 max-w-2xl mx-auto">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
+          <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 bg-amber-100">
+            <AlertCircle size={28} className="text-amber-600" />
+          </div>
+          <h2 className="text-gray-900 mb-2">The Candidate Application Period is closed</h2>
+          <p className="text-gray-500 text-sm mb-4">
+            The Electoral Board is not accepting new candidacy applications right now.
+            {electionPeriod.schoolYear ? ` This election is for School Year ${electionPeriod.schoolYear}.` : ""}
+          </p>
+
+          {meetingText ? (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4 text-left">
+              <div className="text-xs font-medium text-blue-700 mb-1 uppercase tracking-wide">
+                Rules Discussion Meeting
+              </div>
+              <div className="text-sm text-blue-900 font-medium">{meetingText}</div>
+              <p className="text-xs text-blue-700 mt-2">
+                The meeting is announced in each approved candidate&rsquo;s page. It is where
+                campaign rules are discussed and questions are answered.
+              </p>
+            </div>
+          ) : (
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-4 text-left text-sm text-gray-600">
+              The Rules Discussion Meeting has not been scheduled yet. Check back later.
+            </div>
+          )}
+
+          <p className="text-xs text-gray-400">
+            If you believe the application period is still open, please see the Screening and
+            Validation Commissioner.
+          </p>
+        </div>
       </div>
     );
   }
@@ -1444,7 +1790,10 @@ export default function StudentApplyCandidacy() {
                       <label className="block text-sm text-gray-700 mb-1.5">Party Type <span className="text-red-500">*</span></label>
                       <select
                         value={partyMode}
-                        onChange={(e) => setPartyMode(e.target.value as "existing" | "new" | "independent")}
+                        onChange={(e) => {
+                          setPartyModeChosen(true);
+                          setPartyMode(e.target.value as "existing" | "new" | "independent");
+                        }}
                         className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50"
                       >
                         <option value="independent">Independent (No Party)</option>
@@ -1461,10 +1810,49 @@ export default function StudentApplyCandidacy() {
                           onChange={(e) => update("partyAffiliation", e.target.value)}
                           className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50 ${errors.party ? "border-red-400" : "border-gray-200"}`}
                         >
-                          {existingParties.map(p => <option key={p}>{p}</option>)}
+                          {partyOptions.map(party => (
+                            <option
+                              key={party.id}
+                              value={party.name}
+                              disabled={!!party.blockedReason}
+                            >
+                              {party.name}
+                              {party.blockedReason === "awaiting-president"
+                                ? " — awaiting President screening"
+                                : party.blockedReason === "full"
+                                  ? " — all positions filled"
+                                  : ""}
+                            </option>
+                          ))}
                         </select>
                         {errors.party && <p className="text-xs text-red-500 mt-1"><AlertCircle size={12} /> {errors.party}</p>}
-                        <p className="text-xs text-gray-400 mt-1">Only empty party positions are available.</p>
+                        {partyOptions.length === 0 ? (
+                          <p className="text-xs text-gray-400 mt-1">No parties have been registered for this election yet.</p>
+                        ) : joinableParties.length === 0 ? (
+                          <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-2 mt-1.5">
+                            <p className="font-medium">No parties are accepting applicants right now.</p>
+                            <p className="mt-0.5 text-amber-800">
+                              {partyOptions.length} part{partyOptions.length === 1 ? "y is" : "ies are"} listed above, but
+                              each one is either full or still waiting for its President to be screened in. You can run as an
+                              Independent candidate or create a new party in the meantime.
+                            </p>
+                          </div>
+                        ) : selectedParty ? (
+                          <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-md px-2.5 py-2 mt-1.5">
+                            <p className="font-medium text-gray-700">{selectedParty.name}</p>
+                            {selectedParty.blockedReason === "awaiting-president" ? (
+                              <p className="mt-0.5 text-amber-800">Awaiting President screening — this party cannot accept members until its President is approved.</p>
+                            ) : selectedParty.blockedReason === "full" ? (
+                              <p className="mt-0.5 text-amber-800">Party already full — every {form.gradeLevel || "grade"} position already has a candidate.</p>
+                            ) : openPartySeats.length > 0 ? (
+                              <p className="mt-0.5">
+                                Open {form.gradeLevel || "grade"} positions: {openPartySeats.map(s => s.position).join(", ")}.
+                              </p>
+                            ) : (
+                              <p className="mt-0.5">No position is open for {form.gradeLevel || "your grade"} in this party.</p>
+                            )}
+                          </div>
+                        ) : null}
                       </div>
                     )}
 
@@ -1492,11 +1880,24 @@ export default function StudentApplyCandidacy() {
                           className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] ${partyMode === "new" ? "bg-gray-100 text-gray-500 cursor-not-allowed" : "bg-gray-50"} ${errors.position ? "border-red-400" : "border-gray-200"}`}
                         >
                           <option value="">Select position</option>
-                          {availablePositions.map(p => <option key={p}>{p}</option>)}
+                          {seatChoices.map(seat => {
+                            const selectable = isSeatSelectable(seat, partyMode === "existing");
+                            const suffix =
+                              seat.state === "filled"
+                                ? " — filled"
+                                : seat.requestCount > 0
+                                  ? ` — ${seat.requestCount} in the running`
+                                  : "";
+                            return (
+                              <option key={seat.position} value={seat.position} disabled={!selectable}>
+                                {seat.position}{suffix}
+                              </option>
+                            );
+                          })}
                         </select>
                         {errors.position && <p className="text-xs text-red-500 mt-1"><AlertCircle size={12} /> {errors.position}</p>}
                         <p className="text-xs text-gray-400 mt-1">
-                          {partyMode === "existing" ? "Existing party positions require president approval after the EAF is completed." : "Locked to President for a new party."}
+                          {partyMode === "existing" ? "Other students may contest the same position; your party President decides who wins. Positions marked filled already have an approved candidate." : "Locked to President for a new party."}
                         </p>
                       </div>
                     )}
@@ -1510,7 +1911,16 @@ export default function StudentApplyCandidacy() {
                           className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50 ${errors.position ? "border-red-400" : "border-gray-200"}`}
                         >
                           <option value="">Select position</option>
-                          {availablePositions.map(p => <option key={p}>{p}</option>)}
+                          {seatChoices.map(seat => (
+                            <option
+                              key={seat.position}
+                              value={seat.position}
+                              disabled={!isSeatSelectable(seat)}
+                            >
+                              {seat.position}
+                              {seat.state === "filled" ? " — filled" : ""}
+                            </option>
+                          ))}
                         </select>
                         {errors.position && <p className="text-xs text-red-500 mt-1"><AlertCircle size={12} /> {errors.position}</p>}
                         <p className="text-xs text-gray-400 mt-1">Independent candidates may run for any open position.</p>

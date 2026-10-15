@@ -23,7 +23,7 @@ const isGradeRep = (p: string) => /representative/i.test(p);
  * v1.2 scope per the Chief's request:
  *   * the DepEd Enclosure Reports grid and the estimated voter-turnout
  *     charts/sections are REMOVED;
- *   * the results now come from the chief-gated get_live_results_rpc
+ *   * the results now come from the role-gated get_live_results_rpc
  *     (real per-candidate vote counts) and get_abstain_summary_rpc
  *     (046 abstain ledger), so the abstain percentage and the winners
  *     summary are computed from actual ballots;

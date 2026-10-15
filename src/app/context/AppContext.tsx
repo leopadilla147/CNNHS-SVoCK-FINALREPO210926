@@ -88,7 +88,12 @@ export interface Candidate {
   };
   eafFrontImage?: string;
   eafBackImage?: string;
-  positionApprovalStatus?: "notRequired" | "presidentApprovalRequired" | "presidentApproved";
+  positionApprovalStatus?:
+    | "notRequired"
+    | "presidentApprovalRequired"
+    | "presidentApproved"
+    | "presidentRejected";
+  partyDecidedAt?: string;
   leadershipProfile?: {
     qualities: string;
     skills: string[];
@@ -110,6 +115,7 @@ export interface Candidate {
   submittedAt: string;
   votes: number;
   studentId: string;
+  electionPeriodId?: string;
 }
 
 export interface Commissioner {
@@ -129,7 +135,25 @@ export interface SslgAdviser {
   createdAt: string;
 }
 
+/**
+ * Where an election period sits in the four-stage lifecycle.
+ *
+ * `completed` is a retired period: 058's Reset Election Plan archives one by
+ * setting this, which is why every period lookup filters it out.  History is
+ * never deleted (migration 052) — the row and its candidates simply stop being
+ * the live one.
+ */
+export type ElectionStage =
+  | "application"
+  | "campaign"
+  /** 060: the biometric enrolment window at the IoT kiosks. */
+  | "fingerprint_registration"
+  | "voting"
+  | "results"
+  | "completed";
+
 export interface ElectionPeriod {
+  id?: string;
   startDate: string;
   startTime: string;
   endDate: string;
@@ -147,10 +171,18 @@ export interface ElectionPeriod {
   planFinalized?: boolean;
   proclaimed?: boolean;
   proclaimedAt?: string;
-  /** 029 column: date/time of the rules discussion (Electoral Board/Chief sets it). */
+  /** 058 column: date/time of the campaign (Rules Discussion) meeting. */
   rulesDiscussionAt?: string;
   /** 029 column: fixed D-06 voting method ('plurality' default). */
   votingMethod?: string;
+  /** 058 column: the authoritative lifecycle stage. */
+  lifecycleStage?: ElectionStage;
+  /** UNIQUE (020:404) — a reset that retires a period must pick a new one. */
+  schoolYear?: string;
+  /** 060 columns: the Fingerprint Registration window. RPC-owned — never
+   *  written by the plain schedule editor (see buildElectionPeriodSyncPayload). */
+  fingerprintRegistrationStartAt?: string;
+  fingerprintRegistrationEndAt?: string;
 }
 
 export interface Complaint {
@@ -226,17 +258,16 @@ export interface AppNotification {
   createdAt: string;
 }
 
-export interface PartyMember {
+/**
+ * A party row, read from public.parties.  The Apply page used to infer the
+ * party list from candidate rows alone, which cannot see a party that has no
+ * candidates yet — that is why a freshly created party (and any party whose
+ * President is still with Screening) never appeared in the picker.
+ */
+export interface PartySummary {
   id: string;
-  partyId: string;
-  partyName?: string;
-  studentId: string;
-  status: "pending" | "approved" | "rejected";
-  requestedAt: string;
-  reviewedBy?: string;
-  reviewedAt?: string;
-  studentName?: string;
-  studentGrade?: string;
+  name: string;
+  electionPeriodId: string;
 }
 
 interface AppContextType {
@@ -248,10 +279,19 @@ interface AppContextType {
   setStudentMasterlist: (entries: StudentMasterlistEntry[]) => void;
   candidates: Candidate[];
   setCandidates: (candidates: Candidate[]) => void;
+  parties: PartySummary[];
+  setParties: (parties: PartySummary[]) => void;
   commissioners: Commissioner[];
   setCommissioners: (commissioners: Commissioner[]) => void;
   electionPeriod: ElectionPeriod;
   setElectionPeriod: (period: ElectionPeriod) => Promise<{ ok: boolean; message?: string }>;
+  /**
+   * Local state only — no database write.  Use this after an RPC has already
+   * changed the row (the 058 lifecycle RPCs) so the UI reflects what the
+   * server actually did instead of writing a second, unverified copy through
+   * setElectionPeriod.
+   */
+  applyElectionPeriod: (period: ElectionPeriod) => void;
   complaints: Complaint[];
   setComplaints: (complaints: Complaint[]) => void;
   reportTemplates: ReportTemplate[];
@@ -266,14 +306,12 @@ interface AppContextType {
   markAsRead: (id: string) => void;
   markAllAsRead: () => void;
   insertNotification: (notif: Omit<AppNotification, "id" | "isRead" | "createdAt">) => void;
-  partyMembers: PartyMember[];
-  setPartyMembers: (members: PartyMember[]) => void;
-  fetchPartyMembers: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const emptyElectionPeriod: ElectionPeriod = {
+  id: "",
   startDate: "",
   startTime: "",
   endDate: "",
@@ -291,6 +329,11 @@ export const emptyElectionPeriod: ElectionPeriod = {
   planFinalized: false,
   proclaimed: false,
   proclaimedAt: "",
+  votingMethod: "plurality",
+  lifecycleStage: "application",
+  schoolYear: "",
+  fingerprintRegistrationStartAt: "",
+  fingerprintRegistrationEndAt: "",
 };
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -303,6 +346,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [students, setStudentsState] = useState<Student[]>([]);
   const [studentMasterlist, setStudentMasterlist] = useState<StudentMasterlistEntry[]>([]);
   const [candidates, setCandidatesState] = useState<Candidate[]>([]);
+  const [parties, setPartiesState] = useState<PartySummary[]>([]);
   const [commissioners, setCommissioners] = useState<Commissioner[]>([]);
   const [electionPeriod, setElectionPeriodState] = useState<ElectionPeriod>(emptyElectionPeriod);
   const [complaints, setComplaintsState] = useState<Complaint[]>([]);
@@ -310,7 +354,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [kioskStatuses, setKioskStatuses] = useState<KioskStatus[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
-  const [partyMembers, setPartyMembersState] = useState<PartyMember[]>([]);
 
   const unreadCount = notifications.filter((n) => !n.isRead).length;
   const registeredLRNs = new Set(students.map((s) => s.lrn));
@@ -322,6 +365,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setStudentsState(state.students);
     setStudentMasterlist(state.studentMasterlist);
     setCandidatesState(state.candidates);
+    setPartiesState(state.parties);
     setCommissioners(state.commissioners);
     setElectionPeriodState(state.electionPeriod || emptyElectionPeriod);
     setComplaintsState(state.complaints);
@@ -427,10 +471,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setCandidatesState(next);
   };
 
+  // Parties are read-only here: creation and membership both go through
+  // submit_candidacy_rpc, so there is no client-side write to sync.
+  const setParties = (next: PartySummary[]) => {
+    setPartiesState(next);
+  };
+
   const setElectionPeriod = (period: ElectionPeriod) => {
     setElectionPeriodState(period);
     if (isSupabaseConfigured) return syncElectionPeriod(period);
     return Promise.resolve({ ok: true });
+  };
+
+  // No DB write: the caller has already persisted through an RPC.
+  const applyElectionPeriod = (period: ElectionPeriod) => {
+    setElectionPeriodState(period);
   };
 
   const setComplaints = (next: Complaint[]) => {
@@ -478,32 +533,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const setPartyMembers = (next: PartyMember[]) => {
-    setPartyMembersState(next);
-  };
-
-  const fetchPartyMembers = async () => {
-    if (!isSupabaseConfigured || !supabase) return;
-    const { data } = await supabase
-      .from("party_members")
-      .select("*, students(first_name, last_name, grade_level), parties(name)")
-      .order("requested_at", { ascending: false });
-    if (data) {
-      setPartyMembersState(data.map((row: any) => ({
-        id: row.id,
-        partyId: row.party_id,
-        partyName: row.parties?.name || undefined,
-        studentId: row.student_id,
-        status: row.status,
-        requestedAt: row.requested_at,
-        reviewedBy: row.reviewed_by || undefined,
-        reviewedAt: row.reviewed_at || undefined,
-        studentName: row.students ? `${row.students.first_name} ${row.students.last_name}` : undefined,
-        studentGrade: row.students?.grade_level || undefined,
-      })));
-    }
-  };
-
   const fetchNotifications = async () => {
     if (!isSupabaseConfigured || !supabase || !currentUser?.id) return;
     const { data } = await supabase
@@ -530,7 +559,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (currentUser?.id) {
       fetchNotifications();
-      fetchPartyMembers();
     }
   }, [currentUser?.id]);
 
@@ -555,10 +583,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setStudentMasterlist,
       candidates,
       setCandidates,
+      parties,
+      setParties,
       commissioners,
       setCommissioners,
       electionPeriod,
       setElectionPeriod,
+      applyElectionPeriod,
       complaints,
       setComplaints,
       reportTemplates,
@@ -573,9 +604,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       markAsRead,
       markAllAsRead,
       insertNotification,
-      partyMembers,
-      setPartyMembers,
-      fetchPartyMembers,
     }}>
       {children}
     </AppContext.Provider>

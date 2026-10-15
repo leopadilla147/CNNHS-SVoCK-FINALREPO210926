@@ -2,6 +2,9 @@ import { createBrowserRouter } from "react-router";
 import { PublicLayout } from "./components/layout/PublicLayout";
 import { DashboardLayout } from "./components/layout/DashboardLayout";
 import HomePage from "./pages/HomePage";
+import CurrentElectionPage from "./pages/CurrentElectionPage";
+import PastElectionsPage from "./pages/PastElectionsPage";
+import PastElectionDetailPage from "./pages/PastElectionDetailPage";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
@@ -32,6 +35,9 @@ export const router = createBrowserRouter([
     Component: PublicLayout,
     children: [
       { index: true, Component: HomePage },
+      { path: "current-election", Component: CurrentElectionPage },
+      { path: "past-elections", Component: PastElectionsPage },
+      { path: "past-elections/:electionId", Component: PastElectionDetailPage },
       { path: "login", Component: LoginPage },
       { path: "register", Component: RegisterPage },
     ],

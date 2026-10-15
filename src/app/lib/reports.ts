@@ -199,6 +199,16 @@ export function generateEnclosure82(candidates: Candidate[]) {
 }
 
 export function generateEnclosure9(electionPeriod: ElectionPeriod) {
+  // 060: the calendar now includes the Fingerprint Registration window. The
+  // stored values are timestamptz, so they are rendered as plain dates to
+  // match the surrounding rows.
+  const fmtDay = (value?: string) => {
+    if (!value) return 'TBD';
+    const d = new Date(value);
+    return Number.isNaN(d.getTime())
+      ? 'TBD'
+      : d.toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
+  };
   const html = `${depEdHeader('Campaign and Election Calendar', '9')}
     <h2>CAMPAIGN AND ELECTION CALENDAR</h2>
     <p style="text-align:center; font-size:10pt;">S.Y. 2026-2027 &mdash; SSLG Election</p>
@@ -209,6 +219,7 @@ export function generateEnclosure9(electionPeriod: ElectionPeriod) {
         <tr><td>Screening and Validation</td><td>${electionPeriod.candidacyOpen ? 'Ongoing' : 'TBD'}</td><td>Commissioner of Screening and Validation</td></tr>
         <tr><td>Posting of Official List of Candidates</td><td>${electionPeriod.candidacyOpen ? 'After approval' : 'TBD'}</td><td>Commissioner of Appointment</td></tr>
         <tr><td>Campaign Period</td><td>${electionPeriod.startDate ? escapeHtml(electionPeriod.startDate) : 'TBD'} onwards</td><td>Candidates / Parties</td></tr>
+        <tr><td>Fingerprint Registration</td><td>${fmtDay(electionPeriod.fingerprintRegistrationStartAt)}${electionPeriod.fingerprintRegistrationEndAt ? ` &ndash; ${fmtDay(electionPeriod.fingerprintRegistrationEndAt)}` : ''}</td><td>Commissioner of Electoral Board</td></tr>
         <tr><td>Election Day (Voting)</td><td>${electionPeriod.startDate ? escapeHtml(electionPeriod.startDate) : 'TBD'} ${electionPeriod.startTime ? escapeHtml(electionPeriod.startTime) : ''} - ${electionPeriod.endDate ? escapeHtml(electionPeriod.endDate) : 'TBD'} ${electionPeriod.endTime ? escapeHtml(electionPeriod.endTime) : ''}</td><td>Commissioner of Electoral Board</td></tr>
         <tr><td>Counting and Canvassing</td><td>After voting closes</td><td>Commissioner of Electoral Board</td></tr>
         <tr><td>Proclamation of Winners</td><td>After approval of results</td><td>Chief Commissioner</td></tr>

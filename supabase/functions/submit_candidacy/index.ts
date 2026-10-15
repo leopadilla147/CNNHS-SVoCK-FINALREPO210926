@@ -35,7 +35,6 @@ interface CandidatePayload {
     skillsExplanation: string;
     threeYearVision: string;
   };
-  positionApprovalStatus?: string;
   status: string;
 }
 
@@ -172,18 +171,75 @@ serve(async (req) => {
       pictureUrl = await uploadImage(admin, pictureBase64, "candidate-pictures", `candidate_${newId}_${Date.now()}.jpg`);
     }
 
-    let partyId: string | null = null;
-    if (candidate.partyAffiliation) {
-      const { data: party } = await admin.from("parties").upsert(
-        { name: candidate.partyAffiliation },
-        { onConflict: "name" },
-      ).select("id").single();
-      if (party) partyId = party.id;
-    }
-
     const { data: election } = await admin.from("election_periods").select("id").eq("is_active", true).maybeSingle();
     const electionPeriodId = election?.id;
     if (!electionPeriodId) throw new Error("No active election period found.");
+
+    let partyId: string | null = null;
+    if (candidate.partyAffiliation) {
+      // Only a President applicant may bring a new slate into being; anyone
+      // else has to be joining a party that already exists for this period.
+      const { data: existing } = await admin
+        .from("parties")
+        .select("id")
+        .eq("election_period_id", electionPeriodId)
+        .eq("name", candidate.partyAffiliation)
+        .maybeSingle();
+
+      if (existing) {
+        // Same rule the RPC enforces: joining an existing slate is only
+        // legitimate once it has an APPROVED PRESIDENT.  This function runs on
+        // the service role and so is not covered by the candidates RLS, so the
+        // check has to be repeated here rather than inherited.
+        if (candidate.position !== "President") {
+          const { data: approvedPresident } = await admin
+            .from("candidates")
+            .select("id")
+            .eq("party_id", existing.id)
+            .eq("position", "President")
+            .eq("status", "approved")
+            .limit(1)
+            .maybeSingle();
+
+          if (!approvedPresident) {
+            throw new Error(
+              "You can only join a party that already has an approved President."
+            );
+          }
+        }
+        partyId = existing.id;
+      } else {
+        if (candidate.position !== "President") {
+          throw new Error("You can only create a new party by running for President. Join an existing party instead.");
+        }
+        const { data: party, error: partyError } = await admin
+          .from("parties")
+          .insert({ name: candidate.partyAffiliation, election_period_id: electionPeriodId })
+          .select("id")
+          .single();
+        if (partyError) {
+          // Two Presidents can pick the same name at the same instant.  The
+          // winner's row is the party; the loser adopts it instead of failing.
+          const { data: winner } = await admin
+            .from("parties")
+            .select("id")
+            .eq("election_period_id", electionPeriodId)
+            .eq("name", candidate.partyAffiliation)
+            .maybeSingle();
+          if (!winner) {
+            throw new Error(`Party could not be created: ${partyError.message}`);
+          }
+          partyId = winner.id;
+        } else if (!party) {
+          throw new Error("Party could not be created.");
+        } else {
+          partyId = party.id;
+        }
+      }
+
+      // president_student_id is intentionally left alone: it mirrors the
+      // screening-approved President, not whoever applied first.
+    }
 
     const { error: insertError } = await admin.from("candidates").insert({
       id: newId,
@@ -213,7 +269,12 @@ serve(async (req) => {
       doc_good_moral_cert: false,
       doc_eaf_front: false,
       doc_eaf_back: false,
-      position_approval_status: candidate.positionApprovalStatus || "notRequired",
+      // Derived server-side. This function runs with the service role and
+      // would otherwise let a client assert its own party approval.
+      position_approval_status:
+        partyId && candidate.position !== "President"
+          ? "presidentApprovalRequired"
+          : "notRequired",
       leadership_profile: candidate.leadershipProfile || null,
       status: candidate.status,
       submitted_at: new Date().toISOString(),

@@ -7,7 +7,6 @@ import {
   FileText,
   ChevronRight,
   Bell,
-  UserPlus,
   CheckCircle,
   XCircle,
   Users,
@@ -19,8 +18,9 @@ import {
 } from "lucide-react";
 import { Link } from "react-router";
 import { useApp } from "../../context/AppContext";
-import { requestPartyMembershipRpc, reviewPartyMembershipRpc } from "../../lib/supabaseData";
+import { reviewPartyCandidacyRpc } from "../../lib/supabaseData";
 import { useConfirm } from "../../lib/useConfirm";
+import { buildPartyPositionBoard, candidatesInLivePeriod } from "../../lib/partyScope";
 
 const formatCandidateStatus = (status: string) =>
   status === "ongoingSubmission" ? "Ongoing Submission" : status.charAt(0).toUpperCase() + status.slice(1);
@@ -43,134 +43,105 @@ function timeAgo(dateStr: string): string {
 export default function StudentDashboard() {
   const {
     candidates,
+    setCandidates,
     electionPeriod,
     currentUser,
     students,
     notifications,
     unreadCount,
     markAsRead,
-    partyMembers,
-    fetchPartyMembers,
-    insertNotification,
     addLog,
   } = useApp();
 
-  const [requestingParty, setRequestingParty] = useState<string | null>(null);
-  const [processingMember, setProcessingMember] = useState<string | null>(null);
+  const [processingCandidate, setProcessingCandidate] = useState<string | null>(null);
   const approveConfirm = useConfirm({
-    title: "Approve Member?",
-    description: "Approve this student's request to join your party?",
+    title: "Approve Candidate?",
+    description:
+      "Approving this student confirms them for that position in your party. Every other request for the same position will be declined automatically.",
     confirmText: "Approve",
   });
   const rejectConfirm = useConfirm({
-    title: "Reject Member?",
-    description: "Reject this student's request to join your party?",
-    confirmText: "Reject",
+    title: "Decline Candidate?",
+    description:
+      "Decline this student's request? They can re-apply if the position opens up again.",
+    confirmText: "Decline",
     destructive: true,
   });
 
   const currentStudent = students.find((s) => s.id === currentUser?.id);
-  const myApplication = candidates.find((c) => c.studentId === currentUser?.id);
+  // A candidacy belongs to one election period, so the dashboard works on the
+  // live period's slate: a past application is history, not "my application".
+  const periodCandidates = candidatesInLivePeriod(candidates, electionPeriod);
+  const myApplication = periodCandidates.find((c) => c.studentId === currentUser?.id);
   const myParty = myApplication?.status === "approved" ? (myApplication.partyAffiliation ?? null) : null;
 
-  // Determine if current user is a party president
-  const isPartyPresident = myApplication?.status === "approved" && myApplication?.position === "President";
+  // Only the screening-APPROVED President of a party presides over it.  That is
+  // the same rule the database enforces, so the board and the RPC agree.
+  const isPartyPresident =
+    myApplication?.status === "approved" && myApplication?.position === "President";
   const myPartyId = myApplication?.partyId;
 
-  // Pending membership requests for party president
-  const pendingRequests = partyMembers.filter(
-    (pm) => pm.status === "pending" && myParty && pm.partyId === myPartyId
-  );
+  // Every contested seat in the President's party, each with its approved
+  // candidate and whoever is still waiting on a decision.
+  const partyBoard = myPartyId ? buildPartyPositionBoard(candidates, myPartyId, electionPeriod) : [];
+  const pendingSeatCount = partyBoard.reduce((total, slot) => total + slot.pending.length, 0);
 
-  // Available parties for requesting membership
-  const existingParties = Array.from(
-    new Set(
-      candidates
-        .filter((c) => c.status === "approved" && c.partyAffiliation && c.partyAffiliation !== "Independent")
-        .map((c) => c.partyAffiliation as string)
-    )
-  );
+  // Where the student's own party candidacy sits.  Independents and party
+  // Presidents carry 'notRequired' and are not gated.
+  const myGate = myApplication?.partyAffiliation
+    ? myApplication.positionApprovalStatus
+    : undefined;
 
-  // Check if student already has a pending/approved membership
-  const myMemberships = partyMembers.filter((pm) => pm.studentId === currentUser?.id);
-  const hasPendingMembership = myMemberships.some((pm) => pm.status === "pending");
-  const hasApprovedMembership = myMemberships.some((pm) => pm.status === "approved");
-
-  // Resolve a party's real id from its president's candidacy
-  const getPartyId = (partyName: string) =>
-    candidates.find(
-      (c) => c.partyAffiliation === partyName && c.position === "President" && c.status === "approved"
-    )?.partyId;
-
-  const handleRequestMembership = async (partyName: string) => {
-    if (!currentUser?.id || requestingParty) return;
-    setRequestingParty(partyName);
-    try {
-      const partyId = getPartyId(partyName);
-      if (!partyId) {
-        addLog({
-          user: currentUser?.name || "Student",
-          role: "Student",
-          action: "Party Request Failed",
-          details: "No party president found for " + partyName,
-          type: "error",
-        });
-        return;
-      }
-      await requestPartyMembershipRpc(partyId, currentUser.id);
-      await fetchPartyMembers();
-      insertNotification({
-        userId: currentUser.id,
-        role: "student",
-        type: "party_membership_request",
-        title: "Membership Request Sent",
-        message: `Your request to join ${partyName} has been sent to the party president.`,
-        link: "/student/dashboard",
-      });
-      addLog({
-        user: currentUser?.name || "Student",
-        role: "Student",
-        action: "Requested Party Membership",
-        details: `Requested to join ${partyName}`,
-        type: "info",
-      });
-    } catch (err) {
-      addLog({
-        user: currentUser?.name || "Student",
-        role: "Student",
-        action: "Party Request Failed",
-        details: err instanceof Error ? err.message : "Unknown error",
-        type: "error",
-      });
-    }
-    setRequestingParty(null);
-  };
-
-  const handleReviewMembership = async (memberId: string, action: "approve" | "reject") => {
-    const confirmed = action === "approve" ? await approveConfirm.confirm() : await rejectConfirm.confirm();
+  const handleReviewCandidacy = async (
+    candidateId: string,
+    position: string,
+    candidateName: string,
+    action: "approve" | "reject"
+  ) => {
+    const confirmed =
+      action === "approve" ? await approveConfirm.confirm() : await rejectConfirm.confirm();
     if (!confirmed) return;
-    if (!currentUser?.id) return;
-    setProcessingMember(memberId);
+    setProcessingCandidate(candidateId);
     try {
-      await reviewPartyMembershipRpc(memberId, action, currentUser.id);
-      await fetchPartyMembers();
+      await reviewPartyCandidacyRpc(candidateId, action);
+      // The RPC returns the raw row with no parties(name) join, so patch only
+      // the gate fields rather than replacing the candidate wholesale.
+      setCandidates(
+        candidates.map((c) =>
+          c.id === candidateId
+            ? {
+                ...c,
+                positionApprovalStatus:
+                  action === "approve" ? "presidentApproved" : "presidentRejected",
+                partyDecidedAt: new Date().toISOString(),
+              }
+            : // Approving one candidate declines every other request for the
+              // same seat, so mirror that locally instead of refetching.
+              c.partyId === myPartyId &&
+              c.position === position &&
+              c.id !== candidateId &&
+              c.positionApprovalStatus === "presidentApprovalRequired" && action === "approve"
+              ? { ...c, positionApprovalStatus: "presidentRejected" as const, partyDecidedAt: new Date().toISOString() }
+              : c
+        )
+      );
       addLog({
         user: currentUser?.name || "Student",
         role: "Student",
-        action: action === "approve" ? "Approved Party Member" : "Rejected Party Member",
-        details: `Member request ${action}d`,
+        action: action === "approve" ? "Approved Party Candidate" : "Declined Party Candidate",
+        details: `${candidateName} for ${position}`,
         type: action === "approve" ? "success" : "warning",
       });
     } catch (err) {
       addLog({
         user: currentUser?.name || "Student",
         role: "Student",
-        action: "Review Failed",
+        action: "Party Decision Failed",
         details: err instanceof Error ? err.message : "Unknown error",
         type: "error",
       });
     }
-    setProcessingMember(null);
+    setProcessingCandidate(null);
   };
 
   const unreadNotifications = notifications.filter((n) => !n.isRead).slice(0, 5);
@@ -295,115 +266,96 @@ export default function StudentDashboard() {
         </motion.div>
       )}
 
-      {/* Party President: Pending Membership Requests */}
-      {isPartyPresident && pendingRequests.length > 0 && (
+      {/* Party President: the approval board for their own slate */}
+      {isPartyPresident && partyBoard.length > 0 && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           className="bg-white rounded-2xl shadow-xs border border-amber-200 p-6"
         >
-          <div className="flex items-center gap-2 mb-4">
+          <div className="flex items-center gap-2 mb-1">
             <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center text-amber-700">
               <Users size={16} />
             </div>
             <div>
-              <span className="font-bold text-gray-900 text-sm">
-                Pending Party Membership Requests ({pendingRequests.length})
-              </span>
+              <span className="font-bold text-gray-900 text-sm">{myParty} — Candidacy Requests</span>
               <p className="text-xs text-gray-500">
-                As Party President, review students requesting to join your party.
+                {pendingSeatCount > 0
+                  ? `${pendingSeatCount} request${pendingSeatCount === 1 ? "" : "s"} waiting on your decision.`
+                  : "Every position in your slate has a confirmed candidate."}
               </p>
             </div>
           </div>
 
-          <div className="space-y-3">
-            {pendingRequests.map((req) => {
-              const memberName = req.studentName || "Student";
-              return (
-                <div
-                  key={req.id}
-                  className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl bg-amber-50/60 border border-amber-200/80 gap-3"
-                >
-                  <div>
-                    <div className="text-sm font-bold text-gray-900">{memberName}</div>
-                    <div className="text-xs text-gray-600 mt-0.5">
-                      {req.partyName ? `${req.partyName} · ` : ""}
-                      {req.studentGrade ? `Grade ${req.studentGrade}` : "Grade N/A"} &middot; Requested{" "}
-                      {timeAgo(req.requestedAt)}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 self-end sm:self-auto">
-                    <button
-                      onClick={() => handleReviewMembership(req.id, "approve")}
-                      disabled={processingMember === req.id}
-                      className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 transition-colors disabled:opacity-60 cursor-pointer"
-                    >
-                      {processingMember === req.id ? (
-                        <div className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />
-                      ) : (
-                        <CheckCircle size={13} />
-                      )}
-                      Approve
-                    </button>
-                    <button
-                      onClick={() => handleReviewMembership(req.id, "reject")}
-                      disabled={processingMember === req.id}
-                      className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold hover:bg-red-700 transition-colors disabled:opacity-60 cursor-pointer"
-                    >
-                      <XCircle size={13} /> Reject
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </motion.div>
-      )}
-
-      {/* Party Membership Request UI — hidden for approved candidates */}
-      {!myParty && myApplication?.status !== "approved" && !hasPendingMembership && !hasApprovedMembership && existingParties.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-white rounded-2xl shadow-xs border border-gray-200/90 p-6"
-        >
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-8 h-8 rounded-lg bg-red-50 flex items-center justify-center text-[#5C0102]">
-              <UserPlus size={16} />
-            </div>
-            <span className="font-bold text-gray-900 text-sm">Join an Existing Political Party</span>
-          </div>
-          <p className="text-xs text-gray-500 mb-4">
-            Request membership to an accredited party. Your request will be evaluated by the party president.
-          </p>
-          <div className="flex flex-wrap gap-2.5">
-            {existingParties.map((partyName) => {
-              const alreadyRequested = partyMembers.some(
-                (pm) => pm.partyId === getPartyId(partyName) && pm.status === "pending"
-              );
-              return (
-                <button
-                  key={partyName}
-                  onClick={() => handleRequestMembership(partyName)}
-                  disabled={requestingParty === partyName || alreadyRequested}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-all disabled:opacity-50 text-white cursor-pointer hover:brightness-105 active:scale-98 shadow-xs"
-                  style={{ backgroundColor: "#5C0102" }}
-                >
-                  {requestingParty === partyName ? (
-                    <div className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />
+          <div className="space-y-3 mt-4">
+            {partyBoard.map((slot) => (
+              <div key={slot.position} className="rounded-xl border border-gray-200 bg-gray-50/60 p-4">
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <span className="text-sm font-bold text-gray-900">{slot.position}</span>
+                  {slot.approved ? (
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800">
+                      <CheckCircle size={12} />
+                      {slot.approved.givenName} {slot.approved.surname}
+                    </span>
                   ) : (
-                    <UserPlus size={13} />
+                    <span className="text-[11px] font-medium text-gray-500">Open seat</span>
                   )}
-                  {alreadyRequested ? "Requested" : `Join ${partyName}`}
-                </button>
-              );
-            })}
+                </div>
+
+                {slot.pending.length > 0 ? (
+                  <div className="space-y-2">
+                    {slot.pending.map((req) => {
+                      const fullName = `${req.givenName} ${req.surname}`;
+                      const busy = processingCandidate === req.id;
+                      return (
+                        <div
+                          key={req.id}
+                          className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg bg-white border border-gray-200 gap-3"
+                        >
+                          <div>
+                            <div className="text-sm font-semibold text-gray-900">{fullName}</div>
+                            <div className="text-xs text-gray-500 mt-0.5">
+                              Grade {req.gradeLevel} &middot; applied for {req.position}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 self-end sm:self-auto">
+                            <button
+                              onClick={() => handleReviewCandidacy(req.id, slot.position, fullName, "approve")}
+                              disabled={busy || !!slot.approved}
+                              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 transition-colors disabled:opacity-50 cursor-pointer"
+                            >
+                              {busy ? (
+                                <div className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />
+                              ) : (
+                                <CheckCircle size={13} />
+                              )}
+                              Approve
+                            </button>
+                            <button
+                              onClick={() => handleReviewCandidacy(req.id, slot.position, fullName, "reject")}
+                              disabled={busy}
+                              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold hover:bg-red-700 transition-colors disabled:opacity-50 cursor-pointer"
+                            >
+                              <XCircle size={13} /> Decline
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  !slot.approved && (
+                    <p className="text-xs text-gray-500 italic">No applicants for this seat yet.</p>
+                  )
+                )}
+              </div>
+            ))}
           </div>
         </motion.div>
       )}
 
-      {/* Membership status alerts */}
-      {hasPendingMembership && (
+      {/* Where the student's own party candidacy sits with their President */}
+      {myGate === "presidentApprovalRequired" && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -411,25 +363,46 @@ export default function StudentDashboard() {
         >
           <Clock size={20} className="text-amber-600 shrink-0" />
           <div>
-            <div className="text-xs font-bold text-amber-900">Party Membership Request Pending</div>
+            <div className="text-xs font-bold text-amber-900">Waiting for your party President</div>
             <div className="text-xs text-amber-700 mt-0.5">
-              Waiting for the {myMemberships[0]?.partyName ? `${myMemberships[0].partyName} president` : "party president"} to review your application.
+              Upload both EAF photos, then the President of {myApplication?.partyAffiliation} has to
+              approve your candidacy for {myApplication?.position} before you can submit it to
+              Screening.
             </div>
           </div>
         </motion.div>
       )}
 
-      {hasApprovedMembership && (
+      {myGate === "presidentApproved" && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           className="rounded-2xl p-4 flex items-center gap-3 bg-emerald-50 border border-emerald-200 text-emerald-900"
         >
-          <CheckCircle size={20} className="text-emerald-600 shrink-0" />
+            <CheckCircle size={20} className="text-emerald-600 shrink-0" />
+            <div>
+              <div className="text-xs font-bold text-emerald-900">Approved by your party President</div>
+              <div className="text-xs text-emerald-700 mt-0.5">
+                Your candidacy for {myApplication?.position} is cleared for submission. The EAF is
+                now with the Commissioner on Screening and Validation.
+              </div>
+            </div>
+
+        </motion.div>
+      )}
+
+      {myGate === "presidentRejected" && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="rounded-2xl p-4 flex items-center gap-3 bg-red-50 border border-red-200 text-red-900"
+        >
+          <XCircle size={20} className="text-red-600 shrink-0" />
           <div>
-            <div className="text-xs font-bold text-emerald-900">Official Party Member</div>
-            <div className="text-xs text-emerald-700 mt-0.5">
-              You are recognized as an affiliated member of your political party.
+            <div className="text-xs font-bold text-red-900">Position already filled</div>
+            <div className="text-xs text-red-700 mt-0.5">
+              Another candidate was approved for {myApplication?.position}. You can re-apply from your
+              candidacy page if that seat opens up again.
             </div>
           </div>
         </motion.div>

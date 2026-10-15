@@ -8,6 +8,7 @@ import type {
   ElectionPeriod,
   KioskStatus,
   LogEntry,
+  PartySummary,
   ReportTemplate,
   Student,
   StudentMasterlistEntry,
@@ -347,14 +348,20 @@ export async function fetchSupabaseState() {
     masterlistRes,
     electionRes,
     candidatesRes,
+    partiesRes,
     complaintsRes,
     reportsRes,
     logsRes,
   ] = await Promise.all([
     safeSelect("students", "*", "registered_at"),
     safeSelect("student_masterlist", "*", "imported_at"),
-    safeSelect("election_periods", "*", "election_date", 1),
+    safeSelect("election_periods", "*", "updated_at", 1, "completed"),
     safeSelect("candidates", "*, parties(name)", "submitted_at"),
+    // 052's "parties scoped readable" policy already lets any signed-in role
+    // read the live period's parties, so this needs no extra grant.  The
+    // candidates embed above already reaches the same table, so if this read
+    // ever fails the Apply page still falls back to candidate-derived names.
+    safeSelect("parties", "id, name, election_period_id", "created_at"),
     safeSelect("complaints", "*, students(first_name,last_name)", "submitted_at"),
     safeSelect("report_templates", "*", "enclosure"),
     safeSelect("audit_logs", "*", "timestamp", 150),
@@ -368,6 +375,7 @@ export async function fetchSupabaseState() {
     commissioners: [] as Commissioner[],
     electionPeriod: electionRes[0] ? mapElectionPeriod(electionRes[0]) : emptyElectionPeriod,
     candidates: candidatesRes.map(mapCandidate),
+    parties: partiesRes.map(mapParty),
     complaints: complaintsRes.map(mapComplaint),
     reportTemplates: reportsRes.map(mapReportTemplate),
     kioskStatuses: [] as KioskStatus[],
@@ -400,11 +408,11 @@ export async function syncStudents(next: Student[], previous: Student[]) {
 /**
  * Pure builder for the election_periods UPDATE payload.
  *
- * v1.1 (036) reworked the schedule: the legacy timestamptz window is gone
- * and election_date (date) + start_time (time) + end_time (time) replace it.
- * Only the surviving workflow flags are written.  Referencing a trimmed
- * column (start_at, end_at, campaign_*, nomination_open, rules_discussion_at,
- * official_list_posted, plan_finalized) would 400 (PGRST204 column not found).
+ * v1.2 (058) adds the two lifecycle columns: `lifecycle_stage` (the
+ * authoritative stage) and `rules_discussion_at` (the campaign meeting,
+ * re-added because 036 dropped it).  The legacy `campaign_*` /
+ * `nomination_open` / `official_list_posted` / `plan_finalized` columns
+ * remain dropped — referencing them would 400 (PGRST204 column not found).
  */
 export function buildElectionPeriodSyncPayload(period: ElectionPeriod) {
   return {
@@ -419,22 +427,39 @@ export function buildElectionPeriodSyncPayload(period: ElectionPeriod) {
     proclaimed: Boolean(period.proclaimed),
     proclaimed_at: period.proclaimedAt ? `${period.proclaimedAt}` : null,
     voting_method: period.votingMethod || "plurality",
+    rules_discussion_at: period.rulesDiscussionAt || null,
+    // lifecycle_stage is deliberately ABSENT.  This function backs the plain
+    // schedule editor, which has no business moving the election between
+    // stages: writing a default here would let a "Save Schedule" click reset a
+    // live campaign back to Stage 1.  Only the 058 RPCs may change it.
   };
 }
 
 export async function syncElectionPeriod(period: ElectionPeriod): Promise<{ ok: boolean; message?: string }> {
   if (!supabase) return { ok: false, message: "Supabase is not configured." };
-  const { data } = await supabase.from("election_periods").select("id").order("election_date", { ascending: false }).limit(1).maybeSingle();
+
+  // 058: never touch an archived period.  Reset Election Plan sets
+  // lifecycle_stage = 'completed' on the row it retires, and the old
+  // "order by election_date desc limit 1" lookup could resolve one of
+  // those — Postgres sorts NULLs first on DESC, so a freshly reset
+  // period and a retired one both end up in contention.
+  const { data } = await supabase
+    .from("election_periods")
+    .select("id")
+    .neq("lifecycle_stage", "completed")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
   let electionId = data?.id ?? null;
 
   if (!electionId) {
-    // No election_periods row exists yet (e.g. a project where migration 020's
-    // guard row is absent): create one first.  The remaining columns fall to
-    // their DB defaults, so start_time/end_time (NOT NULL) avoid a violation.
+    // No live election_periods row exists yet.  school_year is UNIQUE
+    // (020:404), so a hardcoded label would collide the second time this
+    // runs; derive one that cannot.
     const { data: created, error: createError } = await supabase
       .from("election_periods")
-      .insert({ school_year: "2026-2027" })
+      .insert({ school_year: await nextSchoolYear() })
       .select("id")
       .maybeSingle();
     if (createError) return { ok: false, message: createError.message };
@@ -456,6 +481,36 @@ export async function syncElectionPeriod(period: ElectionPeriod): Promise<{ ok: 
   if (error) return { ok: false, message: error.message };
   return { ok: true };
 }
+
+/**
+ * A school year that cannot collide with an existing election_periods row.
+ * Counts up from the newest existing label rather than parsing it, so a
+ * non-numeric label in a hand-edited database cannot produce a bad one.
+ */
+async function nextSchoolYear(): Promise<string> {
+  const { data } = await supabase!
+    .from("election_periods")
+    .select("school_year")
+    .order("school_year", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const match = /(\d{4})\s*-\s*(\d{4})/.exec(data?.school_year || "");
+  if (!match) return "2026-2027";
+
+  const start = Number(match[1]);
+  for (let step = 1; step <= 20; step += 1) {
+    const candidate = `${start + step}-${start + step + 1}`;
+    const { data: clash } = await supabase!
+      .from("election_periods")
+      .select("id")
+      .eq("school_year", candidate)
+      .maybeSingle();
+    if (!clash) return candidate;
+  }
+  return `${start + 21}-${start + 22}`;
+}
+
 
 export async function syncComplaints(next: Complaint[], previous: Complaint[]) {
   if (!supabase) return;
@@ -522,9 +577,18 @@ export async function insertAuditLog(entry: Omit<LogEntry, "id" | "timestamp">, 
   }
 }
 
-async function safeSelect(table: string, select: string, orderBy: string, limit?: number) {
+async function safeSelect(
+  table: string,
+  select: string,
+  orderBy: string,
+  limit?: number,
+  notLifecycleStage?: string
+) {
   if (!supabase) return [];
   let query = supabase.from(table).select(select).order(orderBy, { ascending: false });
+  // 058: retired election periods carry lifecycle_stage = 'completed' and must
+  // never be mistaken for the live one.
+  if (notLifecycleStage) query = query.neq("lifecycle_stage", notLifecycleStage);
   if (limit) query = query.limit(limit);
   const { data, error } = await query;
   if (error) {
@@ -579,11 +643,12 @@ function mapCommissioner(row: any): Commissioner {
 }
 
 function mapElectionPeriod(row: any): ElectionPeriod {
-  // v1.1 (036) shape: election_date + start_time/end_time replace the legacy
-  // start_at/end_at window.  The campaign_* / nomination_open /
-  // rules_discussion_at / official_list_posted / plan_finalized columns were
+  // v1.2 (058) shape: lifecycle_stage + rules_discussion_at are live again
+  // alongside election_date / start_time / end_time.  The campaign_* /
+  // nomination_open / official_list_posted / plan_finalized columns remain
   // dropped, so each maps to an explicit empty/false default.
   return {
+    id: row.id,
     startDate: toDate(row.election_date),
     startTime: toTime(row.start_time),
     endDate: toDate(row.end_date) || toDate(row.election_date),
@@ -601,8 +666,14 @@ function mapElectionPeriod(row: any): ElectionPeriod {
     planFinalized: false,
     proclaimed: Boolean(row.proclaimed),
     proclaimedAt: row.proclaimed_at ? row.proclaimed_at : undefined,
-    rulesDiscussionAt: undefined,
+    rulesDiscussionAt: row.rules_discussion_at || undefined,
     votingMethod: row.voting_method || undefined,
+    schoolYear: row.school_year || undefined,
+    lifecycleStage: (row.lifecycle_stage as ElectionPeriod["lifecycleStage"]) || "application",
+    // 060 columns.  Absent until the migration is applied, so keep the
+    // undefined default rather than inventing a value.
+    fingerprintRegistrationStartAt: row.fingerprint_registration_start_at || undefined,
+    fingerprintRegistrationEndAt: row.fingerprint_registration_end_at || undefined,
   };
 }
 
@@ -639,6 +710,7 @@ function mapCandidate(row: any): Candidate {
     eafFrontImage: row.eaf_front_url || undefined,
     eafBackImage: row.eaf_back_url || undefined,
     positionApprovalStatus: row.position_approval_status || undefined,
+    partyDecidedAt: row.party_decided_at || undefined,
     leadershipProfile: row.leadership_profile || undefined,
     rejectionReason: row.rejection_reason || undefined,
     rejectionDetails: row.rejection_details || undefined,
@@ -647,6 +719,15 @@ function mapCandidate(row: any): Candidate {
     submittedAt: toDate(row.submitted_at),
     votes: row.votes?.length || 0,
     studentId: row.student_id,
+    electionPeriodId: row.election_period_id || undefined,
+  };
+}
+
+function mapParty(row: any): PartySummary {
+  return {
+    id: row.id,
+    name: row.name,
+    electionPeriodId: row.election_period_id,
   };
 }
 
@@ -896,32 +977,56 @@ export async function updateAdminPassword(
   await changePasswordForCurrentUser(currentPassword, newPassword);
 }
 
-export async function requestPartyMembershipRpc(
-  pPartyId: string,
-  pStudentId: string
+/**
+ * The party President's decision on a join request.  The database decides
+ * whether the caller actually presides over that party — the President id is
+ * never passed from the client, precisely because that is the one thing a
+ * client must not be able to assert about itself.
+ */
+export async function reviewPartyCandidacyRpc(
+  pCandidateId: string,
+  pAction: "approve" | "reject"
 ): Promise<any> {
   if (!supabase) throw new Error("Supabase is not configured.");
-  const { data, error } = await supabase.rpc("request_party_membership_rpc", {
-    p_party_id: pPartyId,
-    p_student_id: pStudentId,
+  const { data, error } = await supabase.rpc("review_party_candidacy_rpc", {
+    p_candidate_id: pCandidateId,
+    p_action: pAction,
   });
   if (error) throw new Error(error.message);
   return data;
 }
 
-export async function reviewPartyMembershipRpc(
-  pMemberId: string,
-  pAction: "approve" | "reject",
-  pReviewerStudentId: string
-): Promise<any> {
+/** Put a declined application back in the running, if the seat is free. */
+export async function reapplyPartyCandidacyRpc(pCandidateId: string): Promise<any> {
   if (!supabase) throw new Error("Supabase is not configured.");
-  const { data, error } = await supabase.rpc("review_party_membership_rpc", {
-    p_member_id: pMemberId,
-    p_action: pAction,
-    p_reviewer_student_id: pReviewerStudentId,
+  const { data, error } = await supabase.rpc("reapply_party_candidacy_rpc", {
+    p_candidate_id: pCandidateId,
   });
   if (error) throw new Error(error.message);
   return data;
+}
+
+/**
+ * Re-read one candidacy row, so the student can see a party President's
+ * decision without a full page reload.
+ *
+ * The party President's dashboard is a different browser session, so the
+ * approval lands in the database with nothing to push it into the applicant's
+ * already-hydrated state. This is the read the "Check approval status" button
+ * makes. RLS is satisfied by "candidates self session select" (043:62) — a
+ * student reads their own row at any status — so no new grant is involved.
+ *
+ * Returns the fully mapped candidate, or null when the row is not visible.
+ */
+export async function fetchCandidateGate(pCandidateId: string): Promise<Candidate | null> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase
+    .from("candidates")
+    .select("*, parties(name)")
+    .eq("id", pCandidateId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? mapCandidate(data) : null;
 }
 
 export async function createSslgAdviser(
@@ -989,11 +1094,12 @@ export async function updateCommissionerStatus(
   if (error) throw new Error(error.message);
 }
 
-// Chief-gated live results (03-01). The blanket grant on
+// Role-gated live results (03-01). The blanket grant on
 // live_results_restricted was revoked in migration 027; the only
-// read path is this RPC, which enforces chief role server-side
-// (T-03-01 / T-03-05). Mirror of the get_live_results_rpc return
-// columns (migration 027), kept in the same shape as the view.
+// read path is this RPC, which enforces the Chief or Electoral Board
+// role server-side (T-03-01 / T-03-05). Mirror of the
+// get_live_results_rpc return columns, kept in the same shape as the
+// view.
 export interface LiveResultRow {
   election_period_id: string;
   position: string;
@@ -1056,15 +1162,217 @@ export async function getAbstainSummaryRpc(): Promise<AbstainSummaryRow[]> {
   }));
 }
 
-export async function getCurrentElectionId(): Promise<string | null> {
-  if (!supabase) return null;
-  const { data } = await supabase
+export interface PublicCurrentCandidate {
+  id: string;
+  name: string;
+  position: string;
+  gradeLevel: string;
+  partyAffiliation?: string;
+  picture?: string;
+}
+
+export interface PublicCurrentElection {
+  id: string;
+  electionDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+  venue?: string;
+  votingMethod?: string;
+  candidates: PublicCurrentCandidate[];
+}
+
+export async function getCurrentPublicElection(): Promise<PublicCurrentElection | null> {
+  const client = requireSupabase();
+  const { data: election, error: electionError } = await client
     .from("election_periods")
-    .select("id")
+    .select("id, election_date, start_time, end_date, end_time, venue, voting_method")
+    .eq("is_active", true)
     .order("election_date", { ascending: false })
     .limit(1)
     .maybeSingle();
+  if (electionError) throw new Error(electionError.message);
+  if (!election) return null;
+
+  const { data: candidateRows, error: candidateError } = await client
+    .from("candidates")
+    .select("id, given_name, middle_name, surname, extension_name, grade_level, position, party_id, picture_url, parties(name)")
+    .eq("election_period_id", election.id)
+    .eq("status", "approved")
+    .order("surname", { ascending: true })
+    .order("given_name", { ascending: true });
+  if (candidateError) throw new Error(candidateError.message);
+
+  return {
+    id: election.id,
+    electionDate: toDate(election.election_date),
+    startTime: toTime(election.start_time),
+    endDate: toDate(election.end_date) || toDate(election.election_date),
+    endTime: toTime(election.end_time),
+    venue: election.venue || undefined,
+    votingMethod: election.voting_method || undefined,
+    candidates: (candidateRows || []).map((row: any) => ({
+      id: row.id,
+      name: [row.given_name, row.middle_name, row.surname, row.extension_name]
+        .filter(Boolean)
+        .join(" "),
+      position: row.position,
+      gradeLevel: row.grade_level,
+      partyAffiliation: row.parties?.name || undefined,
+      picture: row.picture_url || undefined,
+    })),
+  };
+}
+
+export async function getCurrentElectionId(): Promise<string | null> {
+  if (!supabase) return null;
+  // 058: an archived period (lifecycle_stage = 'completed', left behind by
+  // Reset Election Plan) must never resolve as the current one.
+  const { data } = await supabase
+    .from("election_periods")
+    .select("id")
+    .neq("lifecycle_stage", "completed")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
   return data?.id || null;
+}
+
+export interface PastElectionSummary {
+  id: string;
+  schoolYear: string;
+  electionDate?: string;
+  endDate?: string;
+  venue?: string;
+  votingMethod?: string;
+  proclaimed: boolean;
+  proclaimedAt?: string;
+  positionsContested: number;
+  approvedCandidates: number;
+  votesCast: number;
+  abstentions: number;
+  totalBallots: number;
+}
+
+export interface PastElectionCandidateTally {
+  candidateId: string;
+  name: string;
+  gradeLevel: string;
+  partyId?: string;
+  partyName?: string;
+  votes: number;
+  picture?: string;
+  isWinner: boolean;
+  proclaimedWinner: boolean;
+}
+
+export interface PastElectionPositionResult {
+  position: string;
+  votesCast: number;
+  abstentions: number;
+  candidates: PastElectionCandidateTally[];
+}
+
+export interface PastElectionResults {
+  election: {
+    id: string;
+    schoolYear: string;
+    electionDate?: string;
+    endDate?: string;
+    venue?: string;
+    votingMethod?: string;
+    proclaimed: boolean;
+    proclaimedAt?: string;
+  };
+  totals: {
+    positionsContested: number;
+    approvedCandidates: number;
+    votesCast: number;
+    abstentions: number;
+    totalBallots: number;
+  };
+  positions: PastElectionPositionResult[];
+}
+
+export function mapPastElectionSummary(row: any): PastElectionSummary {
+  return {
+    id: row.election_period_id,
+    schoolYear: row.school_year || "",
+    electionDate: row.election_date ? toDate(row.election_date) : undefined,
+    endDate: row.end_date ? toDate(row.end_date) : undefined,
+    venue: row.venue || undefined,
+    votingMethod: row.voting_method || undefined,
+    proclaimed: Boolean(row.proclaimed),
+    proclaimedAt: row.proclaimed_at || undefined,
+    positionsContested: Number(row.positions_contested ?? 0),
+    approvedCandidates: Number(row.approved_candidates ?? 0),
+    votesCast: Number(row.votes_cast ?? 0),
+    abstentions: Number(row.abstentions ?? 0),
+    totalBallots: Number(row.total_ballots ?? 0),
+  };
+}
+
+function mapPastElectionCandidate(row: any): PastElectionCandidateTally {
+  return {
+    candidateId: row.candidateId,
+    name: row.name || "",
+    gradeLevel: row.gradeLevel || "",
+    partyId: row.partyId || undefined,
+    partyName: row.partyName || undefined,
+    votes: Number(row.votes ?? 0),
+    picture: row.picture || undefined,
+    isWinner: Boolean(row.isWinner),
+    proclaimedWinner: Boolean(row.proclaimedWinner),
+  };
+}
+
+export function mapPastElectionResults(payload: any): PastElectionResults {
+  return {
+    election: {
+      id: payload.election.id,
+      schoolYear: payload.election.schoolYear || "",
+      electionDate: payload.election.electionDate ? toDate(payload.election.electionDate) : undefined,
+      endDate: payload.election.endDate ? toDate(payload.election.endDate) : undefined,
+      venue: payload.election.venue || undefined,
+      votingMethod: payload.election.votingMethod || undefined,
+      proclaimed: Boolean(payload.election.proclaimed),
+      proclaimedAt: payload.election.proclaimedAt || undefined,
+    },
+    totals: {
+      positionsContested: Number(payload.totals?.positionsContested ?? 0),
+      approvedCandidates: Number(payload.totals?.approvedCandidates ?? 0),
+      votesCast: Number(payload.totals?.votesCast ?? 0),
+      abstentions: Number(payload.totals?.abstentions ?? 0),
+      totalBallots: Number(payload.totals?.totalBallots ?? 0),
+    },
+    positions: (payload.positions || []).map((position: any) => ({
+      position: position.position,
+      votesCast: Number(position.votesCast ?? 0),
+      abstentions: Number(position.abstentions ?? 0),
+      candidates: (position.candidates || []).map(mapPastElectionCandidate),
+    })),
+  };
+}
+
+/** Closed elections whose results the Electoral Board has published. */
+export async function listPastElections(): Promise<PastElectionSummary[]> {
+  const client = requireSupabase();
+  const { data, error } = await client.rpc("list_past_elections_rpc");
+  if (error) throw new Error(error.message);
+  return (data || []).map(mapPastElectionSummary);
+}
+
+/** Full tallies, abstentions and proclaimed winners for one past election. */
+export async function getPastElectionResults(
+  electionPeriodId: string
+): Promise<PastElectionResults | null> {
+  const client = requireSupabase();
+  const { data, error } = await client.rpc("get_past_election_results_rpc", {
+    p_election_period_id: electionPeriodId,
+  });
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  return mapPastElectionResults(data);
 }
 
 export async function openElectionRpc(pElectionId: string): Promise<void> {
@@ -1102,6 +1410,135 @@ export async function proclaimWinnersRpc(pElectionId: string): Promise<{ positio
     winnerName: row.winner_name,
     votes: row.votes,
   }));
+}
+
+// ---------------------------------------------------------------------
+// 058 + 060 — election lifecycle stages
+// ---------------------------------------------------------------------
+
+/**
+ * Re-read the live election period from the database.
+ *
+ * The lifecycle RPCs are authoritative and can do things the local state
+ * cannot know about — start_candidacy_period_rpc may CREATE a period with a
+ * brand new id, and reset_election_plan_rpc may retire the current one. So
+ * every caller re-reads instead of guessing what the row now looks like.
+ *
+ * Returns the empty period when nothing is configured, so callers never have
+ * to null-check.
+ */
+export async function reloadElectionPeriod(): Promise<ElectionPeriod> {
+  const client = requireSupabase();
+  const { data, error } = await client
+    .from("election_periods")
+    .select("*")
+    .neq("lifecycle_stage", "completed")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? mapElectionPeriod(data) : emptyElectionPeriod;
+}
+
+/** Stage 1: open the Candidate Application Period, creating the period if needed. */
+export async function startCandidacyPeriodRpc(schoolYear?: string): Promise<string> {
+  const client = requireSupabase();
+  const { data, error } = await client.rpc("start_candidacy_period_rpc", {
+    p_school_year: schoolYear || null,
+  });
+  if (error) throw new Error(error.message);
+  if (!data) throw new Error("The election period could not be started.");
+  return String(data);
+}
+
+/** Stage 1: pause applications without leaving the stage. */
+export async function closeCandidacyPeriodRpc(): Promise<string | null> {
+  const client = requireSupabase();
+  const { data, error } = await client.rpc("close_candidacy_period_rpc");
+  if (error) throw new Error(error.message);
+  return data ? String(data) : null;
+}
+
+/** Stage 2: record the meeting AND end the Candidate Application Period. */
+export async function endCandidacyAndScheduleMeetingRpc(
+  pElectionId: string,
+  meetingAtIso: string
+): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client.rpc("end_candidacy_and_schedule_meeting_rpc", {
+    p_election_id: pElectionId,
+    p_meeting_at: meetingAtIso,
+  });
+  if (error) throw new Error(error.message);
+}
+
+/** Stage 3 (060): open the Fingerprint Registration window at the kiosks. */
+export async function startFingerprintRegistrationRpc(
+  pElectionId: string,
+  startAtIso?: string | null,
+  endAtIso?: string | null
+): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client.rpc("start_fingerprint_registration_rpc", {
+    p_election_id: pElectionId,
+    p_start_at: startAtIso || null,
+    p_end_at: endAtIso || null,
+  });
+  if (error) throw new Error(error.message);
+}
+
+/** Stage 3 (060): close the Fingerprint Registration window early. */
+export async function closeFingerprintRegistrationRpc(pElectionId: string): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client.rpc("close_fingerprint_registration_rpc", {
+    p_election_id: pElectionId,
+  });
+  if (error) throw new Error(error.message);
+}
+
+/** Filed (unresolved) complaints for one election period — the Stage 4 banner count. */
+export async function countActiveComplaintsRpc(pElectionId: string): Promise<number> {
+  const client = requireSupabase();
+  const { data, error } = await client.rpc("count_active_complaints_rpc", {
+    p_election_period_id: pElectionId,
+  });
+  if (error) throw new Error(error.message);
+  return Number(data ?? 0);
+}
+
+export interface ResetElectionPlanResult {
+  electionPeriodId: string;
+  archivedPrevious: boolean;
+  archivedElectionPeriodId?: string;
+  schoolYear?: string;
+  /** "cleared" = reset in place, "archived" = old period retired, "started" = nothing existed. */
+  mode: "cleared" | "archived" | "started";
+}
+
+/**
+ * Reset the whole election plan.  Requires the caller's own Electoral Board
+ * password — the RPC verifies it server-side and nothing is ever deleted.
+ */
+export async function resetElectionPlanRpc(
+  password: string,
+  schoolYear?: string
+): Promise<ResetElectionPlanResult> {
+  const client = requireSupabase();
+  const { data, error } = await client.rpc("reset_election_plan_rpc", {
+    p_password: password,
+    p_school_year: schoolYear || null,
+  });
+  if (error) throw new Error(error.message);
+  const row = (data || {}) as Record<string, unknown>;
+  return {
+    electionPeriodId: String(row.election_period_id ?? ""),
+    archivedPrevious: Boolean(row.archived_previous),
+    archivedElectionPeriodId: row.archived_election_period_id
+      ? String(row.archived_election_period_id)
+      : undefined,
+    schoolYear: row.school_year ? String(row.school_year) : undefined,
+    mode: (row.mode as ResetElectionPlanResult["mode"]) || "cleared",
+  };
 }
 
 export function parseCsv(text: string): string[][] {

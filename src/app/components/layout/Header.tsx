@@ -116,7 +116,7 @@ export function Header() {
                 {dropdowns.elections && (
                   <div className="absolute left-0 mt-1 w-60 bg-white border border-gray-200 rounded-lg shadow-lg py-2 z-50">
                     <Link
-                      to="/"
+                      to="/current-election"
                       onClick={() => toggleDropdown("elections")}
                       className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
                     >
@@ -188,14 +188,14 @@ export function Header() {
                 {dropdowns.results && (
                   <div className="absolute left-0 mt-1 w-56 bg-white border border-gray-200 rounded-lg shadow-lg py-2 z-50">
                     <Link
-                      to="/"
+                      to="/past-elections"
                       onClick={() => toggleDropdown("results")}
                       className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
                     >
                       Official Results
                     </Link>
                     <Link
-                      to="/"
+                      to="/past-elections"
                       onClick={() => toggleDropdown("results")}
                       className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
                     >
@@ -364,7 +364,7 @@ export function Header() {
             {dropdowns.elections && (
               <>
                 <Link
-                  to="/"
+                  to="/current-election"
                   onClick={() => {
                     setMobileOpen(false);
                     toggleDropdown("elections");
@@ -468,7 +468,7 @@ export function Header() {
             {dropdowns.results && (
               <>
                 <Link
-                  to="/"
+                  to="/past-elections"
                   onClick={() => {
                     setMobileOpen(false);
                     toggleDropdown("results");
@@ -478,7 +478,7 @@ export function Header() {
                   Official Results
                 </Link>
                 <Link
-                  to="/"
+                  to="/past-elections"
                   onClick={() => {
                     setMobileOpen(false);
                     toggleDropdown("results");

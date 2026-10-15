@@ -15,7 +15,7 @@ const PARTY_COLORS: Record<string, { bg: string; border: string; badge: string; 
 const fallbackColor = { bg: "#F9FAFB", border: "#6B7280", badge: "bg-gray-100 text-gray-600", text: "#6B7280" };
 
 export default function AdminCandidates() {
-  const { currentUser, candidates, setCandidates, electionPeriod, setElectionPeriod, addLog, insertNotification, students } = useApp();
+  const { currentUser, candidates, setCandidates, electionPeriod, addLog, insertNotification, students } = useApp();
   const isChief = currentUser?.commissionerRole === "chief";
   const isScreening = currentUser?.commissionerRole === "screening_validation";
   // Phase 3 REMOVE-08: the 'appointment' commissioner role is gone — the
@@ -44,7 +44,16 @@ export default function AdminCandidates() {
   const postListConfirm = useConfirm({ title: officialListPosted ? "Unpost Official List?" : "Post Official List?", description: officialListPosted ? "The official list will no longer be visible." : "The official list of candidates will be made visible.", confirmText: officialListPosted ? "Unpost" : "Post" });
   const informConfirm = useConfirm({ title: "Inform Candidates?", description: "Send notifications to all approved candidates about their status.", confirmText: "Send" });
   const meetingNoticeConfirm = useConfirm({ title: "Send Rules Discussion Meeting Notice?", description: "Send the meeting notice to all submitted and approved candidates.", confirmText: "Send Notice" });
-  const nominationToggleConfirm = useConfirm({ title: electionPeriod.nominationOpen ? "Close Nominations?" : "Open Nominations?", description: electionPeriod.nominationOpen ? "Students will no longer be able to submit nominations." : "Students will be able to submit nominations.", confirmText: electionPeriod.nominationOpen ? "Close" : "Open" });
+
+  // A party candidate is only the Screening Office's business once their party
+  // President has approved them.  The database refuses the action either way
+  // (see 054's trigger); this keeps the queue honest for the Screening
+  // Commissioner.  The Chief keeps the full picture.  Independents and party
+  // Presidents are never gated.
+  const awaitingPartyPresident = (c: Candidate) =>
+    !!c.partyAffiliation &&
+    c.position !== "President" &&
+    c.positionApprovalStatus !== "presidentApproved";
 
   // Derive unique parties from all candidates
   const allParties = Array.from(
@@ -218,10 +227,24 @@ export default function AdminCandidates() {
   const [meetingNotified, setMeetingNotified] = useState<Set<string>>(() => new Set());
 
   const handleSendMeetingNotice = async () => {
+    // 058: a notice without a date is worse than no notice — it tells
+    // candidates to show up to a meeting that was never scheduled. Stage 2 in
+    // Election Setup owns rulesDiscussionAt; refuse to send until it exists.
+    if (!electionPeriod.rulesDiscussionAt) {
+      setActionError("Schedule the Rules Discussion Meeting in Election Setup before sending meeting notices.");
+      return;
+    }
     const ok = await meetingNoticeConfirm.confirm();
     if (!ok) return;
     setActionError(null);
     setProcessing("meeting-notice");
+    const meetingDate = new Date(electionPeriod.rulesDiscussionAt);
+    const meetingText = Number.isNaN(meetingDate.getTime())
+      ? electionPeriod.rulesDiscussionAt
+      : meetingDate.toLocaleString(undefined, {
+          year: "numeric", month: "long", day: "numeric",
+          hour: "2-digit", minute: "2-digit",
+        });
     try {
       const recipients = candidates.filter(
         (c) => (c.status === "pending" || c.status === "approved") && !meetingNotified.has(c.id)
@@ -234,7 +257,7 @@ export default function AdminCandidates() {
           role: "student",
           type: "rules_discussion_meeting",
           title: "Rules Discussion Meeting",
-          message: `You are invited to attend the Rules Discussion Meeting on ${electionPeriod.rulesDiscussionAt || "a date to be announced"}. See you there!`,
+          message: `You are invited to attend the Rules Discussion Meeting on ${meetingText}. See you there!`,
           link: "/student/dashboard",
         });
         setMeetingNotified((prev) => new Set(prev).add(c.id));
@@ -247,7 +270,7 @@ export default function AdminCandidates() {
         user: logUser,
         role: "Admin",
         action: "Sent Rules Discussion Meeting Notice",
-        details: `Meeting notice sent to ${recipients.length} submitted/approved candidate(s). Rules discussion date: ${electionPeriod.rulesDiscussionAt || "not set"}, voting method: ${methodLabel}`,
+        details: `Meeting notice sent to ${recipients.length} submitted/approved candidate(s). Rules discussion date: ${meetingText}, voting method: ${methodLabel}`,
         type: "success",
       });
       if (currentUser?.id) {
@@ -255,7 +278,7 @@ export default function AdminCandidates() {
           user: logUser,
           role: "Admin",
           action: "Sent Rules Discussion Meeting Notice",
-          details: `Meeting notice sent to ${recipients.length} submitted/approved candidate(s). Rules discussion date: ${electionPeriod.rulesDiscussionAt || "not set"}, voting method: ${methodLabel}`,
+          details: `Meeting notice sent to ${recipients.length} submitted/approved candidate(s). Rules discussion date: ${meetingText}, voting method: ${methodLabel}`,
           type: "success",
         }, currentUser.id);
       }
@@ -290,7 +313,9 @@ export default function AdminCandidates() {
       const matchSearch = search === "" ||
         `${c.givenName} ${c.surname} ${c.position}`.toLowerCase().includes(search.toLowerCase());
       const matchStatus = statusFilter === "all" || c.status === statusFilter;
-      return matchParty && matchSearch && matchStatus;
+      // A screening commissioner only sees what is ready to be screened.
+      const matchGate = isChief || !awaitingPartyPresident(c);
+      return matchParty && matchSearch && matchStatus && matchGate;
     });
   };
 
@@ -319,15 +344,6 @@ export default function AdminCandidates() {
               {isScreening && "Review and validate candidate applications."}
             </p>
           </div>
-          {canAppoint && (
-            <button
-              onClick={async () => { const ok = await nominationToggleConfirm.confirm(); if (!ok) return; setElectionPeriod({ ...electionPeriod, nominationOpen: !electionPeriod.nominationOpen }); }}
-              className={`px-4 py-2.5 rounded-xl text-sm font-medium ${electionPeriod.nominationOpen ? "bg-amber-100 text-amber-700" : "text-white"}`}
-              style={!electionPeriod.nominationOpen ? { backgroundColor: "#5C0102" } : {}}
-            >
-              {electionPeriod.nominationOpen ? "Close Nomination" : "Enable Nomination"}
-            </button>
-          )}
         </div>
       </motion.div>
 
@@ -529,7 +545,17 @@ export default function AdminCandidates() {
                                       </div>
                                     </div>
                                   </td>
-                                  <td className="py-3 px-4 text-gray-600 text-xs">{candidate.position}</td>
+                                  <td className="py-3 px-4 text-gray-600 text-xs">
+                                    {candidate.position}
+                                    {/* The Chief sees every candidate, so say plainly
+                                        which ones their party President has not
+                                        vouched for yet. */}
+                                    {isChief && awaitingPartyPresident(candidate) && (
+                                      <div className="text-[10px] text-amber-600 mt-0.5">
+                                        Awaiting party President
+                                      </div>
+                                    )}
+                                  </td>
                                   <td className="py-3 px-4 text-gray-500 text-xs">{candidate.gradeLevel}</td>
                                   <td className="py-3 px-4">
                                     {docsComplete(candidate.documents) ? (
@@ -904,7 +930,6 @@ export default function AdminCandidates() {
       {postListConfirm.dialog}
       {informConfirm.dialog}
       {meetingNoticeConfirm.dialog}
-      {nominationToggleConfirm.dialog}
     </div>
   );
 }

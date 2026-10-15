@@ -55,6 +55,7 @@ const screeningNavItems: NavItem[] = [
 const electoralNavItems: NavItem[] = [
   { label: "Dashboard", href: "/admin/dashboard", icon: <LayoutDashboard size={18} /> },
   { label: "Election Setup", href: "/admin/election", icon: <Settings size={18} /> },
+  { label: "Live Results", href: "/admin/live-results", icon: <Eye size={18} /> },
   { label: "My Profile", href: "/admin/profile", icon: <UserCheck size={18} /> },
   { label: "System Logs", href: "/admin/logs", icon: <Activity size={18} /> },
 ];

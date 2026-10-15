@@ -1,12 +1,23 @@
 import { motion } from "motion/react";
 import { Link } from "react-router";
 import { useApp } from "../../../context/AppContext";
-import { Calendar, BarChart2, Activity, Clock, CheckCircle, XCircle, ArrowRight, Play, Square, Trophy } from "lucide-react";
+import { resolveStage } from "../AdminElectionSetup";
+import { Calendar, BarChart2, Activity, CheckCircle, ArrowRight, Trophy, AlertCircle } from "lucide-react";
+
+const STAGE_LABELS: Record<string, string> = {
+  application: "Application",
+  campaign: "Campaign",
+  fingerprint_registration: "Fingerprint Registration",
+  voting: "Voting",
+  results: "Results",
+  completed: "Completed",
+};
 
 export default function ElectoralDashboard() {
-  const { electionPeriod, candidates, setElectionPeriod } = useApp();
+  const { electionPeriod, candidates } = useApp();
 
   const approvedCandidates = candidates.filter((c) => c.status === "approved").length;
+  const currentStage = resolveStage(electionPeriod);
 
   const stats = [
     { label: "Election Status", value: electionPeriod.isActive ? "Active" : "Inactive", icon: <Activity size={20} />, color: electionPeriod.isActive ? "#22C55E" : "#9CA3AF" },
@@ -45,37 +56,27 @@ export default function ElectoralDashboard() {
         })}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <a href="/admin/campaign-calendar"
-          className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:shadow-md transition-shadow flex items-center justify-between group">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        <Link
+          to="/admin/election"
+          className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:shadow-md transition-shadow flex items-center justify-between group"
+        >
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-xl flex items-center justify-center text-white" style={{ backgroundColor: "#5C0102" }}>
               <Calendar size={20} />
             </div>
             <div>
-              <div className="text-sm font-medium text-gray-900">Campaign Calendar</div>
-              <div className="text-xs text-gray-500">Manage dates and proclamation</div>
-            </div>
-          </div>
-          <ArrowRight size={18} className="text-gray-300 group-hover:text-gray-500 transition-colors" />
-        </a>
-
-        <a href="/admin/election"
-          className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:shadow-md transition-shadow flex items-center justify-between group">
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl flex items-center justify-center text-white" style={{ backgroundColor: "#22C55E" }}>
-              <BarChart2 size={20} />
-            </div>
-            <div>
               <div className="text-sm font-medium text-gray-900">Election Setup</div>
-              <div className="text-xs text-gray-500">Configure dates, venue, and periods</div>
+              <div className="text-xs text-gray-500">Run the five stages and schedule the campaign meeting</div>
             </div>
           </div>
           <ArrowRight size={18} className="text-gray-300 group-hover:text-gray-500 transition-colors" />
-        </a>
+        </Link>
 
-        <a href="/admin/live-results"
-          className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:shadow-md transition-shadow flex items-center justify-between group">
+        <Link
+          to="/admin/live-results"
+          className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:shadow-md transition-shadow flex items-center justify-between group"
+        >
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-xl flex items-center justify-center text-white" style={{ backgroundColor: "#EAB308" }}>
               <Trophy size={20} />
@@ -86,43 +87,23 @@ export default function ElectoralDashboard() {
             </div>
           </div>
           <ArrowRight size={18} className="text-gray-300 group-hover:text-gray-500 transition-colors" />
-        </a>
+        </Link>
       </div>
 
-      <div className="flex flex-wrap gap-3 mb-6">
-        <button
-          onClick={() => setElectionPeriod({ ...electionPeriod, candidacyOpen: !electionPeriod.candidacyOpen })}
-          className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-2 ${
-            electionPeriod.candidacyOpen
-              ? "bg-amber-100 text-amber-700 border border-amber-200"
-              : "text-white"
-          }`}
-          style={!electionPeriod.candidacyOpen ? { backgroundColor: "#5C0102" } : {}}
-        >
-          {electionPeriod.candidacyOpen ? "Close Candidacy" : "Open Candidacy"}
-        </button>
-        <button
-          onClick={() => setElectionPeriod({ ...electionPeriod, isActive: !electionPeriod.isActive })}
-          className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-2 ${
-            electionPeriod.isActive
-              ? "bg-red-100 text-red-700 border border-red-200"
-              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-          }`}
-        >
-          {electionPeriod.isActive ? <Square size={16} /> : <Play size={16} />}
-          {electionPeriod.isActive ? "End Voting" : "Start Voting"}
-        </button>
-        <button
-          onClick={() => setElectionPeriod({ ...electionPeriod, resultsPublished: !electionPeriod.resultsPublished })}
-          className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center gap-2 ${
-            electionPeriod.resultsPublished
-              ? "bg-green-100 text-green-700 border border-green-200"
-              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-          }`}
-        >
-          <CheckCircle size={16} />
-          {electionPeriod.resultsPublished ? "Results Published" : "Publish Results"}
-        </button>
+      <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 mb-6">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ backgroundColor: "#FEF3C7", color: "#92400E" }}>
+            <AlertCircle size={20} />
+          </div>
+          <div className="text-sm text-gray-600">
+            <span className="font-medium text-gray-900">Stage {["application", "campaign", "fingerprint_registration", "voting", "results"].indexOf(currentStage) + 1}: {STAGE_LABELS[currentStage]}.</span>{" "}
+            Candidacy, voting and results are advanced from Election Setup so every transition is
+            recorded and validated by the server.
+            <Link to="/admin/election" className="ml-1 font-medium text-[#5C0102] hover:underline">
+              Go to Election Setup
+            </Link>
+          </div>
+        </div>
       </div>
 
       {electionPeriod.startDate && (

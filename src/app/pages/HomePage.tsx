@@ -48,10 +48,16 @@ export default function HomePage() {
                 Register to Vote <ChevronRight size={16} className="inline" />
               </Link>
               <Link
-                to="/student/candidates"
+                to="/current-election"
                 className="px-6 py-3 border border-white/40 text-white rounded-xl text-sm font-medium hover:bg-white/10 transition-all"
               >
                 View Candidates
+              </Link>
+              <Link
+                to="/past-elections"
+                className="px-6 py-3 border border-white/40 text-white rounded-xl text-sm font-medium hover:bg-white/10 transition-all"
+              >
+                Official Results
               </Link>
             </div>
           </motion.div>

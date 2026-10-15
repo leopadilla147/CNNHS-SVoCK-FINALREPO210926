@@ -55,10 +55,45 @@ describe("buildElectionPeriodSyncPayload", () => {
       "nomination_open",
       "official_list_posted",
       "plan_finalized",
-      "rules_discussion_at",
     ]) {
       expect(payload).not.toHaveProperty(dropped);
     }
+  });
+
+  it("writes rules_discussion_at, which 058 re-added after 036 dropped it", () => {
+    const payload = buildElectionPeriodSyncPayload(basePeriod({ rulesDiscussionAt: "2026-09-30" }));
+    expect(payload).toHaveProperty("rules_discussion_at", "2026-09-30");
+  });
+
+  it("never lets the plain schedule editor move the election between stages", () => {
+    // 058 makes the RPCs the only writer of lifecycle_stage. If this payload
+    // carried it, a "Save Schedule" click from Stage 3 would drag a live
+    // campaign back to Stage 1.
+    for (const stage of ["application", "campaign", "fingerprint_registration", "voting", "results", "completed"]) {
+      const payload = buildElectionPeriodSyncPayload(basePeriod({ lifecycleStage: stage as ElectionPeriod["lifecycleStage"] }));
+      expect("lifecycle_stage" in payload).toBe(false);
+    }
+  });
+
+  it("leaves the 060 Fingerprint Registration window to its own RPCs", () => {
+    // Same reasoning as lifecycle_stage: the enrolment window is opened and
+    // closed by start/close_fingerprint_registration_rpc, so a plain
+    // "Save Schedule" must not clobber the dates back to null.
+    const payload = buildElectionPeriodSyncPayload(
+      basePeriod({
+        fingerprintRegistrationStartAt: "2026-10-05T08:00:00Z",
+        fingerprintRegistrationEndAt: "2026-10-06T17:00:00Z",
+      }),
+    );
+    expect("fingerprint_registration_start_at" in payload).toBe(false);
+    expect("fingerprint_registration_end_at" in payload).toBe(false);
+  });
+
+  it("never writes school_year from the schedule editor either", () => {
+    // school_year is UNIQUE (020) and identifies the election; only the
+    // 058 RPCs allocate it.
+    const payload = buildElectionPeriodSyncPayload(basePeriod({ schoolYear: "2027-2028" }));
+    expect("school_year" in payload).toBe(false);
   });
 
   it("defaults voting_method to 'plurality' when unset (029 column default)", () => {

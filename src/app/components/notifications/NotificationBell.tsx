@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Bell, CheckCheck, X, ExternalLink, Clock, CheckCircle, XCircle, UserPlus, FileText, Flag, Megaphone, AlertCircle, Send } from "lucide-react";
+import { Bell, CheckCheck, X, ExternalLink, Clock, CheckCircle, XCircle, UserPlus, FileText, Flag, Megaphone, AlertCircle, Send, Fingerprint } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useApp, NotificationType, AppNotification } from "../../context/AppContext";
 import { useNavigate } from "react-router";
@@ -24,6 +24,7 @@ const TYPE_ICONS: Record<NotificationType, { icon: React.ReactNode; color: strin
   results_published: { icon: <Megaphone size={14} />, color: "#8B5CF6" },
   submitted_to_chief: { icon: <Send size={14} />, color: "#F59E0B" },
   rules_discussion_meeting: { icon: <Megaphone size={14} />, color: "#1D4ED8" },
+  fingerprint_registration: { icon: <Fingerprint size={14} />, color: "#2563EB" },
   admin_notification: { icon: <Megaphone size={14} />, color: "#5C0102" },
 };
 

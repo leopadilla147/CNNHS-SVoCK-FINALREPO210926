@@ -1255,12 +1255,12 @@ export interface PastElectionSummary {
 }
 
 export interface PastElectionCandidateTally {
-  candidateId: string;
   name: string;
   gradeLevel: string;
-  partyId?: string;
   partyName?: string;
   votes: number;
+  /** Total votes cast in this candidate's race (position). */
+  totalVotes: number;
   picture?: string;
   isWinner: boolean;
   proclaimedWinner: boolean;
@@ -1314,12 +1314,11 @@ export function mapPastElectionSummary(row: any): PastElectionSummary {
 
 function mapPastElectionCandidate(row: any): PastElectionCandidateTally {
   return {
-    candidateId: row.candidateId,
     name: row.name || "",
     gradeLevel: row.gradeLevel || "",
-    partyId: row.partyId || undefined,
     partyName: row.partyName || undefined,
     votes: Number(row.votes ?? 0),
+    totalVotes: Number(row.totalVotes ?? row.votes ?? 0),
     picture: row.picture || undefined,
     isWinner: Boolean(row.isWinner),
     proclaimedWinner: Boolean(row.proclaimedWinner),
@@ -1373,6 +1372,31 @@ export async function getPastElectionResults(
   if (error) throw new Error(error.message);
   if (!data) return null;
   return mapPastElectionResults(data);
+}
+
+/**
+ * The CURRENT election's official results.
+ *
+ * Resolves the live, published, not-yet-superseded period (the row still
+ * sitting at lifecycle_stage = 'results') and returns its tally, or null
+ * when nothing has been published yet.  A result leaves this view only
+ * when the Commissioner creates a new election (the period is then marked
+ * 'completed' and moves to Past Elections).
+ */
+export async function getOfficialResults(): Promise<PastElectionResults | null> {
+  const client = requireSupabase();
+  const { data, error } = await client
+    .from("election_periods")
+    .select("id")
+    .neq("lifecycle_stage", "completed")
+    .eq("results_published", true)
+    .eq("is_active", false)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data?.id) return null;
+  return getPastElectionResults(data.id as string);
 }
 
 export async function openElectionRpc(pElectionId: string): Promise<void> {

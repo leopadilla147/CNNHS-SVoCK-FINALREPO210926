@@ -54,7 +54,7 @@ export default function HomePage() {
                 View Candidates
               </Link>
               <Link
-                to="/past-elections"
+                to="/official-results"
                 className="px-6 py-3 border border-white/40 text-white rounded-xl text-sm font-medium hover:bg-white/10 transition-all"
               >
                 Official Results

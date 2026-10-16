@@ -164,6 +164,7 @@ export default function AdminElectionSetup() {
   const {
     electionPeriod, setElectionPeriod, applyElectionPeriod,
     addLog, currentUser, candidates, complaints,
+    students, insertNotification,
   } = useApp();
 
   const [loading, setLoading] = useState(false);
@@ -185,6 +186,11 @@ export default function AdminElectionSetup() {
 
   const currentStage = resolveStage(electionPeriod);
   const hasPeriod = isUuid(electionPeriod.id || "") || !!electionId;
+  // Opening the vote is what ends both earlier stages. From "voting" on
+  // (including "results") the Stage 1/2 cards must stop offering actions:
+  // the RPCs already refuse them, and in mock mode the handlers would walk
+  // the election backwards to application/campaign.
+  const pastCampaign = currentStage === "voting" || currentStage === "results";
 
   const [form, setForm] = useState({
     startDate: electionPeriod.startDate,
@@ -284,6 +290,10 @@ export default function AdminElectionSetup() {
 
   const handleStartCandidacy = async () => {
     setError(null);
+    if (pastCampaign) {
+      showError("The Candidate Application Period is over — reset the election plan to start a new one.");
+      return;
+    }
     const ok = await startCandidacyConfirm.confirm();
     if (!ok) return;
     setLoading(true);
@@ -312,6 +322,10 @@ export default function AdminElectionSetup() {
 
   const handleCloseCandidacy = async () => {
     setError(null);
+    if (pastCampaign) {
+      showError("The Candidate Application Period is already over.");
+      return;
+    }
     const ok = await closeCandidacyConfirm.confirm();
     if (!ok) return;
     setLoading(true);
@@ -338,6 +352,10 @@ export default function AdminElectionSetup() {
 
   const handleScheduleMeeting = async () => {
     setError(null);
+    if (pastCampaign) {
+      showError("The Campaign Period is over — the meeting can no longer be scheduled.");
+      return;
+    }
     if (!meetingDate) {
       showError("Choose a date for the Rules Discussion Meeting.");
       return;
@@ -383,6 +401,10 @@ export default function AdminElectionSetup() {
       showError("The Fingerprint Registration window must end after it starts.");
       return;
     }
+    // Stage 3 is announced to every voter ONCE, when the board opens it.
+    // "Update Registration Window" clicks land here too and must not
+    // re-notify the whole student body.
+    const firstOpen = currentStage !== "fingerprint_registration";
     const ok = await fpConfirm.confirm();
     if (!ok) return;
     setLoading(true);
@@ -408,6 +430,27 @@ export default function AdminElectionSetup() {
         details: `Voters may enrol their fingerprint at the biometric kiosks${endIso ? ` until ${formatMeeting(endIso)}` : ""}.`,
         type: "success",
       });
+      if (firstOpen) {
+        // Every voter, not just candidates: enrolment is what makes kiosk
+        // voting possible for them. Pending/rejected accounts are not voters.
+        const recipients = students.filter((s) => s.status === "approved");
+        for (const voter of recipients) {
+          insertNotification({
+            userId: voter.id,
+            role: "student",
+            type: "fingerprint_registration",
+            title: "Fingerprint Registration is Open",
+            message: `Please attend the IoT biometric kiosk to enrol your fingerprint${endIso ? ` by ${formatMeeting(endIso)}` : ""}. You need an enrolled fingerprint before you can vote.`,
+            link: "/student/dashboard",
+          });
+        }
+        addLog({
+          user: logUser, role: "Admin",
+          action: "Fingerprint Registration Announced",
+          details: `Attendance reminder sent to ${recipients.length} student voter(s).`,
+          type: "info",
+        });
+      }
       showSuccess("Fingerprint Registration is now open.");
     } catch (err: any) {
       showError(err.message || "Failed to start Fingerprint Registration.");
@@ -480,6 +523,21 @@ export default function AdminElectionSetup() {
 
   const handleOpenElection = async () => {
     setError(null);
+    // The button is disabled without a schedule, but the period can also be
+    // filled from outside this form — never open an inverted or empty window.
+    // The SAVED period is what opens, so it is what gets validated.
+    if (!votingScheduleSaved) {
+      showError("Set the voting period start and end date and time, then save the schedule, before opening voting.");
+      return;
+    }
+    if (electionPeriod.endDate < electionPeriod.startDate) {
+      showError("End date must be after start date.");
+      return;
+    }
+    if (electionPeriod.endDate === electionPeriod.startDate && electionPeriod.endTime <= electionPeriod.startTime) {
+      showError("End time must be after start time.");
+      return;
+    }
     const ok = await openConfirm.confirm();
     if (!ok) return;
     setLoading(true);
@@ -490,7 +548,7 @@ export default function AdminElectionSetup() {
         await openElectionRpc(id);
         await refreshPeriod();
       } else {
-        applyElectionPeriod({ ...electionPeriod, isActive: true, lifecycleStage: "voting" });
+        applyElectionPeriod({ ...electionPeriod, candidacyOpen: false, isActive: true, lifecycleStage: "voting" });
       }
       addLog({
         user: logUser, role: "Admin",
@@ -639,6 +697,16 @@ export default function AdminElectionSetup() {
 
   const scheduleLocked = !!electionPeriod.startDate && currentStage === "results";
   const hasMeeting = !!electionPeriod.rulesDiscussionAt;
+  // Stage 4 must not open without a saved voting window: open_election_rpc
+  // flips the stage without checking one, so the UI is the only gate. The
+  // SAVED period is what counts — that is the row the kiosk and the public
+  // pages read — so fields typed but never saved do not qualify.
+  const votingScheduleSaved = !!(
+    electionPeriod.startDate &&
+    electionPeriod.startTime &&
+    electionPeriod.endDate &&
+    electionPeriod.endTime
+  );
   const complaintBlocked = (knownComplaintCount ?? 0) > 0;
 
   return (
@@ -710,13 +778,13 @@ export default function AdminElectionSetup() {
             <Users size={16} style={{ color: "#5C0102" }} />
             Stage 1: Candidate Application Period
           </h3>
-          {electionPeriod.candidacyOpen ? (
+          {electionPeriod.candidacyOpen && !pastCampaign ? (
             <span className="text-xs flex items-center gap-1 text-green-600 font-medium">
               <Play size={12} /> Accepting Applications
             </span>
           ) : (
             <span className="text-xs flex items-center gap-1 text-gray-400 font-medium">
-              <Square size={12} /> Not Accepting Applications
+              <Square size={12} /> {pastCampaign ? "Period Ended" : "Not Accepting Applications"}
             </span>
           )}
         </div>
@@ -748,7 +816,11 @@ export default function AdminElectionSetup() {
           </div>
         )}
 
-        {electionPeriod.candidacyOpen ? (
+        {pastCampaign ? (
+          <div className="flex items-center gap-2 text-xs text-gray-400 p-3 bg-gray-50 rounded-lg">
+            <Lock size={14} /> The Candidate Application Period ended when Voting opened.
+          </div>
+        ) : electionPeriod.candidacyOpen ? (
           <button
             onClick={handleCloseCandidacy}
             disabled={loading}
@@ -786,7 +858,11 @@ export default function AdminElectionSetup() {
           )}
         </div>
 
-        {!isStageAccessible("campaign", electionPeriod, currentStage, hasPeriod) ? (
+        {pastCampaign ? (
+          <div className="flex items-center gap-2 text-xs text-gray-400 p-3 bg-gray-50 rounded-lg">
+            <Lock size={14} /> The Campaign Period ended when Voting opened.
+          </div>
+        ) : !isStageAccessible("campaign", electionPeriod, currentStage, hasPeriod) ? (
           <div className="flex items-center gap-2 text-xs text-gray-400 p-3 bg-gray-50 rounded-lg">
             <Lock size={14} /> Open the Candidate Application Period first.
           </div>
@@ -1039,7 +1115,7 @@ export default function AdminElectionSetup() {
           </div>
           <div className="flex gap-3">
             {!electionPeriod.isActive && !electionPeriod.resultsPublished && (
-              <button onClick={handleOpenElection} disabled={loading || !hasMeeting}
+              <button onClick={handleOpenElection} disabled={loading || !hasMeeting || !votingScheduleSaved}
                 className="px-5 py-2.5 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:opacity-90 disabled:opacity-50"
                 style={{ backgroundColor: "#5C0102" }}>
                 {loading ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
@@ -1068,7 +1144,14 @@ export default function AdminElectionSetup() {
           </div>
         )}
 
-        {hasMeeting && !electionPeriod.isActive && !electionPeriod.resultsPublished && (
+        {hasMeeting && !votingScheduleSaved && !electionPeriod.isActive && !electionPeriod.resultsPublished && (
+          <div className="flex items-center gap-2 text-xs text-gray-400 p-3 bg-gray-50 rounded-lg mt-4">
+            <Lock size={14} /> Set the voting period start and end date and time, then save the
+            schedule, before opening voting.
+          </div>
+        )}
+
+        {hasMeeting && votingScheduleSaved && !electionPeriod.isActive && !electionPeriod.resultsPublished && (
           <div className="flex items-center gap-2 text-xs text-amber-600 p-3 bg-amber-50 border border-amber-100 rounded-lg mt-4">
             <AlertCircle size={14} /> Opening voting ends the Campaign Period and closes Fingerprint Registration.
           </div>

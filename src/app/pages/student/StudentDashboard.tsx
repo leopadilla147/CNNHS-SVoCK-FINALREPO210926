@@ -15,6 +15,7 @@ import {
   Vote,
   AlertTriangle,
   ArrowUpRight,
+  Fingerprint,
 } from "lucide-react";
 import { Link } from "react-router";
 import { useApp } from "../../context/AppContext";
@@ -38,6 +39,20 @@ function timeAgo(dateStr: string): string {
   const days = Math.floor(hours / 24);
   if (days < 30) return `${days}d ago`;
   return new Date(dateStr).toLocaleDateString();
+}
+
+/** A period timestamp as a Date, or null when it is absent/unparseable. */
+function parseFpDate(iso?: string): Date | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function formatFpDate(d: Date): string {
+  return d.toLocaleString(undefined, {
+    year: "numeric", month: "long", day: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
 }
 
 export default function StudentDashboard() {
@@ -146,6 +161,17 @@ export default function StudentDashboard() {
 
   const unreadNotifications = notifications.filter((n) => !n.isRead).slice(0, 5);
 
+  // Stage 3 (060): the Fingerprint Registration window, announced to EVERY
+  // voter — candidacy status is irrelevant here, because kiosk voting needs
+  // an enrolled fingerprint either way. Derived straight from the period, so
+  // it can never drift: closing the window early and opening voting both
+  // land endAt at now(), and a plan reset clears the columns — all three
+  // simply hide the card.
+  const fpStartAt = parseFpDate(electionPeriod.fingerprintRegistrationStartAt);
+  const fpEndAt = parseFpDate(electionPeriod.fingerprintRegistrationEndAt);
+  const fpVisible = !!fpStartAt && (!fpEndAt || Date.now() < fpEndAt.getTime());
+  const fpNotStarted = !!fpStartAt && Date.now() < fpStartAt.getTime();
+
   return (
     <div className="p-4 sm:p-6 md:p-8 max-w-7xl mx-auto space-y-6">
 
@@ -216,6 +242,36 @@ export default function StudentDashboard() {
           );
         })}
       </div>
+
+      {/* Stage 3 (060) enrolment reminder — for every voter, only while the
+          Fingerprint Registration window is still live */}
+      {fpVisible && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="rounded-2xl p-4 flex items-center gap-3 bg-blue-50 border border-blue-200 text-blue-900"
+        >
+          <Fingerprint size={20} className="text-blue-600 shrink-0" />
+          <div>
+            <div className="text-xs font-bold text-blue-900">
+              {fpNotStarted
+                ? "Fingerprint Registration — Scheduled"
+                : "Fingerprint Registration is Open"}
+            </div>
+            <div className="text-xs text-blue-700 mt-0.5">
+              {fpNotStarted && fpStartAt ? (
+                <>It opens on <strong>{formatFpDate(fpStartAt)}</strong>. </>
+              ) : fpEndAt ? (
+                <>Enrolment closes on <strong>{formatFpDate(fpEndAt)}</strong>. </>
+              ) : (
+                <>Enrolment stays open until voting begins. </>
+              )}
+              Please attend the IoT biometric kiosk to enrol your fingerprint — you need an
+              enrolled fingerprint before you can vote.
+            </div>
+          </div>
+        </motion.div>
+      )}
 
       {/* Notifications Section */}
       {unreadNotifications.length > 0 && (

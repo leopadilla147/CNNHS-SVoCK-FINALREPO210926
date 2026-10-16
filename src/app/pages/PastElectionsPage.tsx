@@ -83,14 +83,15 @@ export default function PastElectionsPage() {
             </div>
             <h1 className="text-3xl text-gray-900 mb-3">No Past Elections Yet</h1>
             <p className="text-gray-500 max-w-md">
-              Completed elections appear here once the Electoral Board publishes the results.
+              An election is listed here once the Electoral Board starts a new
+              one. The current official results live on the Official Results page.
             </p>
             <Link
-              to="/current-election"
+              to="/official-results"
               className="mt-6 px-5 py-2.5 rounded-lg text-white text-sm font-medium"
               style={{ backgroundColor: "#5C0102" }}
             >
-              View Current Election
+              View Official Results
             </Link>
           </div>
         ) : (

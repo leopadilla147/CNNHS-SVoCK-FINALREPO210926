@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, ReactNode } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useState, useCallback, ReactNode } from "react";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
 import {
   fetchSupabaseState,
@@ -9,6 +9,7 @@ import {
   syncStudents,
 } from "../lib/supabaseData";
 import { bootstrapSession, clearSessionToken } from "../lib/session";
+import { replaceLiveCandidates, splitCandidatesByPeriod } from "../lib/partyScope";
 
 export type UserRole = "student" | "admin" | "sslg_adviser" | null;
 export type CommissionerRole =
@@ -244,6 +245,8 @@ export type NotificationType =
   | "results_published"
   | "submitted_to_chief"
   | "rules_discussion_meeting"
+  /** 060: Stage 3 opened — every voter is reminded to enrol at the kiosk. */
+  | "fingerprint_registration"
   | "admin_notification";
 
 export interface AppNotification {
@@ -279,6 +282,11 @@ interface AppContextType {
   setStudentMasterlist: (entries: StudentMasterlistEntry[]) => void;
   candidates: Candidate[];
   setCandidates: (candidates: Candidate[]) => void;
+  /**
+   * Candidate rows from every past election period.  History only — the live
+   * election never reads them; the Admin Archive page is the one consumer.
+   */
+  archivedCandidates: Candidate[];
   parties: PartySummary[];
   setParties: (parties: PartySummary[]) => void;
   commissioners: Commissioner[];
@@ -345,7 +353,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   });
   const [students, setStudentsState] = useState<Student[]>([]);
   const [studentMasterlist, setStudentMasterlist] = useState<StudentMasterlistEntry[]>([]);
-  const [candidates, setCandidatesState] = useState<Candidate[]>([]);
+  const [allCandidates, setCandidatesState] = useState<Candidate[]>([]);
   const [parties, setPartiesState] = useState<PartySummary[]>([]);
   const [commissioners, setCommissioners] = useState<Commissioner[]>([]);
   const [electionPeriod, setElectionPeriodState] = useState<ElectionPeriod>(emptyElectionPeriod);
@@ -357,6 +365,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const unreadCount = notifications.filter((n) => !n.isRead).length;
   const registeredLRNs = new Set(students.map((s) => s.lrn));
+
+  // One store, two views: every current-election screen reads `candidates`
+  // (the live period only), so a past election's candidates can never show up
+  // in the new one, while `archivedCandidates` keeps history reachable.
+  // Derived here rather than split at load, so a period switch or reset
+  // re-scopes without a reload.
+  const { live: candidates, archived: archivedCandidates } = useMemo(
+    () => splitCandidatesByPeriod(allCandidates, electionPeriod),
+    [allCandidates, electionPeriod]
+  );
 
   const loadSupabaseState = async () => {
     const state = await fetchSupabaseState();
@@ -467,8 +485,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  // Callers pass the live-period list (usually mapped from `candidates`), so
+  // the write replaces the live rows and carries archived history over
+  // untouched.  The functional form is required: the store is the full
+  // candidate list, and reading it from a stale closure could drop rows.
   const setCandidates = (next: Candidate[]) => {
-    setCandidatesState(next);
+    setCandidatesState((previous) =>
+      replaceLiveCandidates(previous, next, electionPeriod)
+    );
   };
 
   // Parties are read-only here: creation and membership both go through
@@ -583,6 +607,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setStudentMasterlist,
       candidates,
       setCandidates,
+      archivedCandidates,
       parties,
       setParties,
       commissioners,

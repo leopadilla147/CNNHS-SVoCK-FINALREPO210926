@@ -1279,6 +1279,37 @@ export default function StudentApplyCandidacy() {
   };
 
   /**
+   * The Rules Discussion Meeting announcement, and nothing else.
+   *
+   * Only an APPROVED candidate may see the meeting date — a student who never
+   * applied, or whose application is still pending, gets no trace of it. The
+   * admin copy promises the date lands "in each approved candidate's page",
+   * so every caller here gates on status first and this renders only when a
+   * usable date exists.
+   */
+  const meetingAnnouncement = () => {
+    const meeting = electionPeriod.rulesDiscussionAt
+      ? new Date(electionPeriod.rulesDiscussionAt)
+      : null;
+    if (!meeting || Number.isNaN(meeting.getTime())) return null;
+    const meetingText = meeting.toLocaleString(undefined, {
+      year: "numeric", month: "long", day: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
+    return (
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4 text-left">
+        <div className="text-xs font-medium text-blue-700 mb-1 uppercase tracking-wide">
+          Rules Discussion Meeting
+        </div>
+        <div className="text-sm text-blue-900 font-medium">{meetingText}</div>
+        <p className="text-xs text-blue-700 mt-2">
+          It is where campaign rules are discussed and questions are answered.
+        </p>
+      </div>
+    );
+  };
+
+  /**
    * Where a party candidacy sits with the President.  Independents and
    * Presidents carry 'notRequired' and get nothing here.
    */
@@ -1419,6 +1450,9 @@ export default function StudentApplyCandidacy() {
                 <p>Submitted on: <strong>{existing.submittedAt}</strong></p>
               </div>
               {partyGateBanner(existing)}
+              {/* Meeting date is approved-candidates-only: pending, rejected
+                  and never-applied students must not see it at all. */}
+              {existing.status === "approved" && meetingAnnouncement()}
             </>
           )}
         </div>
@@ -1432,16 +1466,10 @@ export default function StudentApplyCandidacy() {
   // Period is open. The RPC enforces this too — this is the friendly version.
   // A student who already started an application is never locked out of it.
   if (!electionPeriod.candidacyOpen && !editingExisting) {
-    const meeting = electionPeriod.rulesDiscussionAt
-      ? new Date(electionPeriod.rulesDiscussionAt)
-      : null;
-    const meetingText =
-      meeting && !Number.isNaN(meeting.getTime())
-        ? meeting.toLocaleString(undefined, {
-            year: "numeric", month: "long", day: "numeric",
-            hour: "2-digit", minute: "2-digit",
-          })
-        : null;
+    // The Rules Discussion Meeting announcement is intentionally absent here:
+    // this screen only ever renders for a student with NO application in the
+    // live period (any candidacy row returns further up), and the meeting date
+    // is approved-candidates-only. See meetingAnnouncement().
     return (
       <div className="p-6 md:p-8 max-w-2xl mx-auto">
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
@@ -1453,23 +1481,6 @@ export default function StudentApplyCandidacy() {
             The Electoral Board is not accepting new candidacy applications right now.
             {electionPeriod.schoolYear ? ` This election is for School Year ${electionPeriod.schoolYear}.` : ""}
           </p>
-
-          {meetingText ? (
-            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4 text-left">
-              <div className="text-xs font-medium text-blue-700 mb-1 uppercase tracking-wide">
-                Rules Discussion Meeting
-              </div>
-              <div className="text-sm text-blue-900 font-medium">{meetingText}</div>
-              <p className="text-xs text-blue-700 mt-2">
-                The meeting is announced in each approved candidate&rsquo;s page. It is where
-                campaign rules are discussed and questions are answered.
-              </p>
-            </div>
-          ) : (
-            <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-4 text-left text-sm text-gray-600">
-              The Rules Discussion Meeting has not been scheduled yet. Check back later.
-            </div>
-          )}
 
           <p className="text-xs text-gray-400">
             If you believe the application period is still open, please see the Screening and

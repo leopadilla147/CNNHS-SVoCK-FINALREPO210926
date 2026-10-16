@@ -4,11 +4,17 @@ import { Archive, FileText, Download, Search, Filter } from "lucide-react";
 import { useState } from "react";
 
 export default function AdminArchive() {
-  const { candidates, complaints } = useApp();
+  // Candidacy documents from every election: the live period's rows plus the
+  // archived ones.  Everywhere else in the app `candidates` is scoped to the
+  // live period only; this page is the deliberate exception, since an archive
+  // that only holds the current election is not an archive.
+  const { candidates, archivedCandidates, complaints } = useApp();
   const [search, setSearch] = useState("");
 
   const archivedDocs = [
-    ...candidates.filter((c) => c.documents.applicationForm || c.documents.reportCard).map((c) => ({
+    ...[...candidates, ...archivedCandidates]
+      .filter((c) => c.documents.applicationForm || c.documents.reportCard)
+      .map((c) => ({
       id: c.id,
       title: `Application - ${c.givenName} ${c.surname}`,
       type: "Candidacy Document",

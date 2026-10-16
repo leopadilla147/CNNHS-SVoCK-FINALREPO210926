@@ -40,15 +40,61 @@ export function livePeriodId(electionPeriod: ElectionPeriod): string | undefined
   return electionPeriod.id || undefined;
 }
 
+/**
+ * Whether a candidate row belongs to the election the UI is currently
+ * showing.  Same rule as candidatesInLivePeriod: an unknown live period id
+ * and a legacy row with no period id are never filtered out.
+ */
+export function isInLivePeriod(
+  candidate: Candidate,
+  electionPeriod: ElectionPeriod
+): boolean {
+  const periodId = livePeriodId(electionPeriod);
+  return (
+    !periodId || !candidate.electionPeriodId || candidate.electionPeriodId === periodId
+  );
+}
+
 export function candidatesInLivePeriod(
   candidates: Candidate[],
   electionPeriod: ElectionPeriod
 ): Candidate[] {
-  const periodId = livePeriodId(electionPeriod);
-  if (!periodId) return candidates;
-  return candidates.filter(
-    (candidate) => !candidate.electionPeriodId || candidate.electionPeriodId === periodId
-  );
+  return candidates.filter((candidate) => isInLivePeriod(candidate, electionPeriod));
+}
+
+/**
+ * One store, two views.  AppContext keeps every candidate row and derives the
+ * two lists from it: `candidates` is the live period's rows (what every
+ * current-election screen reads, so a past election's candidates can never
+ * leak into it), and `archivedCandidates` is every other period's rows, kept
+ * reachable for history surfaces such as the Admin Archive page.
+ */
+export function splitCandidatesByPeriod(
+  candidates: Candidate[],
+  electionPeriod: ElectionPeriod
+): { live: Candidate[]; archived: Candidate[] } {
+  const live: Candidate[] = [];
+  const archived: Candidate[] = [];
+  for (const candidate of candidates) {
+    (isInLivePeriod(candidate, electionPeriod) ? live : archived).push(candidate);
+  }
+  return { live, archived };
+}
+
+/**
+ * The reducer behind AppContext's setCandidates.  Callers pass the live list
+ * (usually mapped from the exposed `candidates`), so the write replaces the
+ * live rows while archived history is carried over untouched.
+ */
+export function replaceLiveCandidates(
+  previous: Candidate[],
+  next: Candidate[],
+  electionPeriod: ElectionPeriod
+): Candidate[] {
+  return [
+    ...previous.filter((candidate) => !isInLivePeriod(candidate, electionPeriod)),
+    ...next,
+  ];
 }
 
 /** The screening-approved President of a party in the live period, if any. */

@@ -21,23 +21,21 @@ function position(
     abstentions: 5,
     candidates: [
       {
-        candidateId: "c-1",
         name: "Dela Cruz, Gabriel",
         gradeLevel: "Grade 12",
-        partyId: "p-1",
         partyName: "Alpha",
         votes: 90,
+        totalVotes: 150,
         picture: undefined,
         isWinner: true,
         proclaimedWinner: true,
       },
       {
-        candidateId: "c-2",
         name: "Santos, Adrian",
         gradeLevel: "Grade 12",
-        partyId: undefined,
         partyName: undefined,
         votes: 60,
+        totalVotes: 150,
         picture: undefined,
         isWinner: false,
         proclaimedWinner: false,
@@ -126,11 +124,11 @@ describe("PastElectionDetailPage", () => {
       position({
         candidates: [
           {
-            candidateId: "c-1",
             name: "Dela Cruz, Gabriel",
             gradeLevel: "Grade 12",
             partyName: "Alpha",
             votes: 90,
+            totalVotes: 150,
             isWinner: true,
             proclaimedWinner: false,
           },

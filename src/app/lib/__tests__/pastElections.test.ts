@@ -87,23 +87,21 @@ describe("mapPastElectionResults", () => {
           abstentions: 5,
           candidates: [
             {
-              candidateId: "c-1",
               name: "Dela Cruz, Gabriel",
               gradeLevel: "Grade 12",
-              partyId: "p-1",
               partyName: "Alpha",
               votes: 90,
+              totalVotes: 150,
               picture: "https://example.test/pic.jpg",
               isWinner: true,
               proclaimedWinner: true,
             },
             {
-              candidateId: "c-2",
               name: "Santos, Adrian",
               gradeLevel: "Grade 12",
-              partyId: null,
               partyName: null,
               votes: 60,
+              totalVotes: 150,
               picture: null,
               isWinner: false,
               proclaimedWinner: false,
@@ -124,6 +122,7 @@ describe("mapPastElectionResults", () => {
     expect(results.positions[0].position).toBe("President");
     expect(results.positions[0].abstentions).toBe(5);
     expect(results.positions[0].candidates.map((c) => c.votes)).toEqual([90, 60]);
+    expect(results.positions[0].candidates[0].totalVotes).toBe(150);
     expect(results.positions[0].candidates[0].proclaimedWinner).toBe(true);
     expect(results.positions[0].candidates[1].partyName).toBeUndefined();
   });
@@ -139,10 +138,10 @@ describe("mapPastElectionResults", () => {
           abstentions: 1,
           candidates: [
             {
-              candidateId: "c-9",
               name: "Reyes, Joshua",
               gradeLevel: "Grade 11",
               votes: 10,
+              totalVotes: 10,
               voterId: "student-1",
               isWinner: true,
               proclaimedWinner: false,

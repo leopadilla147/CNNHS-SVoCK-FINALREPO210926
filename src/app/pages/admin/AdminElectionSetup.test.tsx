@@ -19,6 +19,7 @@ const {
   mockCloseFingerprintRegistrationRpc,
   mockCountActiveComplaintsRpc,
   mockResetElectionPlanRpc,
+  mockInsertNotification,
   mockConfirm,
 } = vi.hoisted(() => ({
   mockApplyElectionPeriod: vi.fn(),
@@ -31,6 +32,7 @@ const {
   mockCloseFingerprintRegistrationRpc: vi.fn(),
   mockCountActiveComplaintsRpc: vi.fn(),
   mockResetElectionPlanRpc: vi.fn(),
+  mockInsertNotification: vi.fn(),
   mockConfirm: vi.fn(),
 }));
 
@@ -60,6 +62,8 @@ vi.mock("../../lib/useConfirm", () => ({
 
 let electionPeriod: ElectionPeriod;
 let complaints: { status: string }[];
+// Voters the Stage 3 announcement is sent to; reset per test like complaints.
+let students: { id: string; status: string }[];
 
 vi.mock("../../context/AppContext", async () => {
   const actual = await vi.importActual<typeof import("../../context/AppContext")>("../../context/AppContext");
@@ -73,6 +77,8 @@ vi.mock("../../context/AppContext", async () => {
       currentUser: { id: "admin-1", name: "Chief" },
       candidates: [],
       complaints,
+      students,
+      insertNotification: mockInsertNotification,
     }),
   };
 });
@@ -122,6 +128,7 @@ describe("AdminElectionSetup", () => {
     vi.clearAllMocks();
     electionPeriod = period();
     complaints = [];
+    students = [];
     mockConfirm.mockResolvedValue(true);
     mockGetCurrentElectionId.mockResolvedValue(PERIOD_ID);
     mockReloadElectionPeriod.mockImplementation(async () => electionPeriod);
@@ -163,6 +170,83 @@ describe("AdminElectionSetup", () => {
 
     expect(screen.getByText("Schedule the campaign meeting before opening voting.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Open Voting/ })).toBeDisabled();
+  });
+
+  it("keeps Open Voting locked until the voting schedule is saved", () => {
+    // Meeting done, stage 2 current — but the voting window itself was never
+    // saved, and open_election_rpc will happily start one with no dates.
+    electionPeriod = period({
+      lifecycleStage: "campaign",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+    });
+    renderPage();
+
+    expect(screen.getByRole("button", { name: /Open Voting/ })).toBeDisabled();
+    expect(
+      screen.getByText(/Set the voting period start and end date and time, then save the schedule/),
+    ).toBeInTheDocument();
+    // The amber "you may open now" note must not sit under a blocked button.
+    expect(screen.queryByText(/Opening voting ends the Campaign Period/)).toBeNull();
+  });
+
+  it("lets the board open voting once the schedule is saved", () => {
+    electionPeriod = period({
+      lifecycleStage: "campaign",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      startDate: "2026-11-02",
+      startTime: "08:00",
+      endDate: "2026-11-02",
+      endTime: "17:00",
+    });
+    renderPage();
+
+    expect(screen.getByRole("button", { name: /Open Voting/ })).toBeEnabled();
+    expect(screen.queryByText(/save the schedule, before opening voting/)).toBeNull();
+    expect(screen.getByText(/Opening voting ends the Campaign Period/)).toBeInTheDocument();
+  });
+
+  it("turns candidacy and the campaign period off once voting opens", () => {
+    // Even a period that somehow still carries candidacyOpen = true must stop
+    // offering Stage 1/2 actions while the vote is running — the RPCs would
+    // refuse them, and in mock mode they would rewind the election.
+    electionPeriod = period({
+      lifecycleStage: "voting",
+      isActive: true,
+      candidacyOpen: true,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      startDate: "2026-11-02",
+      startTime: "08:00",
+      endDate: "2026-11-02",
+      endTime: "17:00",
+    });
+    renderPage();
+
+    expect(screen.getByText(/Period Ended/)).toBeInTheDocument();
+    expect(screen.getByText("The Candidate Application Period ended when Voting opened.")).toBeInTheDocument();
+    expect(screen.getByText("The Campaign Period ended when Voting opened.")).toBeInTheDocument();
+
+    expect(screen.queryByRole("button", { name: /Open Candidacy/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Pause Candidacy/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Schedule Meeting/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Reschedule/ })).toBeNull();
+    expect(screen.queryByLabelText("Meeting Date")).toBeNull();
+  });
+
+  it("keeps the earlier stages turned off through the results stage", () => {
+    electionPeriod = period({
+      lifecycleStage: "results",
+      isActive: false,
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+    });
+    renderPage();
+
+    expect(screen.getByText("The Candidate Application Period ended when Voting opened.")).toBeInTheDocument();
+    expect(screen.getByText("The Campaign Period ended when Voting opened.")).toBeInTheDocument();
+    // The results stage itself stays reachable — only 1 and 2 are read-only.
+    expect(screen.getByRole("button", { name: /Publish Results/ })).toBeInTheDocument();
   });
 
   it("will not end candidacy until a meeting date is chosen", async () => {
@@ -236,6 +320,60 @@ describe("AdminElectionSetup", () => {
         expect.any(String),
       );
     });
+  });
+
+  it("announces Stage 3 to every student voter when the window first opens", async () => {
+    const user = userEvent.setup();
+    electionPeriod = period({
+      lifecycleStage: "campaign",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+    });
+    // Candidacy status is irrelevant to voting, but only approved accounts
+    // are registered voters — pending/rejected ones must not be reminded.
+    students = [
+      { id: "voter-1", status: "approved" },
+      { id: "onboarding", status: "pending" },
+    ];
+    renderPage();
+
+    fireEvent.change(screen.getByLabelText("Registration Opens"), {
+      target: { value: "2026-10-05T08:00" },
+    });
+    await user.click(screen.getByRole("button", { name: /Open Fingerprint Registration/ }));
+
+    await waitFor(() => {
+      expect(mockInsertNotification).toHaveBeenCalledTimes(1);
+    });
+    expect(mockInsertNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "voter-1",
+        role: "student",
+        type: "fingerprint_registration",
+        link: "/student/dashboard",
+      }),
+    );
+  });
+
+  it("does not re-announce when the window is updated", async () => {
+    const user = userEvent.setup();
+    electionPeriod = period({
+      lifecycleStage: "fingerprint_registration",
+      candidacyOpen: false,
+      // Stage 3 stays gated on the campaign meeting having been scheduled.
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: "2026-10-05T08:00:00.000Z",
+      fingerprintRegistrationEndAt: "2026-10-06T17:00:00.000Z",
+    });
+    students = [{ id: "voter-1", status: "approved" }];
+    renderPage();
+
+    await user.click(screen.getByRole("button", { name: /Update Registration Window/ }));
+
+    await waitFor(() => {
+      expect(mockStartFingerprintRegistrationRpc).toHaveBeenCalled();
+    });
+    expect(mockInsertNotification).not.toHaveBeenCalled();
   });
 
   it("blocks publishing results while a complaint is filed", () => {

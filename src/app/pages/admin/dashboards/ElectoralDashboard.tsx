@@ -32,27 +32,24 @@ export default function ElectoralDashboard() {
         <p className="text-gray-500 text-sm">Manage election periods and oversee the voting process.</p>
       </motion.div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        {stats.map((stat, i) => {
-          const card = (
-            <motion.div
-              key={stat.label}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.08 }}
-              className={`bg-white rounded-xl p-5 shadow-sm border border-gray-100 ${stat.link ? "cursor-pointer hover:shadow-md transition-all" : ""}`}
-            >
-              <div className="flex items-center justify-between mb-3">
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white" style={{ backgroundColor: stat.color }}>
-                  {stat.icon}
-                </div>
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+        {stats.map((stat, i) => (
+          <motion.div
+            key={stat.label}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.08 }}
+            className="bg-white rounded-xl p-5 shadow-sm border border-gray-100"
+          >
+            <div className="flex items-center justify-between mb-3">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white" style={{ backgroundColor: stat.color }}>
+                {stat.icon}
               </div>
-              <div className="text-2xl font-bold text-gray-900 mb-0.5">{stat.value}</div>
-              <div className="text-xs text-gray-700 font-medium">{stat.label}</div>
-            </motion.div>
-          );
-          return stat.link ? <Link key={stat.label} to={stat.link}>{card}</Link> : card;
-        })}
+            </div>
+            <div className="text-2xl font-bold text-gray-900 mb-0.5">{stat.value}</div>
+            <div className="text-xs text-gray-700 font-medium">{stat.label}</div>
+          </motion.div>
+        ))}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">

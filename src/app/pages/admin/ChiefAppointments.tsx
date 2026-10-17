@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
-import { Shield, BookOpen, UserPlus, Loader2, Crown, KeyRound } from "lucide-react";
+import { Shield, BookOpen, UserPlus, Loader2, Crown, KeyRound, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 import { useApp, CommissionerRole, Commissioner } from "../../context/AppContext";
 import {
   createCommissioner, createSslgAdviser, resetPassword,
-  listStaffRosterRpc, type StaffRosterRow,
+  listStaffRosterRpc, removeOfficerRpc, type StaffRosterRow,
 } from "../../lib/supabaseData";
 import { TempPasswordModal } from "../../components/TempPasswordModal";
 import { useConfirm } from "../../lib/useConfirm";
@@ -24,6 +24,12 @@ import { useConfirm } from "../../lib/useConfirm";
  * D-03 show-once modal.  The reset sets must_change_password=true and
  * kills the target's sessions (D-14).  The chief row has no reset action
  * (the Chief's own password is managed via the change-password surface).
+ *
+ * 068: each commissioner/co-commissioner row also gains a "Remove" action
+ * — confirmation -> chief-gated remove_officer_rpc (068 migration) which
+ * deletes the adminprofiles row, purges the target's sessions, and keeps
+ * history via the set-null FK contract.  The chief row has no remove
+ * action, and the RPC refuses the chief row and self-removal server-side.
  *
  * The removed Commissioner of Appointment role ('appointment') has no
  * presence here (Phase 3 REMOVE-08), and there is NO hardcoded-password
@@ -51,7 +57,10 @@ interface SslgAdviserRow {
 }
 
 export default function ChiefAppointments() {
-  const { addLog } = useApp();
+  // audit actor = the acting chief's real name (falls back to the role
+  // label for non-chief/legacy contexts).
+  const { addLog, currentUser } = useApp();
+  const actorName = currentUser?.name || "Chief Commissioner";
 
   const [cForm, setCForm] = useState({ firstName: "", lastName: "", email: "", role: "screening_validation" as CommissionerRole });
   const [creating, setCreating] = useState(false);
@@ -115,6 +124,17 @@ export default function ChiefAppointments() {
     destructive: true,
   });
 
+  // 068: per-commissioner/co-commissioner "Remove" action. The RPC refuses
+  // the chief row and self-removal server-side; the button is likewise
+  // never rendered on the chief row.
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const removeConfirm = useConfirm({
+    title: "Remove Officer?",
+    description: "This permanently deletes the commissioner account. Their sessions are signed out immediately and they can no longer log in. Past records that referenced them are kept, without the attribution. This cannot be undone.",
+    confirmText: "Remove",
+    destructive: true,
+  });
+
   // (roster loaded above — the adviser list reflects existing accounts)
 
   const resetCommissionerPassword = async (commissioner: Commissioner) => {
@@ -128,7 +148,7 @@ export default function ChiefAppointments() {
       const result = await resetPassword("commissioner", commissioner.id);
       setTempPassword({ name: result.name, email: result.email, password: result.password });
       addLog({
-        user: "Chief Commissioner",
+        user: actorName,
         role: "Admin",
         action: "Reset Password",
         details: `Reset password for ${result.name} (${result.email})`,
@@ -138,6 +158,29 @@ export default function ChiefAppointments() {
       setError(err instanceof Error ? err.message : "Failed to reset the password.");
     } finally {
       setResettingId(null);
+    }
+  };
+
+  // 068: remove a commissioner/co-commissioner account (chief-gated RPC).
+  const removeOfficer = async (commissioner: Commissioner) => {
+    const ok = await removeConfirm.confirm();
+    if (!ok) return;
+    setError("");
+    setRemovingId(commissioner.id);
+    try {
+      await removeOfficerRpc(commissioner.id);
+      addLog({
+        user: actorName,
+        role: "Admin",
+        action: "Removed Officer",
+        details: `Removed ${commissioner.name} (${commissioner.email})`,
+        type: "warning",
+      });
+      await loadRoster();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to remove the officer.");
+    } finally {
+      setRemovingId(null);
     }
   };
 
@@ -153,7 +196,7 @@ export default function ChiefAppointments() {
       setTempPassword({ name, email: result.email, password: result.password });
       await loadRoster();
       addLog({
-        user: "Chief Commissioner",
+        user: actorName,
         role: "Admin",
         action: "Appointed Commissioner",
         details: `${name} appointed as ${roleLabel[cForm.role] || cForm.role} Commissioner`,
@@ -177,7 +220,7 @@ export default function ChiefAppointments() {
       setTempPassword({ name, email: result.email, password: result.password });
       await loadRoster();
       addLog({
-        user: "Chief Commissioner",
+        user: actorName,
         role: "Admin",
         action: "Appointed SSLG Adviser",
         details: `${name} appointed as SSLG Adviser`,
@@ -196,7 +239,7 @@ export default function ChiefAppointments() {
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
         <h1 className="text-gray-900 mb-1">Officer Management</h1>
         <p className="text-gray-500 text-sm">
-          Appoint commissioners and SSLG advisers, or reset an account's password. Each reset generates a one-time temporary password shown once.
+          Appoint commissioners and SSLG advisers, or reset an account's password. Each reset generates a one-time temporary password shown once. Removing an officer deletes their account permanently.
         </p>
       </motion.div>
 
@@ -301,15 +344,26 @@ export default function ChiefAppointments() {
                     </td>
                     <td className="py-3 px-4">
                       {c.role !== "chief" && (
-                        <button
-                          onClick={() => resetCommissionerPassword(c)}
-                          disabled={resettingId === c.id}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-60"
-                          title="Reset password — the next login forces a change (D-04)"
-                        >
-                          {resettingId === c.id ? <Loader2 size={12} className="animate-spin" /> : <KeyRound size={12} />}
-                          {resettingId === c.id ? "Resetting..." : "Reset password"}
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => resetCommissionerPassword(c)}
+                            disabled={resettingId === c.id || removingId === c.id}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-60"
+                            title="Reset password — the next login forces a change (D-04)"
+                          >
+                            {resettingId === c.id ? <Loader2 size={12} className="animate-spin" /> : <KeyRound size={12} />}
+                            {resettingId === c.id ? "Resetting..." : "Reset password"}
+                          </button>
+                          <button
+                            onClick={() => removeOfficer(c)}
+                            disabled={removingId === c.id || resettingId === c.id}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-60"
+                            title="Remove this officer account permanently"
+                          >
+                            {removingId === c.id ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                            {removingId === c.id ? "Removing..." : "Remove"}
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -406,6 +460,7 @@ export default function ChiefAppointments() {
       )}
 
       {resetConfirm.dialog}
+      {removeConfirm.dialog}
     </div>
   );
 }

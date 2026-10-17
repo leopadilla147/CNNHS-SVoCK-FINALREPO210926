@@ -2,7 +2,7 @@ import { motion } from "motion/react";
 import { Link } from "react-router";
 import { useApp } from "../../../context/AppContext";
 import { resolveStage } from "../AdminElectionSetup";
-import { Calendar, BarChart2, Activity, CheckCircle, ArrowRight, Trophy, AlertCircle } from "lucide-react";
+import { Calendar, Activity, CheckCircle, ArrowRight, Trophy, AlertCircle } from "lucide-react";
 
 const STAGE_LABELS: Record<string, string> = {
   application: "Application",
@@ -14,14 +14,12 @@ const STAGE_LABELS: Record<string, string> = {
 };
 
 export default function ElectoralDashboard() {
-  const { electionPeriod, candidates } = useApp();
+  const { electionPeriod, currentUser } = useApp();
 
-  const approvedCandidates = candidates.filter((c) => c.status === "approved").length;
   const currentStage = resolveStage(electionPeriod);
 
   const stats = [
     { label: "Election Status", value: electionPeriod.isActive ? "Active" : "Inactive", icon: <Activity size={20} />, color: electionPeriod.isActive ? "#22C55E" : "#9CA3AF" },
-    { label: "Approved Candidates", value: approvedCandidates, icon: <BarChart2 size={20} />, color: "#5C0102", link: "/admin/candidates" },
     { label: "Candidacy Open", value: electionPeriod.candidacyOpen ? "Yes" : "No", icon: <CheckCircle size={20} />, color: electionPeriod.candidacyOpen ? "#22C55E" : "#EF4444" },
     { label: "Results Published", value: electionPeriod.resultsPublished ? "Yes" : "No", icon: <Calendar size={20} />, color: electionPeriod.resultsPublished ? "#22C55E" : "#9CA3AF" },
   ];
@@ -30,6 +28,7 @@ export default function ElectoralDashboard() {
     <div className="p-6 md:p-8 max-w-7xl mx-auto">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
         <h1 className="text-gray-900 mb-1">Electoral Board Dashboard</h1>
+        <p className="text-gray-800 text-sm font-semibold">{currentUser?.name}</p>
         <p className="text-gray-500 text-sm">Manage election periods and oversee the voting process.</p>
       </motion.div>
 

@@ -423,7 +423,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         try {
           const profile = await getCurrentProfileRpc();
           if (cancelled || !profile) return;
-          if (profile.must_change_password !== currentUser.mustChangePassword) {
+          // Identity re-sync: the stored blob is written at login and would
+          // otherwise keep a stale name/email forever (068 regenerated every
+          // officer's name in adminprofiles — the sidebar/header/profile all
+          // read currentUser.name, so they must follow the DB).  Kept
+          // separate from the forced-change flag, whose re-read is the D-14
+          // refresh-safe gate.
+          const flagChanged =
+            Boolean(profile.must_change_password) !== Boolean(currentUser.mustChangePassword);
+          const identityChanged =
+            (profile.full_name || currentUser.name) !== currentUser.name ||
+            (profile.email || currentUser.email) !== currentUser.email;
+          if (flagChanged || identityChanged) {
             const merged: CurrentUser = {
               ...currentUser,
               name: profile.full_name || currentUser.name,

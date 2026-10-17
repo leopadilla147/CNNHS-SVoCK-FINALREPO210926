@@ -70,10 +70,10 @@
 --     that no longer contains them.  STEP 3 = 'yes' accepts that.
 --
 -- TRANSACTION / RE-RUN
---   One transaction: any failure rolls everything back.  The list of rows
---   to move is captured in the session temp table svock_repoint_targets
---   (ON COMMIT DROP), so re-running is safe -- a second run either moves
---   0 rows or stops in the guard.
+--   Any failure rolls the whole thing back.  The list of rows to move is
+--   derived on demand by the pg_temp function repoint_targets() -- NOT a
+--   temp table (see the trap note further down) -- so re-running is safe:
+--   a second run either moves 0 rows or stops in the guard.
 --   RUNS AS: the SQL editor's owner role.  RLS is enabled on these tables
 --   but never FORCED, so owner writes are accepted.
 --
@@ -244,6 +244,26 @@ as $$
   end
 $$;
 
+-- The rows to move, derived on demand.  A TEMP TABLE is not safe in the
+-- Supabase SQL editor: the runner commits between statements, which fires
+-- ON COMMIT DROP and makes the relation vanish mid-script ("relation ...
+-- does not exist") -- see Party-President-Approval-Handoff.md trap #2 and
+-- the same workaround in 052:42-47.  A pg_temp FUNCTION only holds logic,
+-- is unaffected by those commits, and leaves nothing behind.
+create or replace function pg_temp.repoint_targets()
+returns table (kind text, id uuid, from_period uuid)
+language sql
+stable
+as $$
+  select 'party'::text, p.id, p.election_period_id
+    from public.parties p
+   where p.id = any (pg_temp.repoint_party_ids())
+  union all
+  select 'candidate'::text, c.id, c.election_period_id
+    from public.candidates c
+   where c.id = any (pg_temp.repoint_candidate_ids())
+$$;
+
 begin;
 
 -- ---------------------------------------------------------------------
@@ -295,24 +315,10 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------
--- Capture the rows to move.  Only rows that actually exist are captured,
--- each with the period it is leaving, so the guard, the audit row and the
--- verify query all see the same list.  ON COMMIT DROP cleans it up.
--- ---------------------------------------------------------------------
-create temporary table svock_repoint_targets (kind text, id uuid, from_period uuid)
-  on commit drop;
-
-insert into svock_repoint_targets (kind, id, from_period)
-  select 'party', p.id, p.election_period_id
-    from public.parties p
-   where p.id = any (pg_temp.repoint_party_ids())
-union all
-  select 'candidate', c.id, c.election_period_id
-    from public.candidates c
-   where c.id = any (pg_temp.repoint_candidate_ids());
-
--- ---------------------------------------------------------------------
--- GUARD B -- the checks that need the captured rows.
+-- GUARD B -- the checks that need the target rows.  The list is derived by
+-- pg_temp.repoint_targets() (defined above): only rows that actually exist
+-- are seen, each with the period it is leaving, so the guard, the audit
+-- row and the verify query all read the same list.
 -- ---------------------------------------------------------------------
 do $$
 declare
@@ -332,7 +338,7 @@ begin
   select count(*) filter (where kind = 'party'),
          count(*) filter (where kind = 'candidate')
     into v_np, v_nc
-    from svock_repoint_targets;
+    from pg_temp.repoint_targets();
 
   if v_np = 0 and v_nc = 0 then
     raise notice 'NOTHING TO MOVE: no matching parties or candidates were found (STEP 2 = %). 0 rows will be written.',
@@ -348,7 +354,7 @@ begin
   select string_agg(format('%s (%s)', p.name, p.id), ', ' order by p.name)
     into v_names
     from public.parties p
-   where p.id in (select id from svock_repoint_targets where kind = 'party')
+   where p.id in (select id from pg_temp.repoint_targets() where kind = 'party')
      and exists (
            select 1 from public.parties q
             where q.election_period_id = v_new
@@ -364,7 +370,7 @@ begin
   select string_agg(format('%s %s (student %s)', c.surname, c.given_name, c.student_id), ', ' order by c.surname)
     into v_students
     from public.candidates c
-   where c.id in (select id from svock_repoint_targets where kind = 'candidate')
+   where c.id in (select id from pg_temp.repoint_targets() where kind = 'candidate')
      and exists (
            select 1 from public.candidates d
             where d.election_period_id = v_new
@@ -380,10 +386,10 @@ begin
   select string_agg(format('%s %s -> party %s', c.surname, c.given_name, c.party_id), ', ' order by c.surname)
     into v_orphans
     from public.candidates c
-   where c.id in (select id from svock_repoint_targets where kind = 'candidate')
+   where c.id in (select id from pg_temp.repoint_targets() where kind = 'candidate')
      and c.party_id is not null
      and not exists (
-           select 1 from svock_repoint_targets t
+           select 1 from pg_temp.repoint_targets() t
             where t.kind = 'party'
               and t.id = c.party_id
          );
@@ -394,7 +400,7 @@ begin
 
   -- 4) the period(s) being emptied must not already hold election history
   select array_agg(distinct t.from_period) into v_from
-    from svock_repoint_targets t;
+    from pg_temp.repoint_targets() t;
 
   if v_from is not null then
     select count(*) into v_votes   from public.votes v         where v.election_period_id         = any (v_from);
@@ -439,12 +445,12 @@ $$;
 with moved_parties as (
   update public.parties p
      set election_period_id = pg_temp.repoint_new_period_id()
-   where p.id in (select t.id from svock_repoint_targets t where t.kind = 'party')
+   where p.id in (select t.id from pg_temp.repoint_targets() t where t.kind = 'party')
   returning p.id
 )
 update public.candidates c
    set election_period_id = pg_temp.repoint_new_period_id()
- where c.id in (select t.id from svock_repoint_targets t where t.kind = 'candidate');
+ where c.id in (select t.id from pg_temp.repoint_targets() t where t.kind = 'candidate');
 
 -- ---------------------------------------------------------------------
 -- Audit trail -- actor_role = 'system' satisfies the 027 check and the
@@ -457,16 +463,16 @@ select
   'system',
   'Election Period Repointed',
   format('Moved %s of %s selected row(s) to election period %s%s.',
-    (select count(*) from svock_repoint_targets t
+    (select count(*) from pg_temp.repoint_targets() t
       where t.from_period is distinct from pg_temp.repoint_new_period_id()),
-    (select count(*) from svock_repoint_targets t),
+    (select count(*) from pg_temp.repoint_targets() t),
     pg_temp.repoint_new_period_id(),
     case when pg_temp.repoint_source_period_id() is not null
          then ' (source period ' || pg_temp.repoint_source_period_id()::text || ')'
          else ' (slate seeded by AZ/seed_parties_and_candidates.sql)'
     end),
   'warning'
-where exists (select 1 from svock_repoint_targets t);
+where exists (select 1 from pg_temp.repoint_targets() t);
 
 -- ---------------------------------------------------------------------
 -- VERIFY -- still inside the transaction.  A clean first run reports:
@@ -476,19 +482,19 @@ where exists (select 1 from svock_repoint_targets t);
 --   A second run reports rows_moved = 0.
 -- ---------------------------------------------------------------------
 select
-  (select count(*) from svock_repoint_targets where kind = 'party')                       as parties_selected,
-  (select count(*) from svock_repoint_targets where kind = 'candidate')                   as candidates_selected,
+  (select count(*) from pg_temp.repoint_targets() where kind = 'party')                       as parties_selected,
+  (select count(*) from pg_temp.repoint_targets() where kind = 'candidate')                   as candidates_selected,
   (select count(*)
-     from svock_repoint_targets t
+     from pg_temp.repoint_targets() t
      join public.parties p on p.id = t.id
     where t.kind = 'party'
       and p.election_period_id = pg_temp.repoint_new_period_id())                         as parties_now_in_target,
   (select count(*)
-     from svock_repoint_targets t
+     from pg_temp.repoint_targets() t
      join public.candidates c on c.id = t.id
     where t.kind = 'candidate'
       and c.election_period_id = pg_temp.repoint_new_period_id())                         as candidates_now_in_target,
-  (select count(*) from svock_repoint_targets t
+  (select count(*) from pg_temp.repoint_targets() t
     where t.from_period is distinct from pg_temp.repoint_new_period_id())                  as rows_moved,
   (select count(*) from public.parties p
     where p.election_period_id = pg_temp.repoint_new_period_id())                         as parties_in_target_period,

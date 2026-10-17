@@ -13,6 +13,7 @@ import {
   getCurrentPublicElection,
   type PublicCurrentCandidate,
   type PublicCurrentElection,
+  type PublicCurrentStage,
 } from "../lib/supabaseData";
 
 const POSITION_ORDER = [
@@ -35,6 +36,15 @@ const POSITION_ORDER = [
 const POSITION_INDEX = new Map<string, number>(
   POSITION_ORDER.map((position, index) => [position, index]),
 );
+
+/** Pill shown on the hero — the label follows the period's lifecycle stage. */
+const STAGE_BADGES: Record<PublicCurrentStage, { label: string; dotClass: string }> = {
+  application: { label: "The election is underway", dotClass: "bg-green-300" },
+  campaign: { label: "Campaign period", dotClass: "bg-amber-300" },
+  fingerprint_registration: { label: "Fingerprint Registration", dotClass: "bg-sky-300" },
+  voting: { label: "Voting in progress", dotClass: "bg-green-300" },
+  results: { label: "Voting concluded", dotClass: "bg-gray-300" },
+};
 
 export interface CandidatePartyGroup {
   name: string;
@@ -150,7 +160,8 @@ export default function CurrentElectionPage() {
             </div>
             <h1 className="text-3xl text-gray-900 mb-3">No Current Election</h1>
             <p className="text-gray-500 max-w-md">
-              Voting is not currently active. Approved candidates will appear here when the next election begins.
+              No election is being publicized right now. Approved candidates will appear here once the
+              Campaign Period begins.
             </p>
             <Link
               to="/"
@@ -176,11 +187,15 @@ export default function CurrentElectionPage() {
                       <span>Public election information</span>
                     </div>
                     <h1 className="text-3xl sm:text-4xl font-semibold">Current Election</h1>
-                    <p className="text-white/75 mt-2">Meet the approved candidates for the active election.</p>
+                    <p className="text-white/75 mt-2">
+                      {election.stage === "application"
+                        ? "Current stage: Application of Candidacy"
+                        : "Meet the approved candidates for the active election."}
+                    </p>
                   </div>
                   <div className="inline-flex items-center gap-2 self-start rounded-full bg-white/15 border border-white/20 px-4 py-2 text-sm">
-                    <span className="w-2 h-2 rounded-full bg-green-300" />
-                    Voting in progress
+                    <span className={`w-2 h-2 rounded-full ${STAGE_BADGES[election.stage].dotClass}`} />
+                    {STAGE_BADGES[election.stage].label}
                   </div>
                 </div>
                 <div className="grid gap-4 sm:grid-cols-3 mt-8 text-sm">
@@ -209,7 +224,18 @@ export default function CurrentElectionPage() {
               </div>
             </motion.div>
 
-            {election.candidates.length === 0 ? (
+            {election.stage === "application" ? (
+              <div className="rounded-2xl border border-gray-200 bg-white py-20 px-6 text-center shadow-sm">
+                <CalendarDays size={40} className="mx-auto mb-4 text-gray-400" />
+                <h2 className="text-xl text-gray-900 mb-2">Application of Candidacy</h2>
+                <p className="text-gray-600 mb-2">
+                  The election is underway — candidates are filing their candidacies during this stage.
+                </p>
+                <p className="text-gray-500 max-w-md mx-auto">
+                  Approved candidates will appear here once the Campaign Period begins.
+                </p>
+              </div>
+            ) : election.candidates.length === 0 ? (
               <div className="rounded-2xl border border-gray-200 bg-white py-20 px-6 text-center shadow-sm">
                 <Users size={40} className="mx-auto mb-4 text-gray-300" />
                 <h2 className="text-xl text-gray-900 mb-2">No Approved Candidates Yet</h2>

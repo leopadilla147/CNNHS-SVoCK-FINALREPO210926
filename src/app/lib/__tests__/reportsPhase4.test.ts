@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { generateComeaCertificate, generateChiefElectionReport } from "../reports";
+import { defaultAccomplishmentReportDraft } from "../accomplishmentReportContent";
 import type { Candidate } from "../../context/AppContext";
 
 function candidate(id: string, surname: string, givenName: string): Candidate {
@@ -87,27 +88,136 @@ describe("generateChiefElectionReport", () => {
     const html = generateChiefElectionReport(sampleInput);
     expect(html).toContain("ACCOMPLISHMENT REPORT");
     expect(html).toContain("DETAILS OF THE ACTIVITY");
-    expect(html).toContain("Election Summary / Highlights");
   });
 
-  it("renders the results table with totals", () => {
+  // v1.3 (Chief's request): the "Election Summary / Highlights" metrics table
+  // and the winners ("Result of the Election...") table were removed from
+  // the document.
+  it("no longer renders the Summary / winners sections", () => {
     const html = generateChiefElectionReport(sampleInput);
-    expect(html).toContain("Juan Dela Cruz");
-    expect(html).toContain("75%");
-    expect(html).toContain("<td style=\"text-align:center;\">120</td>");
+    expect(html).not.toContain("Election Summary / Highlights");
+    expect(html).not.toContain("The Result of the Election and Elected Candidates");
+    expect(html).not.toContain("No results to report");
   });
 
-  it("escapes a marked-up winnerName before it enters the HTML (D-14)", () => {
+  it("renders attached photo documentation when images are supplied", () => {
     const html = generateChiefElectionReport({
       ...sampleInput,
-      results: [{ ...sampleInput.results[0], winnerName: `<img src=x onerror=alert(9)>` }],
+      documentationImages: [
+        { url: "data:image/png;base64,AAAA", caption: "Voting day" },
+        { url: "data:image/png;base64,BBBB" },
+      ],
+    });
+    expect(html).toContain("Documentation");
+    expect(html).toContain("data:image/png;base64,AAAA");
+    expect(html).toContain("Voting day");
+    expect(html).toContain("Documentation photo 2");
+    // The photos are appended after the COMEA signatories.
+    expect(html.indexOf("Documentation")).toBeGreaterThan(html.indexOf("Approved by:"));
+  });
+
+  it("omits the Documentation section when no images are supplied", () => {
+    const html = generateChiefElectionReport(sampleInput);
+    expect(html).not.toContain("Documentation");
+  });
+
+  it("escapes a marked-up documentation caption before it enters the HTML (D-14)", () => {
+    const html = generateChiefElectionReport({
+      ...sampleInput,
+      documentationImages: [{ url: "data:image/png;base64,AAAA", caption: `<img src=x onerror=alert(9)>` }],
     });
     expect(html).not.toContain("<img src=x");
     expect(html).toContain("&lt;img");
   });
 
-  it("shows an empty-results fallback when no results are passed", () => {
-    const html = generateChiefElectionReport({ ...sampleInput, results: [] });
-    expect(html).toContain("No results to report");
+  // 068 renamed every officer account: the acting chief's name replaces the
+  // bundled template signatory on the "Approved by" line.
+  it("prints the chief's name on the Approved-by signatory when supplied", () => {
+    const html = generateChiefElectionReport({ ...sampleInput, chiefName: "Generated Officer Name" });
+    expect(html).toContain("Generated Officer Name");
+    expect(html).not.toContain("FRANCISCO D. TORRERO, SSP-II");
+  });
+
+  it("keeps the template signatory when no chiefName is supplied", () => {
+    const html = generateChiefElectionReport(sampleInput);
+    expect(html).toContain("FRANCISCO D. TORRERO, SSP-II");
+  });
+
+  it("escapes a marked-up chiefName before it enters the HTML (D-14)", () => {
+    const html = generateChiefElectionReport({
+      ...sampleInput,
+      chiefName: `<img src=x onerror=alert(1)>`,
+    });
+    expect(html).not.toContain("<img src=x");
+    expect(html).toContain("&lt;img");
+  });
+
+  // The Reports page editor hands the generator the Chief's edited draft, so
+  // the printed document must show that text instead of the bundled template.
+  it("renders the Chief's edited draft text instead of the template", () => {
+    const html = generateChiefElectionReport({
+      ...sampleInput,
+      draft: {
+        ...defaultAccomplishmentReportDraft({ periodLabel: "2026-2027" }),
+        rationaleLead: "EDITED LEAD LINE",
+        objectives: ["EDITED OBJECTIVE"],
+        highlights: ["EDITED HIGHLIGHT"],
+        financialLiquidation: "PHP 2,500.00",
+        recommendations: ["EDITED RECOMMENDATION"],
+        signatoryGroups: [
+          { heading: "Approved by:", signatories: [{ name: "EDITED SIGNATORY", role: "EDITED ROLE" }] },
+        ],
+      },
+    });
+    expect(html).toContain("EDITED LEAD LINE");
+    expect(html).toContain("EDITED OBJECTIVE");
+    expect(html).toContain("EDITED HIGHLIGHT");
+    expect(html).toContain("PHP 2,500.00");
+    expect(html).toContain("EDITED RECOMMENDATION");
+    expect(html).toContain("EDITED SIGNATORY");
+    expect(html).toContain("EDITED ROLE");
+    expect(html).not.toContain("Prepared by:");
+    expect(html).not.toContain("additional computer units or laptops");
+  });
+
+  it("falls back to the bundled COMEA text when no draft is supplied", () => {
+    const html = generateChiefElectionReport(sampleInput);
+    expect(html).toContain("Accomplishment Report of (COMEA)");
+    expect(html).toContain("additional computer units or laptops");
+    expect(html).toContain("Prepared by:");
+  });
+
+  it("takes the period, date and venue from the draft when one is supplied", () => {
+    const html = generateChiefElectionReport({
+      ...sampleInput,
+      periodLabel: "IGNORED-PERIOD",
+      dateTime: "IGNORED DATE",
+      venue: "IGNORED VENUE",
+      draft: {
+        ...defaultAccomplishmentReportDraft(),
+        periodLabel: "2031-2032",
+        dateTime: "March 3, 2031 8:00 AM",
+        venue: "EDITED VENUE",
+      },
+    });
+    expect(html).toContain("2031-2032");
+    expect(html).toContain("March 3, 2031 8:00 AM");
+    expect(html).toContain("EDITED VENUE");
+    expect(html).not.toContain("IGNORED-PERIOD");
+    expect(html).not.toContain("IGNORED VENUE");
+  });
+
+  it("keeps Documentation after the edited signatories", () => {
+    const html = generateChiefElectionReport({
+      ...sampleInput,
+      draft: {
+        ...defaultAccomplishmentReportDraft(),
+        signatoryGroups: [
+          { heading: "Approved by:", signatories: [{ name: "EDITED SIGNATORY", role: "EDITED ROLE" }] },
+        ],
+      },
+      documentationImages: [{ url: "data:image/png;base64,AAAA" }],
+    });
+    expect(html.indexOf("Documentation")).toBeGreaterThan(html.indexOf("Approved by:"));
   });
 });

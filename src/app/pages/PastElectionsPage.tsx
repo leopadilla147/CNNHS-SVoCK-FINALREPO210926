@@ -22,6 +22,28 @@ function formatDateRange(election: PastElectionSummary): string {
   return election.electionDate;
 }
 
+/**
+ * Most recent first.  electionDate is a YYYY-MM-DD string, so a plain compare
+ * is chronological; rows with no recorded date sink below the dated ones and
+ * fall back to the school year (itself descending).  The server already orders
+ * the RPC this way — this keeps the guarantee even for rows whose dates are
+ * missing or when an older RPC is deployed.
+ */
+export function sortPastElectionsByRecency(
+  elections: PastElectionSummary[],
+): PastElectionSummary[] {
+  return [...elections].sort((left, right) => {
+    if (left.electionDate && right.electionDate) {
+      if (left.electionDate !== right.electionDate) {
+        return left.electionDate < right.electionDate ? 1 : -1;
+      }
+    } else if (left.electionDate !== right.electionDate) {
+      return left.electionDate ? -1 : 1;
+    }
+    return right.schoolYear.localeCompare(left.schoolYear);
+  });
+}
+
 export default function PastElectionsPage() {
   const [elections, setElections] = useState<PastElectionSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,7 +56,7 @@ export default function PastElectionsPage() {
 
     listPastElections()
       .then((result) => {
-        if (active) setElections(result);
+        if (active) setElections(sortPastElectionsByRecency(result));
       })
       .catch(() => {
         if (active) {

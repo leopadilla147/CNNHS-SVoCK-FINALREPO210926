@@ -1,7 +1,16 @@
 import { describe, it, expect } from "vitest";
 import JSZip from "jszip";
 import { Packer } from "docx";
-import { buildAccomplishmentReportDocx, saveAccomplishmentReportDocx } from "../docxAccomplishmentReport";
+import {
+  buildAccomplishmentReportDocx,
+  saveAccomplishmentReportDocx,
+  type AccomplishmentReportDocxInput,
+} from "../docxAccomplishmentReport";
+import { defaultAccomplishmentReportDraft } from "../accomplishmentReportContent";
+
+/** 1x1 transparent PNG, used to exercise the embedded image path. */
+const TINY_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 const sampleInput = {
   periodLabel: "2026-2027",
@@ -44,7 +53,7 @@ const sampleInput = {
   ],
 };
 
-async function extractBodyXml(input: typeof sampleInput): Promise<string> {
+async function extractBodyXml(input: AccomplishmentReportDocxInput): Promise<string> {
   const blob = await Packer.toBlob(buildAccomplishmentReportDocx(input));
   const zip = await JSZip.loadAsync(await blob.arrayBuffer());
   const xml = await zip.file("word/document.xml")?.async("string");
@@ -61,16 +70,127 @@ describe("buildAccomplishmentReportDocx", () => {
     expect(xml).toContain("DETAILS OF THE ACTIVITY");
     expect(xml).toContain("Accomplishment Report of (COMEA)");
     expect(xml).toContain("Supreme Secondary Learner Government");
-    expect(xml).toContain("Juan Dela Cruz");
-    expect(xml).toContain("Mabuhay Party");
-    expect(xml).toContain("750");
     expect(xml).toContain("MARIEL D. PAULAR");
     expect(xml).toContain("FRANCISCO D. TORRERO, SSP-II");
   });
 
-  it("handles empty results gracefully", async () => {
-    const xml = await extractBodyXml({ ...sampleInput, results: [] });
-    expect(xml).toContain("No results to report");
+  // v1.3 (Chief's request): the "Election Summary / Highlights" metrics table
+  // and the winners ("Result of the Election...") table were removed.
+  it("no longer renders the Summary / winners sections", async () => {
+    const xml = await extractBodyXml(sampleInput);
+    expect(xml).not.toContain("Election Summary / Highlights");
+    expect(xml).not.toContain("The Result of the Election and Elected Candidates");
+    expect(xml).not.toContain("No results to report");
+  });
+
+  it("embeds attached photo documentation when images are supplied", async () => {
+    const png = Uint8Array.from(atob(TINY_PNG), (char) => char.charCodeAt(0));
+    const xml = await extractBodyXml({
+      ...sampleInput,
+      documentationImages: [
+        { data: png, type: "png", width: 40, height: 30, caption: "Voting day" },
+      ],
+    });
+    expect(xml).toContain("Documentation");
+    expect(xml).toContain("Voting day");
+    expect(xml).toContain("w:drawing");
+    // The photos are appended after the COMEA signatories.
+    expect(xml.indexOf("Documentation")).toBeGreaterThan(xml.indexOf("Approved by:"));
+  });
+
+  it("omits the Documentation section when no images are supplied", async () => {
+    const xml = await extractBodyXml(sampleInput);
+    expect(xml).not.toContain("Documentation");
+  });
+
+  // 068 renamed every officer account: the acting chief's name replaces the
+  // bundled template signatory on the "Approved by" line.
+  it("prints the chief's name on the Approved-by signatory when supplied", async () => {
+    const xml = await extractBodyXml({ ...sampleInput, chiefName: "Generated Officer Name" });
+    expect(xml).toContain("Generated Officer Name");
+    expect(xml).not.toContain("FRANCISCO D. TORRERO, SSP-II");
+  });
+
+  it("keeps the template signatory when no chiefName is supplied", async () => {
+    const xml = await extractBodyXml(sampleInput);
+    expect(xml).toContain("FRANCISCO D. TORRERO, SSP-II");
+  });
+
+  // The Reports page editor hands the builder the Chief's edited draft, so the
+  // .docx must show that text instead of the bundled template.
+  it("renders the Chief's edited draft text instead of the template", async () => {
+    const xml = await extractBodyXml({
+      ...sampleInput,
+      draft: {
+        ...defaultAccomplishmentReportDraft({ periodLabel: "2026-2027" }),
+        rationaleLead: "EDITED LEAD LINE",
+        objectives: ["EDITED OBJECTIVE"],
+        highlights: ["EDITED HIGHLIGHT"],
+        financialLiquidation: "PHP 2,500.00",
+        recommendations: ["EDITED RECOMMENDATION"],
+        signatoryGroups: [
+          { heading: "Approved by:", signatories: [{ name: "EDITED SIGNATORY", role: "EDITED ROLE" }] },
+        ],
+      },
+    });
+    expect(xml).toContain("EDITED LEAD LINE");
+    expect(xml).toContain("EDITED OBJECTIVE");
+    expect(xml).toContain("EDITED HIGHLIGHT");
+    expect(xml).toContain("PHP 2,500.00");
+    expect(xml).toContain("EDITED RECOMMENDATION");
+    expect(xml).toContain("EDITED SIGNATORY");
+    expect(xml).not.toContain("Prepared by:");
+    expect(xml).not.toContain("additional computer terminals");
+  });
+
+  it("falls back to the bundled COMEA text when no draft is supplied", async () => {
+    const xml = await extractBodyXml(sampleInput);
+    expect(xml).toContain("Accomplishment Report of (COMEA)");
+    // The printed (canonical) wording — the .docx used to drift here.
+    expect(xml).toContain("additional computer units or laptops");
+    expect(xml).toContain("Prepared by:");
+  });
+
+  it("takes the period, date and venue from the draft when one is supplied", async () => {
+    const xml = await extractBodyXml({
+      ...sampleInput,
+      periodLabel: "IGNORED-PERIOD",
+      dateTime: "IGNORED DATE",
+      venue: "IGNORED VENUE",
+      draft: {
+        ...defaultAccomplishmentReportDraft(),
+        periodLabel: "2031-2032",
+        dateTime: "March 3, 2031 8:00 AM",
+        venue: "EDITED VENUE",
+      },
+    });
+    expect(xml).toContain("2031-2032");
+    expect(xml).toContain("March 3, 2031 8:00 AM");
+    expect(xml).toContain("EDITED VENUE");
+    expect(xml).not.toContain("IGNORED-PERIOD");
+    expect(xml).not.toContain("IGNORED VENUE");
+  });
+
+  it("lays signatory blocks out two per row with the last lone one centred", async () => {
+    const xml = await extractBodyXml({
+      ...sampleInput,
+      draft: {
+        ...defaultAccomplishmentReportDraft(),
+        signatoryGroups: [
+          {
+            heading: "Noted by:",
+            signatories: [
+              { name: "FIRST PERSON", role: "Role 1" },
+              { name: "SECOND PERSON", role: "Role 2" },
+              { name: "THIRD PERSON", role: "Role 3" },
+            ],
+          },
+        ],
+      },
+    });
+    expect(xml).toContain("FIRST PERSON");
+    expect(xml).toContain("THIRD PERSON");
+    expect(xml).toContain("w:gridSpan");
   });
 });
 

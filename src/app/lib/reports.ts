@@ -1,5 +1,11 @@
 import type { Candidate, Student, ElectionPeriod, Complaint, Commissioner, LogEntry } from "../context/AppContext";
 import { escapeHtml } from "./escapeHtml";
+import {
+  defaultAccomplishmentReportDraft,
+  type AccomplishmentReportDraft,
+  type ReportSignatory,
+  type ReportSignatoryGroup,
+} from "./accomplishmentReportContent";
 import comeaCertificateArt from "../../assets/templates/COMEACertificate.png?inline";
 
 function depEdHeader(title: string, enclosure: string): string {
@@ -24,10 +30,13 @@ function footer(): string {
     </div>`;
 }
 
-export function openPrintWindow(html: string) {
-  const w = window.open('', '_blank');
-  if (!w) { alert('Please allow pop-ups to print reports.'); return; }
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Report</title>
+/**
+ * Wrap a report body in the printable A4 shell.  Used by the pop-up print
+ * window and by the on-page document preview iframe, so what the Chief edits
+ * on the Reports page is exactly what prints.
+ */
+export function wrapReportDocument(bodyHtml: string, title = "Report"): string {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
 <style>
   @page { margin: 1in; size: portrait; }
   body { font-family: 'Times New Roman', Times, serif; font-size: 11pt; line-height: 1.4; color: #000; padding: 20px; }
@@ -44,9 +53,13 @@ export function openPrintWindow(html: string) {
   h3 { font-size: 11pt; margin: 10px 0 5px; }
   ul { margin: 3px 0; padding-left: 20px; }
   @media print { body { padding: 0; } }
-</style></head><body>`);
-  w.document.write(html);
-  w.document.write('</body></html>');
+</style></head><body>${bodyHtml}</body></html>`;
+}
+
+export function openPrintWindow(html: string) {
+  const w = window.open('', '_blank');
+  if (!w) { alert('Please allow pop-ups to print reports.'); return; }
+  w.document.write(wrapReportDocument(html));
   w.document.close();
   w.focus();
   setTimeout(() => { w.print(); }, 500);
@@ -571,6 +584,11 @@ export function generateEnclosure21(logs: LogEntry[]) {
     periodLabel: string;
     dateTime?: string;
     venue?: string;
+    /**
+     * Retained for call-site compatibility.  v1.3 (Chief's request) removed
+     * the "Election Summary / Highlights" metrics table from the document, so
+     * `totals`, `approvedCandidates` and `results` are no longer rendered.
+     */
     totals: {
       totalVoters: number;
       voted: number;
@@ -579,22 +597,111 @@ export function generateEnclosure21(logs: LogEntry[]) {
     };
     approvedCandidates: Candidate[];
     results: ChiefElectionResultRow[];
+    /**
+     * The acting Chief Commissioner's name (from adminprofiles.full_name),
+     * printed on the "Approved by" signatory line.  Optional: callers that
+     * cannot resolve the chief (068 renamed every officer, so the bundled
+     * template name is only a fallback) omit it and keep the template text.
+     */
+    chiefName?: string;
+    /**
+     * Session-only photo documentation attached by the Chief.  `url` is a
+     * `data:` URL so it survives into the pop-up print window (an
+     * `about:blank` window cannot resolve app-relative URLs).
+     */
+    documentationImages?: Array<{ url: string; caption?: string }>;
+    /**
+     * The editable document body (narrative, objectives, highlights,
+     * recommendations, signatories) built by the Reports page editor.  When it
+     * is omitted the bundled COMEA template text is used, seeded with the
+     * period/date/venue/chief values above.
+     */
+    draft?: AccomplishmentReportDraft;
+  }
+
+  /** Two signatories per row; a lone signatory is centred on its own row. */
+  function signatoryGroupHtml(group: ReportSignatoryGroup): string {
+    const rows: ReportSignatory[][] = [];
+    for (let i = 0; i < group.signatories.length; i += 2) {
+      rows.push(group.signatories.slice(i, i + 2));
+    }
+
+    const cells = rows.map((row) => `<tr style="border:none;">${row
+      .map(
+        (signatory) => `
+              <td${row.length === 1 ? ' colspan="2"' : ""} style="${row.length === 1 ? "" : "width:50%; "}border:none; text-align:center; padding-top:24px;">
+                <div style="font-weight:bold; border-top:1px solid #000; width:${row.length === 1 ? "60%" : "75%"}; margin:0 auto; padding-top:4px;">${escapeHtml(signatory.name)}</div>
+                <div style="font-size:9pt; font-style:italic;">${escapeHtml(signatory.role)}</div>
+              </td>`
+      )
+      .join("")}
+            </tr>`).join("");
+
+    return `
+      <div style="font-weight:bold; font-size:10pt; margin-bottom:8px;">${escapeHtml(group.heading)}</div>
+      <table style="width:100%; border:none; margin-bottom:20px;">${cells}
+      </table>`;
   }
 
   export function generateChiefElectionReport(input: ChiefElectionReportInput): string {
-    const { periodLabel, dateTime, venue, totals, approvedCandidates, results } = input;
-    const eventDateTime = dateTime || "February 11, 2026 7:30 AM";
-    const eventVenue =
-      venue ||
-      "Camarines Norte National High School at the School's Computer Laboratory using the CNNHS SVoCK Online Voting System";
+    const {
+      periodLabel: inputPeriodLabel,
+      dateTime,
+      venue,
+      chiefName,
+      documentationImages = [],
+      draft: suppliedDraft,
+    } = input;
 
-    const rows = results.map((r) => `<tr>
-      <td>${escapeHtml(r.position)}</td>
-      <td>${escapeHtml(r.winnerName)}</td>
-      <td>${escapeHtml(r.party)}</td>
-      <td style="text-align:center;">${escapeHtml(r.gradeLevel)}</td>
-      <td style="text-align:center;">${r.votes}</td>
-    </tr>`).join('');
+    // Everything the Chief can edit lives in the draft; without one we fall
+    // back to the bundled COMEA template text seeded with the live values.
+    const draft = suppliedDraft ?? defaultAccomplishmentReportDraft({
+      periodLabel: inputPeriodLabel,
+      dateTime,
+      venue,
+      chiefName,
+    });
+
+    const periodLabel = draft.periodLabel || inputPeriodLabel;
+    const eventDateTime = draft.dateTime;
+    const eventVenue = draft.venue;
+
+    // v1.3 (Chief's request): the "Election Summary / Highlights" metrics
+    // table and the winners ("Result of the Election...") table were removed
+    // from the document.  Attached photo documentation is rendered in their
+    // place, and only when the Chief actually attached some photos.
+    const documentation = documentationImages.length > 0
+      ? `
+      <h3 style="margin-top:16px;">Documentation</h3>
+      <table style="width:100%; border-collapse:collapse; margin-bottom:15px; font-size:10pt;">
+        <tbody>
+          ${documentationImages.map((image, i) => `<tr style="page-break-inside:avoid;">
+            <td style="padding:8px; text-align:center;">
+              <img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.caption || `Documentation photo ${i + 1}`)}" style="max-width:100%; max-height:360px;" />
+              ${image.caption ? `<div style="font-size:9.5pt; font-style:italic; margin-top:4px;">${escapeHtml(image.caption)}</div>` : ""}
+            </td>
+          </tr>`).join("")}
+        </tbody>
+      </table>`
+      : "";
+
+    const rationaleParagraphs = draft.rationaleParagraphs
+      .map((paragraph) => `<p style="text-align:justify; margin:0 0 8px;">${escapeHtml(paragraph)}</p>`)
+      .join("");
+
+    const objectiveItems = draft.objectives
+      .map((objective) => `<li style="margin-bottom:4px;">${escapeHtml(objective)}</li>`)
+      .join("");
+
+    const highlightParagraphs = draft.highlights
+      .map((paragraph) => `<p style="font-style:italic; margin:0 0 8px;">${escapeHtml(paragraph)}</p>`)
+      .join("");
+
+    const recommendationItems = draft.recommendations
+      .map((recommendation) => `<li style="margin-bottom:4px;">${escapeHtml(recommendation)}</li>`)
+      .join("");
+
+    const signatoryGroupsHtml = draft.signatoryGroups.map(signatoryGroupHtml).join("");
 
     const html = `
       <div style="text-align:center; font-family:'Times New Roman',serif; margin-bottom:15px;">
@@ -643,18 +750,12 @@ export function generateEnclosure21(logs: LogEntry[]) {
           <tr>
             <td colspan="3" style="padding:12px; font-size:10pt; line-height:1.45;">
               <div style="font-weight:bold; margin-bottom:4px;">1. Rationale</div>
-              <p style="font-weight:bold; margin:2px 0 6px;">Accomplishment Report of (COMEA) Learners Government — Commission on Election and Appointment.</p>
-              <p style="text-align:justify; margin:0 0 8px;">The conduct of the ${escapeHtml(periodLabel)} Student Election for the Supreme Secondary Learner Government (SSLG) aims to promote democratic participation and leadership among students of Camarines Norte National High School. Through this activity, students are given the opportunity to exercise their right to vote and select capable student leaders who will represent their interests and initiate programs that contribute to the improvement of the school community.</p>
-              <p style="text-align:justify; margin:0 0 8px;">This election also encourages students to become responsible citizens by understanding the importance of leadership, accountability, and active involvement in school governance. The use of a digital voting platform through the CNNHS SVoCK Online Voting System ensures an organized, efficient, and transparent election process while promoting responsible use of technology among learners.</p>
-              <p style="text-align:justify; margin:0 0 8px;">Furthermore, the activity strengthens student engagement and cooperation in school organizations such as SSLG which play vital roles in implementing programs related to student welfare and environmental awareness. Through this election, the school ensures that student representation remains active, inclusive, and responsive to the needs of the learners.</p>
+              <p style="font-weight:bold; margin:2px 0 6px;">${escapeHtml(draft.rationaleLead)}</p>
+              ${rationaleParagraphs}
 
               <div style="font-weight:bold; margin:10px 0 4px;">2. Objectives</div>
               <ol style="margin:2px 0 6px; padding-left:22px; text-align:justify;">
-                <li style="margin-bottom:4px;">To conduct a fair, honest, and organized election for the selection of Supreme Secondary Learner Government (SSLG) officers for School Year ${escapeHtml(periodLabel)}.</li>
-                <li style="margin-bottom:4px;">To encourage students to actively participate in school governance through responsible voting.</li>
-                <li style="margin-bottom:4px;">To develop leadership, responsibility, and cooperation among students through participation in student organizations.</li>
-                <li style="margin-bottom:4px;">To promote awareness of the importance of democratic processes and environmental responsibility in the school community.</li>
-                <li style="margin-bottom:4px;">To utilize digital technology such as the CNNHS SVoCK Online Voting System to ensure a systematic and efficient election process.</li>
+                ${objectiveItems}
               </ol>
             </td>
           </tr>
@@ -671,15 +772,14 @@ export function generateEnclosure21(logs: LogEntry[]) {
         <tbody>
           <tr>
             <td style="padding:12px; font-size:10pt; line-height:1.45; text-align:justify;">
-              <p style="font-style:italic; margin:0 0 8px;">The ${escapeHtml(periodLabel)} Student Election for SSLG was successfully conducted at Camarines Norte National High School using the CNNHS SVoCK Online Voting System as the official voting platform. Students from different grade levels in high school participated actively in the election, demonstrating enthusiasm and cooperation throughout the activity. The election process was organized and supervised by the adviser of the Organization and student officers of COMEA to ensure fairness and transparency. Students were oriented on the proper voting procedures before the activity started. The use of an online voting system made the process faster, more convenient, and well-organized, helping students understand the value of leadership, responsibility, and participation in school governance.</p>
-              <p style="font-style:italic; margin:0;">Even after facing challenges such as the limited designated area available for catering to voters, the officers and members of the organization showcased their ability to communicate clearly and implement a strategic scheduling system to accommodate all high school voters. The voting day was held successfully and every objective of the event was accomplished and fulfilled with great participation from the officers and members of the organization of COMEA. Overall, the activity was conducted smoothly and achieved its intended objectives.</p>
+              ${highlightParagraphs}
             </td>
           </tr>
           <tr>
             <th style="text-align:left; background:#e8e8e8; padding:8px;">Financial Accomplishment / Liquidation Report (if any)</th>
           </tr>
           <tr>
-            <td style="padding:8px 12px; font-size:10pt; font-weight:bold;">NONE</td>
+            <td style="padding:8px 12px; font-size:10pt; font-weight:bold;">${escapeHtml(draft.financialLiquidation)}</td>
           </tr>
           <tr>
             <th style="text-align:left; background:#e8e8e8; padding:8px;">Recommendation/s:</th>
@@ -687,104 +787,20 @@ export function generateEnclosure21(logs: LogEntry[]) {
           <tr>
             <td style="padding:10px 12px; font-size:10pt; line-height:1.45;">
               <ul style="margin:2px 0 4px; padding-left:20px;">
-                <li style="margin-bottom:4px;">It is recommended that future SSLG elections continue to utilize digital voting platforms such as the CNNHS SVoCK Online Voting System to ensure a faster, more organized, and transparent election process.</li>
-                <li style="margin-bottom:4px;">It is recommended that the school provide a more reliable network connection and additional computer units or laptops during future student elections to improve the efficiency and accessibility of the digital voting process.</li>
-                <li style="margin-bottom:4px;">It is also recommended that students be given prior orientation regarding the roles and responsibilities of SSLG officers to help them choose qualified and responsible leaders.</li>
-                <li style="margin-bottom:4px;">The school may continue to strengthen student participation in future elections by encouraging active involvement across all grade levels.</li>
-                <li style="margin-bottom:4px;">Continuous supervision and proper coordination among teachers, advisers, and student officers are also recommended to maintain the credibility and orderliness of the election process.</li>
+                ${recommendationItems}
               </ul>
             </td>
           </tr>
         </tbody>
       </table>
 
-      <!-- Election Summary / Highlights Participation Metrics Table -->
-      <h3 style="margin-top:16px;">Election Summary / Highlights</h3>
-      <table style="width:100%; border-collapse:collapse; margin-bottom:15px; font-size:10pt;">
-        <thead>
-          <tr>
-            <th style="width:60%; text-align:left;">Metric</th>
-            <th style="width:40%; text-align:center;">Value</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr><td>Approved Candidates</td><td style="text-align:center;">${approvedCandidates.length}</td></tr>
-          <tr><td>Registered Voters</td><td style="text-align:center;">${totals.totalVoters}</td></tr>
-          <tr><td>Already Voted</td><td style="text-align:center;">${totals.voted}</td></tr>
-          <tr><td>Not Yet Voted</td><td style="text-align:center;">${totals.notVoted}</td></tr>
-          <tr><td>Voter Turnout</td><td style="text-align:center;">${totals.turnoutPct}%</td></tr>
-        </tbody>
-      </table>
-
-      <!-- Official Results Table -->
-      <h3 style="margin-top:16px;">The Result of the Election and Elected Candidates for Supreme Secondary Learners Government (SSLG) Election</h3>
-      <table style="width:100%; border-collapse:collapse; margin-bottom:20px; font-size:10pt;">
-        <thead>
-          <tr>
-            <th>Position</th>
-            <th>Name of Winner</th>
-            <th>Party</th>
-            <th style="text-align:center;">Grade</th>
-            <th style="text-align:center;">Total Votes</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows || '<tr><td colspan="5" style="text-align:center;">No results to report</td></tr>'}
-        </tbody>
-      </table>
-
       <!-- Official COMEA Signatories -->
       <div style="margin-top:28px; page-break-inside:avoid; font-family:'Times New Roman',serif;">
-        <div style="font-weight:bold; font-size:10pt; margin-bottom:8px;">Prepared by:</div>
-        <table style="width:100%; border:none; margin-bottom:20px;">
-          <tr style="border:none;">
-            <td style="width:50%; border:none; text-align:center; padding-top:20px;">
-              <div style="font-weight:bold; border-top:1px solid #000; width:75%; margin:0 auto; padding-top:4px;">MARIEL D. PAULAR</div>
-              <div style="font-size:9pt; font-style:italic;">LG-COMEA Student Chairperson</div>
-            </td>
-            <td style="width:50%; border:none; text-align:center; padding-top:20px;">
-              <div style="font-weight:bold; border-top:1px solid #000; width:75%; margin:0 auto; padding-top:4px;">MARIA ZAIRA L. RIVERA</div>
-              <div style="font-size:9pt; font-style:italic;">LG-COMEA Student Secretary</div>
-            </td>
-          </tr>
-        </table>
-
-        <div style="font-weight:bold; font-size:10pt; margin-bottom:8px;">Noted by:</div>
-        <table style="width:100%; border:none; margin-bottom:15px;">
-          <tr style="border:none;">
-            <td style="width:50%; border:none; text-align:center; padding-top:20px;">
-              <div style="font-weight:bold; border-top:1px solid #000; width:85%; margin:0 auto; padding-top:4px;">MELISSA M. MELENDREZ</div>
-              <div style="font-size:9pt; font-style:italic;">LG-COMEA Electoral Commissioner</div>
-            </td>
-            <td style="width:50%; border:none; text-align:center; padding-top:20px;">
-              <div style="font-weight:bold; border-top:1px solid #000; width:85%; margin:0 auto; padding-top:4px;">MA. LOURDES M. BALANE, HT-III</div>
-              <div style="font-size:9pt; font-style:italic;">LG-COMEA Screening and Validation Commissioner</div>
-            </td>
-          </tr>
-          <tr style="border:none;">
-            <td style="width:50%; border:none; text-align:center; padding-top:35px;">
-              <div style="font-weight:bold; border-top:1px solid #000; width:85%; margin:0 auto; padding-top:4px;">RAY DUOVANI N. REGONDOLA</div>
-              <div style="font-size:9pt; font-style:italic;">LG-COMEA Electoral Co-commissioner</div>
-            </td>
-            <td style="width:50%; border:none; text-align:center; padding-top:35px;">
-              <div style="font-weight:bold; border-top:1px solid #000; width:85%; margin:0 auto; padding-top:4px;">IVY DENICE M. ABOGADO, RGC</div>
-              <div style="font-size:9pt; font-style:italic;">LG-COMEA Grievance Commissioner</div>
-            </td>
-          </tr>
-          <tr style="border:none;">
-            <td colspan="2" style="border:none; text-align:center; padding-top:35px;">
-              <div style="font-weight:bold; border-top:1px solid #000; width:50%; margin:0 auto; padding-top:4px;">WILSON ANGEL H. VILLARIN, ASP-II</div>
-              <div style="font-size:9pt; font-style:italic;">LG-COMEA Appointed Commissioner</div>
-            </td>
-          </tr>
-        </table>
-
-        <div style="font-weight:bold; font-size:10pt; margin-bottom:8px;">Approved by:</div>
-        <div style="text-align:center; width:60%; margin:0 auto; padding-top:24px;">
-          <div style="font-weight:bold; border-top:1px solid #000; padding-top:4px;">FRANCISCO D. TORRERO, SSP-II</div>
-          <div style="font-size:9.5pt; font-style:italic;">School Head / LG-COMEA Chief Commissioner</div>
-        </div>
+        ${signatoryGroupsHtml}
       </div>
+
+      <!-- Session-only photos attached by the Chief (final page, below the signatories) -->
+      ${documentation}
       ${footer()}`;
     return html;
   }

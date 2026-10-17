@@ -19,6 +19,8 @@ const {
   mockCloseFingerprintRegistrationRpc,
   mockCountActiveComplaintsRpc,
   mockResetElectionPlanRpc,
+  mockGetProclamationTallyRpc,
+  mockProclaimWinnersRpc,
   mockInsertNotification,
   mockConfirm,
 } = vi.hoisted(() => ({
@@ -32,6 +34,8 @@ const {
   mockCloseFingerprintRegistrationRpc: vi.fn(),
   mockCountActiveComplaintsRpc: vi.fn(),
   mockResetElectionPlanRpc: vi.fn(),
+  mockGetProclamationTallyRpc: vi.fn(),
+  mockProclaimWinnersRpc: vi.fn(),
   mockInsertNotification: vi.fn(),
   mockConfirm: vi.fn(),
 }));
@@ -51,7 +55,8 @@ vi.mock("../../lib/supabaseData", () => ({
   openElectionRpc: vi.fn(),
   closeElectionRpc: vi.fn(),
   publishResultsRpc: vi.fn(),
-  proclaimWinnersRpc: vi.fn().mockResolvedValue([]),
+  getProclamationTallyRpc: mockGetProclamationTallyRpc,
+  proclaimWinnersRpc: mockProclaimWinnersRpc,
 }));
 
 // The confirm dialog is a generic utility with its own behaviour; these tests
@@ -133,6 +138,8 @@ describe("AdminElectionSetup", () => {
     mockGetCurrentElectionId.mockResolvedValue(PERIOD_ID);
     mockReloadElectionPeriod.mockImplementation(async () => electionPeriod);
     mockCountActiveComplaintsRpc.mockResolvedValue(0);
+    mockGetProclamationTallyRpc.mockResolvedValue([]);
+    mockProclaimWinnersRpc.mockResolvedValue([]);
     mockStartCandidacyPeriodRpc.mockResolvedValue(PERIOD_ID);
     mockCloseCandidacyPeriodRpc.mockResolvedValue(PERIOD_ID);
     mockEndCandidacyAndScheduleMeetingRpc.mockResolvedValue("2026-09-30T09:00:00.000Z");
@@ -427,5 +434,55 @@ describe("AdminElectionSetup", () => {
     renderPage();
 
     expect(screen.getByText(/archived and kept permanently as history/)).toBeInTheDocument();
+  });
+
+  describe("proclaim winners", () => {
+    const publishedPeriod = () =>
+      period({ lifecycleStage: "results", resultsPublished: true, isActive: false });
+
+    const tallyRows = [
+      { position: "President", candidateId: "p1", candidateName: "Ada Leader", partyName: "Alpha", votes: 10 },
+      { position: "President", candidateId: "p2", candidateName: "Bea Runner", partyName: "Beta", votes: 4 },
+      { position: "Secretary", candidateId: "s1", candidateName: "Cara One", partyName: null, votes: 0 },
+      { position: "Secretary", candidateId: "s2", candidateName: "Dana Two", partyName: null, votes: 0 },
+    ];
+
+    it("shows the tally with the highest vote on top when Proclaim is clicked", async () => {
+      const user = userEvent.setup();
+      electionPeriod = publishedPeriod();
+      mockGetProclamationTallyRpc.mockResolvedValue(tallyRows);
+      renderPage();
+
+      await user.click(screen.getByRole("button", { name: /Proclaim Winners/ }));
+
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByText("Ada Leader")).toBeInTheDocument();
+      // President is a clean win; Secretary is an all-zero tie.
+      expect(within(dialog).getAllByText(/Tie/).length).toBeGreaterThan(0);
+      expect(mockGetProclamationTallyRpc).toHaveBeenCalledWith(PERIOD_ID);
+    });
+
+    it("requires the board to choose a winner when a tie occurs", async () => {
+      const user = userEvent.setup();
+      electionPeriod = publishedPeriod();
+      mockGetProclamationTallyRpc.mockResolvedValue(tallyRows);
+      renderPage();
+
+      await user.click(screen.getByRole("button", { name: /Proclaim Winners/ }));
+      const dialog = await screen.findByRole("dialog");
+
+      await user.click(within(dialog).getByRole("button", { name: /Cara One/ }));
+
+      const alert = await screen.findByRole("alertdialog");
+      await user.click(within(alert).getByRole("button", { name: /Confirm Winner/ }));
+
+      await user.click(within(dialog).getByRole("button", { name: /Proclaim Winners/ }));
+
+      await waitFor(() => {
+        expect(mockProclaimWinnersRpc).toHaveBeenCalledWith(PERIOD_ID, {
+          Secretary: { method: "manual", candidateId: "s1" },
+        });
+      });
+    });
   });
 });

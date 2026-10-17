@@ -9,9 +9,15 @@ import {
   AlignmentType,
   WidthType,
   BorderStyle,
+  ImageRun,
 } from "docx";
 import type { Candidate } from "../context/AppContext";
 import type { ChiefElectionResultRow } from "./reports";
+import {
+  defaultAccomplishmentReportDraft,
+  type AccomplishmentReportDraft,
+  type ReportSignatoryGroup,
+} from "./accomplishmentReportContent";
 
 export interface AccomplishmentReportDocxInput {
   periodLabel: string;
@@ -23,8 +29,40 @@ export interface AccomplishmentReportDocxInput {
     notVoted: number;
     turnoutPct: number;
   };
+  /**
+   * Retained for call-site compatibility.  v1.3 (Chief's request) removed the
+   * "Election Summary / Highlights" and winners tables from the document, so
+   * `totals`, `approvedCandidates` and `results` are no longer rendered.
+   */
   approvedCandidates: Candidate[];
   results: ChiefElectionResultRow[];
+  /**
+   * The acting Chief Commissioner's name (adminprofiles.full_name) for the
+   * "Approved by" signatory line.  Optional — when absent the bundled
+   * template name is printed, which is only a fallback after 068 renamed
+   * every officer account.
+   */
+  chiefName?: string;
+  /**
+   * Session-only photo documentation attached by the Chief.  `data` holds the
+   * raw image bytes (Word embeds bytes, not URLs).
+   */
+  documentationImages?: AccomplishmentReportImage[];
+  /**
+   * The editable document body built by the Reports page editor.  When it is
+   * omitted the bundled COMEA template text is used, seeded with the
+   * period/date/venue/chief values above.
+   */
+  draft?: AccomplishmentReportDraft;
+}
+
+export interface AccomplishmentReportImage {
+  data: Uint8Array;
+  type: "png" | "jpg" | "gif" | "bmp";
+  /** Already-fitted render size in points. */
+  width: number;
+  height: number;
+  caption?: string;
 }
 
 const BORDER_SINGLE = {
@@ -42,16 +80,75 @@ const BORDER_NONE = {
 };
 
 /**
+ * Lay a signatory block out two per row (a lone signatory spans the row),
+ * mirroring the bundled COMEA template.
+ */
+function signatoryRows(group: ReportSignatoryGroup): TableRow[] {
+  const rows: TableRow[] = [];
+
+  for (let i = 0; i < group.signatories.length; i += 2) {
+    const pair = group.signatories.slice(i, i + 2);
+    const isContinuation = rows.length > 0;
+
+    rows.push(
+      new TableRow({
+        children: pair.map((signatory) =>
+          new TableCell({
+            borders: BORDER_NONE,
+            ...(pair.length === 1
+              ? { columnSpan: 2 }
+              : { width: { size: 50, type: WidthType.PERCENTAGE } }),
+            children: [
+              new Paragraph({
+                text: "____________________________________",
+                alignment: AlignmentType.CENTER,
+                ...(isContinuation ? { spacing: { before: 180 } } : {}),
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: signatory.name, bold: true })],
+                alignment: AlignmentType.CENTER,
+              }),
+              new Paragraph({
+                children: [new TextRun({ text: signatory.role, italics: true })],
+                alignment: AlignmentType.CENTER,
+              }),
+            ],
+          })
+        ),
+      })
+    );
+  }
+
+  return rows;
+}
+
+/**
  * Builds the official DepEd COMEA Accomplishment Report (.docx) Document,
  * faithfully mirroring:
  * "Based Documents/LG-COMEA_ACCOMPLISHMENT-REPORT.SSLG-AND-YES-O-26-27.docx"
  */
 export function buildAccomplishmentReportDocx(input: AccomplishmentReportDocxInput): Document {
-  const { periodLabel, dateTime, venue, totals, approvedCandidates, results } = input;
-  const eventDateTime = dateTime || "February 11, 2026 7:30 AM";
-  const eventVenue =
-    venue ||
-    "Camarines Norte National High School at the School's Computer Laboratory using the CNNHS SVoCK Online Voting System";
+  const {
+    periodLabel: inputPeriodLabel,
+    dateTime,
+    venue,
+    chiefName,
+    documentationImages = [],
+    draft: suppliedDraft,
+  } = input;
+
+  // Everything the Chief can edit lives in the draft; without one we fall back
+  // to the bundled COMEA template text (keeps the two outputs in lockstep).
+  const draft = suppliedDraft ?? defaultAccomplishmentReportDraft({
+    periodLabel: inputPeriodLabel,
+    dateTime,
+    venue,
+    chiefName,
+  });
+
+  const periodLabel = draft.periodLabel || inputPeriodLabel;
+  const eventDateTime = draft.dateTime;
+  const eventVenue = draft.venue;
 
   const children: (Paragraph | Table)[] = [];
 
@@ -163,84 +260,27 @@ export function buildAccomplishmentReportDocx(input: AccomplishmentReportDocxInp
                 }),
                 new Paragraph({
                   spacing: { after: 80 },
-                  children: [
-                    new TextRun({
-                      text: "Accomplishment Report of (COMEA) Learners Government — Commission on Election and Appointment.",
-                      bold: true,
-                    }),
-                  ],
+                  children: [new TextRun({ text: draft.rationaleLead, bold: true })],
                 }),
-                new Paragraph({
-                  spacing: { after: 100 },
-                  alignment: AlignmentType.JUSTIFIED,
-                  children: [
-                    new TextRun(
-                      `The conduct of the ${periodLabel} Student Election for the Supreme Secondary Learner Government (SSLG) aims to promote democratic participation and leadership among students of Camarines Norte National High School. Through this activity, students are given the opportunity to exercise their right to vote and select capable student leaders who will represent their interests and initiate programs that contribute to the improvement of the school community.`
-                    ),
-                  ],
-                }),
-                new Paragraph({
-                  spacing: { after: 100 },
-                  alignment: AlignmentType.JUSTIFIED,
-                  children: [
-                    new TextRun(
-                      "This election also encourages students to become responsible citizens by understanding the importance of leadership, accountability, and active involvement in school governance. The use of a digital voting platform through the CNNHS SVoCK Online Voting System ensures an organized, efficient, and transparent election process while promoting responsible use of technology among learners."
-                    ),
-                  ],
-                }),
-                new Paragraph({
-                  spacing: { after: 120 },
-                  alignment: AlignmentType.JUSTIFIED,
-                  children: [
-                    new TextRun(
-                      "Furthermore, the activity strengthens student engagement and cooperation in school organizations such as SSLG which play vital roles in implementing programs related to student welfare and environmental awareness. Through this election, the school ensures that student representation remains active, inclusive, and responsive to the needs of the learners."
-                    ),
-                  ],
-                }),
+                ...draft.rationaleParagraphs.map(
+                  (text) =>
+                    new Paragraph({
+                      spacing: { after: 100 },
+                      alignment: AlignmentType.JUSTIFIED,
+                      children: [new TextRun(text)],
+                    })
+                ),
                 new Paragraph({
                   spacing: { before: 80, after: 60 },
                   children: [new TextRun({ text: "2. Objectives", bold: true })],
                 }),
-                new Paragraph({
-                  spacing: { after: 60 },
-                  children: [
-                    new TextRun(
-                      `a. To conduct a fair, honest, and organized election for the selection of Supreme Secondary Learner Government (SSLG) officers for School Year ${periodLabel}.`
-                    ),
-                  ],
-                }),
-                new Paragraph({
-                  spacing: { after: 60 },
-                  children: [
-                    new TextRun(
-                      "b. To encourage students to actively participate in school governance through responsible voting."
-                    ),
-                  ],
-                }),
-                new Paragraph({
-                  spacing: { after: 60 },
-                  children: [
-                    new TextRun(
-                      "c. To develop leadership, responsibility, and cooperation among students through participation in student organizations."
-                    ),
-                  ],
-                }),
-                new Paragraph({
-                  spacing: { after: 60 },
-                  children: [
-                    new TextRun(
-                      "d. To promote awareness of the importance of democratic processes and environmental responsibility in the school community."
-                    ),
-                  ],
-                }),
-                new Paragraph({
-                  spacing: { after: 120 },
-                  children: [
-                    new TextRun(
-                      "e. To utilize digital technology such as the CNNHS SVoCK Online Voting System to ensure a systematic and efficient election process."
-                    ),
-                  ],
-                }),
+                ...draft.objectives.map(
+                  (text, index) =>
+                    new Paragraph({
+                      spacing: { after: 60 },
+                      children: [new TextRun(`${String.fromCharCode(97 + index)}. ${text}`)],
+                    })
+                ),
               ],
             }),
           ],
@@ -265,26 +305,14 @@ export function buildAccomplishmentReportDocx(input: AccomplishmentReportDocxInp
                   children: [new TextRun({ text: "Highlights", bold: true })],
                   spacing: { after: 80 },
                 }),
-                new Paragraph({
-                  alignment: AlignmentType.JUSTIFIED,
-                  spacing: { after: 80 },
-                  children: [
-                    new TextRun({
-                      italics: true,
-                      text: `The ${periodLabel} Student Election for SSLG was successfully conducted at the Computer Laboratory of Camarines Norte National High School using the CNNHS SVoCK Online Voting System as the official voting platform. Students from different grade levels in high school participated actively in the election, demonstrating enthusiasm and cooperation throughout the activity. The election process was organized and supervised by the adviser of the Organization and student officers of COMEA to ensure fairness and transparency. Students were oriented on the proper voting procedures before the activity started. The use of an online voting system made the process faster, more convenient, and well-organized, helping students understand the value of leadership, responsibility, and participation in school governance. It also strengthened students' awareness of the importance of choosing responsible leaders who will serve the school community.`,
-                    }),
-                  ],
-                }),
-                new Paragraph({
-                  alignment: AlignmentType.JUSTIFIED,
-                  spacing: { after: 100 },
-                  children: [
-                    new TextRun({
-                      italics: true,
-                      text: `Even after facing some challenges such as the limited designated area available for catering to voters, the officers and members of the organization showcased their ability to communicate clearly and implement a strategic scheduling system to accommodate all high school voters. The voting day was held successfully and every objective of the event was fulfilled with active participation from the officers and members of the COMEA organization. Overall, the activity was conducted smoothly and achieved its intended objectives.`,
-                    }),
-                  ],
-                }),
+                ...draft.highlights.map(
+                  (text, index) =>
+                    new Paragraph({
+                      alignment: AlignmentType.JUSTIFIED,
+                      spacing: { after: index === draft.highlights.length - 1 ? 100 : 80 },
+                      children: [new TextRun({ italics: true, text })],
+                    })
+                ),
               ],
             }),
           ],
@@ -304,7 +332,7 @@ export function buildAccomplishmentReportDocx(input: AccomplishmentReportDocxInp
                   spacing: { after: 40 },
                 }),
                 new Paragraph({
-                  children: [new TextRun({ text: "NONE", bold: true })],
+                  children: [new TextRun({ text: draft.financialLiquidation, bold: true })],
                   spacing: { after: 60 },
                 }),
               ],
@@ -320,46 +348,13 @@ export function buildAccomplishmentReportDocx(input: AccomplishmentReportDocxInp
                   children: [new TextRun({ text: "Recommendation/s:", bold: true })],
                   spacing: { after: 60 },
                 }),
-                new Paragraph({
-                  spacing: { after: 40 },
-                  children: [
-                    new TextRun(
-                      "• It is recommended that future SSLG elections continue to utilize digital voting platforms such as the CNNHS SVoCK Online Voting System to ensure a faster, more organized, and transparent election process."
-                    ),
-                  ],
-                }),
-                new Paragraph({
-                  spacing: { after: 40 },
-                  children: [
-                    new TextRun(
-                      "• It is recommended that the school provide a reliable network connection and additional computer terminals during future student elections to improve the efficiency and accessibility of the voting process."
-                    ),
-                  ],
-                }),
-                new Paragraph({
-                  spacing: { after: 40 },
-                  children: [
-                    new TextRun(
-                      "• It is also recommended that students be given prior orientation regarding the roles and responsibilities of SSLG officers to help them choose qualified and responsible leaders."
-                    ),
-                  ],
-                }),
-                new Paragraph({
-                  spacing: { after: 40 },
-                  children: [
-                    new TextRun(
-                      "• The school may continue to strengthen student participation in future elections by encouraging active involvement across all grade levels."
-                    ),
-                  ],
-                }),
-                new Paragraph({
-                  spacing: { after: 60 },
-                  children: [
-                    new TextRun(
-                      "• Continuous supervision and coordination among teachers, advisers, and student officers are recommended to maintain the credibility and orderliness of the electoral process."
-                    ),
-                  ],
-                }),
+                ...draft.recommendations.map(
+                  (text, index) =>
+                    new Paragraph({
+                      spacing: { after: index === draft.recommendations.length - 1 ? 60 : 40 },
+                      children: [new TextRun(`• ${text}`)],
+                    })
+                ),
               ],
             }),
           ],
@@ -368,372 +363,62 @@ export function buildAccomplishmentReportDocx(input: AccomplishmentReportDocxInp
     })
   );
 
-  // Participation Summary / Highlights Table
-  children.push(
-    new Paragraph({
-      spacing: { before: 200, after: 80 },
-      children: [new TextRun({ text: "Election Summary / Highlights", bold: true })],
-    })
-  );
-
-  children.push(
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      rows: [
-        new TableRow({
-          children: [
-            new TableCell({
-              borders: BORDER_SINGLE,
-              children: [new Paragraph({ children: [new TextRun({ text: "Metric", bold: true })] })],
-            }),
-            new TableCell({
-              borders: BORDER_SINGLE,
-              children: [
-                new Paragraph({
-                  alignment: AlignmentType.CENTER,
-                  children: [new TextRun({ text: "Value", bold: true })],
-                }),
-              ],
-            }),
-          ],
-        }),
-        new TableRow({
-          children: [
-            new TableCell({ borders: BORDER_SINGLE, children: [new Paragraph({ text: "Approved Candidates" })] }),
-            new TableCell({
-              borders: BORDER_SINGLE,
-              children: [new Paragraph({ alignment: AlignmentType.CENTER, text: String(approvedCandidates.length) })],
-            }),
-          ],
-        }),
-        new TableRow({
-          children: [
-            new TableCell({ borders: BORDER_SINGLE, children: [new Paragraph({ text: "Registered Voters" })] }),
-            new TableCell({
-              borders: BORDER_SINGLE,
-              children: [new Paragraph({ alignment: AlignmentType.CENTER, text: String(totals.totalVoters) })],
-            }),
-          ],
-        }),
-        new TableRow({
-          children: [
-            new TableCell({ borders: BORDER_SINGLE, children: [new Paragraph({ text: "Already Voted" })] }),
-            new TableCell({
-              borders: BORDER_SINGLE,
-              children: [new Paragraph({ alignment: AlignmentType.CENTER, text: String(totals.voted) })],
-            }),
-          ],
-        }),
-        new TableRow({
-          children: [
-            new TableCell({ borders: BORDER_SINGLE, children: [new Paragraph({ text: "Not Yet Voted" })] }),
-            new TableCell({
-              borders: BORDER_SINGLE,
-              children: [new Paragraph({ alignment: AlignmentType.CENTER, text: String(totals.notVoted) })],
-            }),
-          ],
-        }),
-        new TableRow({
-          children: [
-            new TableCell({ borders: BORDER_SINGLE, children: [new Paragraph({ text: "Voter Turnout" })] }),
-            new TableCell({
-              borders: BORDER_SINGLE,
-              children: [new Paragraph({ alignment: AlignmentType.CENTER, text: `${totals.turnoutPct}%` })],
-            }),
-          ],
-        }),
-      ],
-    })
-  );
-
-  // Election Results Table
-  children.push(
-    new Paragraph({
-      spacing: { before: 200, after: 80 },
-      children: [
-        new TextRun({
-          text: "The Result of the Election and Elected Candidates for Supreme Secondary Learners Government (SSLG) Election",
-          bold: true,
-        }),
-      ],
-    })
-  );
-
-  const resultRows = results.map(
-    (r) =>
-      new TableRow({
-        children: [
-          new TableCell({ borders: BORDER_SINGLE, children: [new Paragraph({ text: r.position })] }),
-          new TableCell({ borders: BORDER_SINGLE, children: [new Paragraph({ text: r.winnerName })] }),
-          new TableCell({ borders: BORDER_SINGLE, children: [new Paragraph({ text: r.party })] }),
-          new TableCell({
-            borders: BORDER_SINGLE,
-            children: [new Paragraph({ alignment: AlignmentType.CENTER, text: r.gradeLevel })],
-          }),
-          new TableCell({
-            borders: BORDER_SINGLE,
-            children: [new Paragraph({ alignment: AlignmentType.CENTER, text: String(r.votes) })],
-          }),
-        ],
-      })
-  );
-
-  children.push(
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      rows: [
-        new TableRow({
-          children: [
-            new TableCell({
-              borders: BORDER_SINGLE,
-              children: [new Paragraph({ children: [new TextRun({ text: "Position", bold: true })] })],
-            }),
-            new TableCell({
-              borders: BORDER_SINGLE,
-              children: [new Paragraph({ children: [new TextRun({ text: "Name of Winner", bold: true })] })],
-            }),
-            new TableCell({
-              borders: BORDER_SINGLE,
-              children: [new Paragraph({ children: [new TextRun({ text: "Party", bold: true })] })],
-            }),
-            new TableCell({
-              borders: BORDER_SINGLE,
-              children: [
-                new Paragraph({
-                  alignment: AlignmentType.CENTER,
-                  children: [new TextRun({ text: "Grade", bold: true })],
-                }),
-              ],
-            }),
-            new TableCell({
-              borders: BORDER_SINGLE,
-              children: [
-                new Paragraph({
-                  alignment: AlignmentType.CENTER,
-                  children: [new TextRun({ text: "Total Votes", bold: true })],
-                }),
-              ],
-            }),
-          ],
-        }),
-        ...(resultRows.length > 0
-          ? resultRows
-          : [
-              new TableRow({
-                children: [
-                  new TableCell({
-                    borders: BORDER_SINGLE,
-                    columnSpan: 5,
-                    children: [
-                      new Paragraph({
-                        alignment: AlignmentType.CENTER,
-                        text: "No results to report",
-                      }),
-                    ],
-                  }),
-                ],
-              }),
-            ]),
-      ],
-    })
-  );
-
-  // Official Signatories
+  // Official Signatories ("Prepared by" / "Noted by" / "Approved by" …), driven
+  // by the editable draft so the .docx always matches the printed report.
   children.push(new Paragraph({ spacing: { before: 240, after: 120 } }));
 
-  children.push(
-    new Paragraph({
-      children: [new TextRun({ text: "Prepared by:", bold: true })],
-      spacing: { after: 120 },
-    })
-  );
+  draft.signatoryGroups.forEach((group, groupIndex) => {
+    children.push(
+      new Paragraph({
+        children: [new TextRun({ text: group.heading, bold: true })],
+        spacing: { before: groupIndex === 0 ? 0 : 200, after: 120 },
+      })
+    );
 
-  children.push(
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      rows: [
-        new TableRow({
+    children.push(
+      new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        rows: signatoryRows(group),
+      })
+    );
+  });
+  // Photo Documentation (v1.3, Chief's request): the "Election Summary /
+  // Highlights" and winners tables were removed from the document. The photos
+  // the Chief attached for this session are rendered as the final section,
+  // below the COMEA signatories ("Prepared by / Noted by / Approved by").
+  if (documentationImages.length > 0) {
+    children.push(
+      new Paragraph({
+        spacing: { before: 320, after: 120 },
+        children: [new TextRun({ text: "Documentation", bold: true })],
+      })
+    );
+
+    documentationImages.forEach((image) => {
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 60, after: 40 },
           children: [
-            new TableCell({
-              borders: BORDER_NONE,
-              width: { size: 50, type: WidthType.PERCENTAGE },
-              children: [
-                new Paragraph({ text: "____________________________________", alignment: AlignmentType.CENTER }),
-                new Paragraph({
-                  children: [new TextRun({ text: "MARIEL D. PAULAR", bold: true })],
-                  alignment: AlignmentType.CENTER,
-                }),
-                new Paragraph({
-                  children: [new TextRun({ text: "LG-COMEA Student Chairperson", italics: true })],
-                  alignment: AlignmentType.CENTER,
-                }),
-              ],
-            }),
-            new TableCell({
-              borders: BORDER_NONE,
-              width: { size: 50, type: WidthType.PERCENTAGE },
-              children: [
-                new Paragraph({ text: "____________________________________", alignment: AlignmentType.CENTER }),
-                new Paragraph({
-                  children: [new TextRun({ text: "MARIA ZAIRA L. RIVERA", bold: true })],
-                  alignment: AlignmentType.CENTER,
-                }),
-                new Paragraph({
-                  children: [new TextRun({ text: "LG-COMEA Student Secretary", italics: true })],
-                  alignment: AlignmentType.CENTER,
-                }),
-              ],
+            new ImageRun({
+              type: image.type,
+              data: image.data,
+              transformation: { width: image.width, height: image.height },
             }),
           ],
-        }),
-      ],
-    })
-  );
-
-  children.push(
-    new Paragraph({
-      children: [new TextRun({ text: "Noted by:", bold: true })],
-      spacing: { before: 200, after: 120 },
-    })
-  );
-
-  children.push(
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      rows: [
-        new TableRow({
-          children: [
-            new TableCell({
-              borders: BORDER_NONE,
-              width: { size: 50, type: WidthType.PERCENTAGE },
-              children: [
-                new Paragraph({ text: "____________________________________", alignment: AlignmentType.CENTER }),
-                new Paragraph({
-                  children: [new TextRun({ text: "MELISSA M. MELENDREZ", bold: true })],
-                  alignment: AlignmentType.CENTER,
-                }),
-                new Paragraph({
-                  children: [new TextRun({ text: "LG-COMEA Electoral Commissioner", italics: true })],
-                  alignment: AlignmentType.CENTER,
-                }),
-              ],
-            }),
-            new TableCell({
-              borders: BORDER_NONE,
-              width: { size: 50, type: WidthType.PERCENTAGE },
-              children: [
-                new Paragraph({ text: "____________________________________", alignment: AlignmentType.CENTER }),
-                new Paragraph({
-                  children: [new TextRun({ text: "MA. LOURDES M. BALANE, HT-III", bold: true })],
-                  alignment: AlignmentType.CENTER,
-                }),
-                new Paragraph({
-                  children: [new TextRun({ text: "LG-COMEA Screening and Validation Commissioner", italics: true })],
-                  alignment: AlignmentType.CENTER,
-                }),
-              ],
-            }),
-          ],
-        }),
-        new TableRow({
-          children: [
-            new TableCell({
-              borders: BORDER_NONE,
-              children: [
-                new Paragraph({
-                  text: "____________________________________",
-                  alignment: AlignmentType.CENTER,
-                  spacing: { before: 180 },
-                }),
-                new Paragraph({
-                  children: [new TextRun({ text: "RAY DUOVANI N. REGONDOLA", bold: true })],
-                  alignment: AlignmentType.CENTER,
-                }),
-                new Paragraph({
-                  children: [new TextRun({ text: "LG-COMEA Electoral Co-commissioner", italics: true })],
-                  alignment: AlignmentType.CENTER,
-                }),
-              ],
-            }),
-            new TableCell({
-              borders: BORDER_NONE,
-              children: [
-                new Paragraph({
-                  text: "____________________________________",
-                  alignment: AlignmentType.CENTER,
-                  spacing: { before: 180 },
-                }),
-                new Paragraph({
-                  children: [new TextRun({ text: "IVY DENICE M. ABOGADO, RGC", bold: true })],
-                  alignment: AlignmentType.CENTER,
-                }),
-                new Paragraph({
-                  children: [new TextRun({ text: "LG-COMEA Grievance Commissioner", italics: true })],
-                  alignment: AlignmentType.CENTER,
-                }),
-              ],
-            }),
-          ],
-        }),
-        new TableRow({
-          children: [
-            new TableCell({
-              borders: BORDER_NONE,
-              columnSpan: 2,
-              children: [
-                new Paragraph({
-                  text: "____________________________________",
-                  alignment: AlignmentType.CENTER,
-                  spacing: { before: 180 },
-                }),
-                new Paragraph({
-                  children: [new TextRun({ text: "WILSON ANGEL H. VILLARIN, ASP-II", bold: true })],
-                  alignment: AlignmentType.CENTER,
-                }),
-                new Paragraph({
-                  children: [new TextRun({ text: "LG-COMEA Appointed Commissioner", italics: true })],
-                  alignment: AlignmentType.CENTER,
-                }),
-              ],
-            }),
-          ],
-        }),
-      ],
-    })
-  );
-
-  children.push(
-    new Paragraph({
-      children: [new TextRun({ text: "Approved by:", bold: true })],
-      spacing: { before: 200, after: 120 },
-    })
-  );
-
-  children.push(
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      rows: [
-        new TableRow({
-          children: [
-            new TableCell({
-              borders: BORDER_NONE,
-              children: [
-                new Paragraph({ text: "____________________________________", alignment: AlignmentType.CENTER }),
-                new Paragraph({
-                  children: [new TextRun({ text: "FRANCISCO D. TORRERO, SSP-II", bold: true })],
-                  alignment: AlignmentType.CENTER,
-                }),
-                new Paragraph({
-                  children: [new TextRun({ text: "School Head / LG-COMEA Chief Commissioner", italics: true })],
-                  alignment: AlignmentType.CENTER,
-                }),
-              ],
-            }),
-          ],
-        }),
-      ],
-    })
-  );
+        })
+      );
+      if (image.caption) {
+        children.push(
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { after: 120 },
+            children: [new TextRun({ text: image.caption, italics: true, size: 18 })],
+          })
+        );
+      }
+    });
+  }
 
   return new Document({
     sections: [{ children }],

@@ -282,7 +282,7 @@ select
   true, true, true, true, true, false, false,
   case when spec.party_id is null or spec.position = 'President'
        then 'notRequired'
-       else 'presidentApprovalRequired'
+       else 'presidentApproved'
   end,
   'approved'
 from spec

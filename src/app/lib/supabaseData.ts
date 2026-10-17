@@ -1141,6 +1141,18 @@ export async function listStaffRosterRpc(): Promise<StaffRosterRow[]> {
 }
 
 /**
+ * 068 — Chief-gated officer removal (Officer Management "Remove" action).
+ * SECURITY DEFINER RPC: the DB refuses non-chief callers, the chief's own
+ * row, and self-removal, purges the target's sessions, and nulls every
+ * FK that referenced the row (035 set-null contract) so history survives.
+ */
+export async function removeOfficerRpc(officerId: string): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client.rpc("remove_officer_rpc", { p_officer_id: officerId });
+  if (error) throw new Error(error.message);
+}
+
+/**
  * 046 — Chief-gated per-position abstain counts (Election Reports).
  * 018 stores an abstain as a votes row with abstained=true and
  * candidate_id NULL; the client never reads public.votes directly, so
@@ -1171,8 +1183,33 @@ export interface PublicCurrentCandidate {
   picture?: string;
 }
 
+/**
+ * The lifecycle stages the current election is publicized under.  058's flow
+ * runs application -> campaign -> fingerprint_registration -> voting ->
+ * results: during Stage 1 (application) the page only announces that the
+ * election is underway (and which stage it is in) — the approved slate stays
+ * private while application is still current and becomes public the moment
+ * the Commissioner schedules the campaign meeting, then never disappears
+ * again mid-election.
+ */
+export type PublicCurrentStage =
+  | "application"
+  | "campaign"
+  | "fingerprint_registration"
+  | "voting"
+  | "results";
+
+const PUBLIC_CURRENT_STAGES: readonly string[] = [
+  "application",
+  "campaign",
+  "fingerprint_registration",
+  "voting",
+  "results",
+];
+
 export interface PublicCurrentElection {
   id: string;
+  stage: PublicCurrentStage;
   electionDate: string;
   startTime: string;
   endDate: string;
@@ -1184,27 +1221,51 @@ export interface PublicCurrentElection {
 
 export async function getCurrentPublicElection(): Promise<PublicCurrentElection | null> {
   const client = requireSupabase();
+  // Same "current period" rule as current_election_period_id() (058:91) and
+  // getCurrentElectionId(): never a retired (completed) row, most recently
+  // updated wins.  The old filter here was is_active = true, which only turns
+  // on when voting opens (060/063) — it kept the public slate hidden through
+  // the whole Campaign stage.  RLS already lets anon read approved candidates
+  // and election_periods at any stage (001:548/558), so the stage gate below
+  // is the only visibility rule that belongs on the client.
+  //
+  // The embedded `parties(name)` needs that same standing: 052's parties
+  // policy only opened up at `is_active`, so from the moment this slate was
+  // publicised at the Campaign stage every candidate read back with a null
+  // embed and rendered as "Independent".  070_parties_current_period_read
+  // widens it to the current period, so the embed resolves here.
   const { data: election, error: electionError } = await client
     .from("election_periods")
-    .select("id, election_date, start_time, end_date, end_time, venue, voting_method")
-    .eq("is_active", true)
-    .order("election_date", { ascending: false })
+    .select("id, lifecycle_stage, election_date, start_time, end_date, end_time, venue, voting_method")
+    .neq("lifecycle_stage", "completed")
+    .order("updated_at", { ascending: false, nullsFirst: false })
+    .order("school_year", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (electionError) throw new Error(electionError.message);
   if (!election) return null;
 
-  const { data: candidateRows, error: candidateError } = await client
-    .from("candidates")
-    .select("id, given_name, middle_name, surname, extension_name, grade_level, position, party_id, picture_url, parties(name)")
-    .eq("election_period_id", election.id)
-    .eq("status", "approved")
-    .order("surname", { ascending: true })
-    .order("given_name", { ascending: true });
-  if (candidateError) throw new Error(candidateError.message);
+  // Stage 1 (application) publicizes the period only: approved or not, the
+  // slate stays private until the campaign meeting has been scheduled.
+  const stage = election.lifecycle_stage as PublicCurrentStage | undefined;
+  if (!stage || !PUBLIC_CURRENT_STAGES.includes(stage)) return null;
+
+  let candidateRows: any[] = [];
+  if (stage !== "application") {
+    const { data, error: candidateError } = await client
+      .from("candidates")
+      .select("id, given_name, middle_name, surname, extension_name, grade_level, position, party_id, picture_url, parties(name)")
+      .eq("election_period_id", election.id)
+      .eq("status", "approved")
+      .order("surname", { ascending: true })
+      .order("given_name", { ascending: true });
+    if (candidateError) throw new Error(candidateError.message);
+    candidateRows = data || [];
+  }
 
   return {
     id: election.id,
+    stage,
     electionDate: toDate(election.election_date),
     startTime: toTime(election.start_time),
     endDate: toDate(election.end_date) || toDate(election.election_date),
@@ -1423,16 +1484,70 @@ export async function publishResultsRpc(pElectionId: string): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
-export async function proclaimWinnersRpc(pElectionId: string): Promise<{ position: string; winnerName: string; votes: number }[]> {
+/**
+ * 069 — one row of the running order for a position.  Zero-vote candidates
+ * are included so the Election Plan tab can render every position and spot
+ * an all-zero tie; the caller ranks within a position.
+ */
+export interface ProclamationTallyRow {
+  position: string;
+  candidateId: string;
+  candidateName: string;
+  partyName: string | null;
+  votes: number;
+}
+
+export async function getProclamationTallyRpc(electionId: string): Promise<ProclamationTallyRow[]> {
   if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("get_proclamation_tally_rpc", {
+    p_election_id: electionId,
+  });
+  if (error) throw new Error(error.message);
+  return (data || []).map((row: any) => ({
+    position: row.position,
+    candidateId: row.candidate_id,
+    candidateName: row.candidate_name,
+    partyName: row.party_name ?? null,
+    votes: Number(row.votes) || 0,
+  }));
+}
+
+/** How the Electoral Board resolves a tied position before proclaiming. */
+export type TieResolution =
+  | { method: "manual"; candidateId: string };
+
+export interface ProclaimedWinner {
+  position: string;
+  winnerName: string;
+  votes: number;
+  /** 'manual' when the position was a Board-resolved tie, otherwise null. */
+  resolutionMethod: string | null;
+}
+
+/**
+ * 069 — proclaim the winners.  A tied position (two or more candidates on
+ * the same top count, including an all-zero position) must carry a
+ * resolution naming the tied candidate the Electoral Board chose.
+ */
+export async function proclaimWinnersRpc(
+  pElectionId: string,
+  resolutions: Record<string, TieResolution> = {},
+): Promise<ProclaimedWinner[]> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const payload: Record<string, { method: string; candidate_id?: string }> = {};
+  for (const [position, resolution] of Object.entries(resolutions)) {
+    payload[position] = { method: "manual", candidate_id: resolution.candidateId };
+  }
   const { data, error } = await supabase.rpc("proclaim_winners_rpc", {
     p_election_id: pElectionId,
+    p_resolutions: payload,
   });
   if (error) throw new Error(error.message);
   return (data || []).map((row: any) => ({
     position: row.winning_position,
     winnerName: row.winner_name,
     votes: row.votes,
+    resolutionMethod: row.resolution_method ?? null,
   }));
 }
 

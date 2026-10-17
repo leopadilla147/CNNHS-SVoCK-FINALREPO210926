@@ -8,7 +8,7 @@ import { TempPasswordModal } from "../../../components/TempPasswordModal";
 import { useConfirm } from "../../../lib/useConfirm";
 
 export default function SslgAdviserDashboard() {
-  const { students, candidates, complaints, addLog } = useApp();
+  const { students, candidates, complaints, addLog, currentUser } = useApp();
 
   const [resettingId, setResettingId] = useState<string | null>(null);
   const [resetError, setResetError] = useState("");
@@ -57,7 +57,7 @@ export default function SslgAdviserDashboard() {
       const result = await resetPassword("student", studentId);
       setTempPassword({ name: result.name, email: result.email, password: result.password });
       addLog({
-        user: "SSLG Adviser",
+        user: currentUser?.name || "SSLG Adviser",
         role: "sslg_adviser",
         action: "Reset Password",
         details: `Reset password for student ${result.name} (${result.email})`,
@@ -74,6 +74,7 @@ export default function SslgAdviserDashboard() {
     <div className="p-6 md:p-8 max-w-7xl mx-auto">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
         <h1 className="text-gray-900 mb-1">SSLG Adviser Dashboard</h1>
+        <p className="text-gray-800 text-sm font-semibold">{currentUser?.name}</p>
         <p className="text-gray-500 text-sm">Student supervision and election oversight overview.</p>
       </motion.div>
 

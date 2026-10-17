@@ -1,14 +1,12 @@
 import React from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import {
-  BarChart,
-  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Cell,
   LineChart,
   Line,
 } from "recharts";
@@ -21,54 +19,75 @@ import {
   Activity,
   AlertCircle,
   Shield,
-  FileCheck,
   ArrowUpRight,
   Sparkles,
+  FileText,
 } from "lucide-react";
 import { useApp, type CommissionerRole } from "../../../context/AppContext";
+import { listStaffRosterRpc, type StaffRosterRow } from "../../../lib/supabaseData";
+import { useReportImages } from "../../../lib/reportImages";
 
-const COLORS = ["#5C0102", "#8B0103", "#B91C1C", "#DC2626", "#EF4444", "#F87171"];
+// adminprofiles officer roles (035): chief + the three commissioner roles.
+const TOTAL_OFFICER_ROLES = 4;
 
 export default function ChiefDashboard() {
   const {
     students,
     candidates,
-    commissioners,
     complaints,
     electionPeriod,
     logs,
+    currentUser,
   } = useApp();
 
   const approvedStudents = students.filter((s) => s.status === "approved").length;
   const pendingStudents = students.filter((s) => s.status === "pending").length;
-  const approvedCandidates = candidates.filter((c) => c.status === "approved").length;
-  const pendingCandidates = candidates.filter((c) => c.status === "pending").length;
   const totalVotes = candidates
     .filter((c) => c.status === "approved")
     .reduce((sum, c) => sum + c.votes, 0);
+
+  // 046/068: the officer roster is read through the chief-gated
+  // list_staff_roster_rpc.  fetchSupabaseState always returns an empty
+  // commissioners array (037 dropped that table), so without this fetch the
+  // KPI stat, the missing-role callout and the registration progress bar
+  // were all stuck at zero.  Only the Chief reaches this component
+  // (AdminDashboard routes on commissionerRole), so the chief-gated RPC is
+  // safe to call here.
+  const [roster, setRoster] = useState<StaffRosterRow[]>([]);
+  const [rosterLoaded, setRosterLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    listStaffRosterRpc()
+      .then((rows) => { if (!cancelled) setRoster(rows); })
+      // Degrade to zeroes — the dashboard stays usable without the roster.
+      .catch(() => undefined)
+      .finally(() => { if (!cancelled) setRosterLoaded(true); });
+    return () => { cancelled = true; };
+  }, []);
 
   const allCommissionerRoles: CommissionerRole[] = [
     "screening_validation",
     "electoral_board",
     "grievance",
   ];
-  const appointedRoles = new Set(
-    commissioners.filter((c) => c.status === "active").map((c) => c.role)
+  const activeCommissioners = roster.filter(
+    (r) => (r.role_type === "commissioner" || r.role_type === "co_commissioner") && r.status === "active"
   );
-  const missingCommissioners = allCommissionerRoles.filter(
-    (r) => !appointedRoles.has(r)
-  ).length;
+  const appointedRoles = new Set(
+    activeCommissioners
+      .map((r) => r.commissioner_role)
+      .filter((role): role is CommissionerRole => role != null)
+  );
+  // Held at zero until the roster resolves so the callout never flashes
+  // "unappointed" on a fresh load.
+  const missingCommissioners = rosterLoaded
+    ? allCommissionerRoles.filter((r) => !appointedRoles.has(r)).length
+    : 0;
+  // The Chief's own row is always present, so it counts toward the
+  // appointed officer total once the roster has resolved.
+  const appointedOfficerCount = activeCommissioners.length + (rosterLoaded ? 1 : 0);
   const openComplaints = complaints.filter((c) => c.status === "filed").length;
-
-  const voteData = candidates
-    .filter((c) => c.status === "approved")
-    .sort((a, b) => b.votes - a.votes)
-    .slice(0, 8)
-    .map((c) => ({
-      name: `${c.givenName.charAt(0)}. ${c.surname}`,
-      votes: c.votes,
-      position: c.position,
-    }));
 
   const activityData = Array.from(
     logs.reduce((map, log) => {
@@ -82,13 +101,15 @@ export default function ChiefDashboard() {
   ).slice(0, 5);
 
   const recentLogs = logs.slice(0, 5);
-  const activeCommissioners = commissioners.filter((c) => c.status === "active");
+
+  // Session-only photo documentation shared with the Election Reports page.
+  const reportImages = useReportImages();
 
   const stats = [
     {
       label: "Active Commissioners",
       value: activeCommissioners.length,
-      sub: "of 4 appointment roles",
+      sub: "commissioners & co-commissioners",
       icon: <Users size={20} />,
       color: "#5C0102",
       link: "/admin/officers",
@@ -100,14 +121,6 @@ export default function ChiefDashboard() {
       icon: <TrendingUp size={20} />,
       color: "#8B0103",
       link: "/admin/live-results",
-    },
-    {
-      label: "Approved Candidates",
-      value: approvedCandidates,
-      sub: `${pendingCandidates} pending review`,
-      icon: <FileCheck size={20} />,
-      color: "#B91C1C",
-      link: "/admin/candidates",
     },
     {
       label: "Live Results Status",
@@ -136,6 +149,7 @@ export default function ChiefDashboard() {
           <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight">
             Commission Command Center
           </h1>
+          <p className="text-sm font-semibold text-gray-800 mt-1">{currentUser?.name}</p>
           <p className="text-gray-500 text-xs sm:text-sm mt-1">
             System overview and supervisory controls for the CNNHS Online Voting & Election System.
           </p>
@@ -156,7 +170,7 @@ export default function ChiefDashboard() {
       </motion.div>
 
       {/* Primary KPI Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {stats.map((stat, i) => {
           const card = (
             <motion.div
@@ -197,9 +211,57 @@ export default function ChiefDashboard() {
         })}
       </div>
 
+      {/* Chief Commissioner Election Report */}
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="bg-white rounded-2xl border border-gray-200/90 shadow-xs p-6"
+      >
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-red-50 border border-red-100 flex items-center justify-center text-[#5C0102] shrink-0">
+              <FileText size={20} />
+            </div>
+            <div>
+              <h3 className="font-bold text-gray-900 text-base">Chief Commissioner Election Report</h3>
+              <p className="text-gray-500 text-xs sm:text-sm mt-1 max-w-2xl">
+                Official LG-COMEA Accomplishment Report for the SSLG Election — open it to read and edit
+                the text on the page, print it, download the filled .docx, and attach photo documentation
+                that is inserted into the document.
+              </p>
+              {reportImages.length > 0 && (
+                <p className="text-xs font-semibold text-emerald-700 mt-2">
+                  {reportImages.length} photo{reportImages.length !== 1 ? "s" : ""} attached this session
+                </p>
+              )}
+            </div>
+          </div>
+          <Link
+            to="/admin/reports"
+            className="inline-flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-semibold transition-all hover:opacity-90 shrink-0"
+            style={{ backgroundColor: "#5C0102" }}
+          >
+            <span>Open Election Report</span>
+            <ArrowUpRight size={15} />
+          </Link>
+        </div>
+
+        {reportImages.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-gray-100">
+            {reportImages.map((image) => (
+              <img
+                key={image.id}
+                src={image.dataUrl}
+                alt={image.caption || image.name}
+                className="w-16 h-16 rounded-xl object-cover border border-gray-200 bg-gray-50"
+              />
+            ))}
+          </div>
+        )}
+      </motion.div>
+
       {/* Pending Actions Required Callout */}
       {(pendingStudents > 0 ||
-        pendingCandidates > 0 ||
         missingCommissioners > 0 ||
         openComplaints > 0) && (
         <motion.div
@@ -230,15 +292,6 @@ export default function ChiefDashboard() {
                 <span>{pendingStudents} student registration{pendingStudents !== 1 ? "s" : ""} pending review</span>
               </Link>
             )}
-            {pendingCandidates > 0 && (
-              <Link
-                to="/admin/candidates"
-                className="inline-flex items-center gap-1.5 bg-amber-100/90 hover:bg-amber-200/90 text-amber-900 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors"
-              >
-                <AlertCircle size={13} />
-                <span>{pendingCandidates} candidate filing{pendingCandidates !== 1 ? "s" : ""} awaiting screening</span>
-              </Link>
-            )}
             {openComplaints > 0 && (
               <Link
                 to="/admin/complaints"
@@ -253,44 +306,7 @@ export default function ChiefDashboard() {
       )}
 
       {/* Analytics Visualizations */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-white rounded-2xl shadow-xs border border-gray-200/90 p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="font-bold text-gray-900 text-sm">Vote Distribution</h3>
-              <p className="text-gray-400 text-xs mt-0.5">Top candidates by total votes cast</p>
-            </div>
-            <Link
-              to="/admin/live-results"
-              className="text-xs font-semibold text-[#5C0102] hover:underline flex items-center gap-1"
-            >
-              <span>Live board</span>
-              <ArrowUpRight size={13} />
-            </Link>
-          </div>
-          <ResponsiveContainer width="100%" height={230}>
-            <BarChart data={voteData} margin={{ top: 5, right: 10, left: -15, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip
-                contentStyle={{
-                  fontSize: 12,
-                  borderRadius: 12,
-                  boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
-                  border: "1px solid #e5e7eb",
-                }}
-                formatter={(val, _, props) => [val, props.payload.position]}
-              />
-              <Bar dataKey="votes" radius={[6, 6, 0, 0]} isAnimationActive animationDuration={1000}>
-                {voteData.map((_, i) => (
-                  <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
+      <div className="grid grid-cols-1 gap-6">
         <div className="bg-white rounded-2xl shadow-xs border border-gray-200/90 p-6">
           <div className="mb-4">
             <h3 className="font-bold text-gray-900 text-sm">System Traffic</h3>
@@ -387,7 +403,7 @@ export default function ChiefDashboard() {
               <div className="flex items-center justify-between text-xs mb-1.5 font-medium">
                 <span className="text-gray-600">Commissioners Appointed</span>
                 <span className="font-bold text-gray-900">
-                  {commissioners.filter((c) => c.status === "active").length}/4
+                  {appointedOfficerCount}/{TOTAL_OFFICER_ROLES}
                 </span>
               </div>
               <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
@@ -396,7 +412,7 @@ export default function ChiefDashboard() {
                   style={{
                     width: `${Math.min(
                       100,
-                      (commissioners.filter((c) => c.status === "active").length / 4) * 100
+                      (appointedOfficerCount / TOTAL_OFFICER_ROLES) * 100
                     )}%`,
                   }}
                 />

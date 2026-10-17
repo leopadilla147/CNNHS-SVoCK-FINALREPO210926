@@ -4,6 +4,7 @@ import {
   Calendar, Clock, MapPin, Save, Play, Square, Trophy,
   CheckCircle2, Lock, AlertCircle, Loader2, Eye, FileCheck2,
   Megaphone, Users, KeyRound, RotateCcw, ShieldAlert, X, Fingerprint,
+  Gavel,
 } from "lucide-react";
 import { useApp } from "../../context/AppContext";
 import type { ElectionStage, ElectionPeriod } from "../../context/AppContext";
@@ -15,6 +16,7 @@ import {
   closeElectionRpc,
   publishResultsRpc,
   proclaimWinnersRpc,
+  getProclamationTallyRpc,
   startCandidacyPeriodRpc,
   closeCandidacyPeriodRpc,
   endCandidacyAndScheduleMeetingRpc,
@@ -23,7 +25,9 @@ import {
   countActiveComplaintsRpc,
   resetElectionPlanRpc,
 } from "../../lib/supabaseData";
+import type { ProclaimedWinner, ProclamationTallyRow, TieResolution } from "../../lib/supabaseData";
 import { isSupabaseConfigured } from "../../lib/supabase";
+import { ProclamationDialog } from "../../components/ProclamationDialog";
 
 type Stage = "application" | "campaign" | "fingerprint_registration" | "voting" | "results";
 
@@ -171,7 +175,13 @@ export default function AdminElectionSetup() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [electionId, setElectionId] = useState<string | null>(null);
-  const [proclaimedWinners, setProclaimedWinners] = useState<{ position: string; winnerName: string; votes: number }[]>([]);
+  const [proclaimedWinners, setProclaimedWinners] = useState<ProclaimedWinner[]>([]);
+  // 069 — the proclaim flow reviews the tally first and resolves any tie.
+  const [proclamationOpen, setProclamationOpen] = useState(false);
+  const [tally, setTally] = useState<ProclamationTallyRow[]>([]);
+  const [tallyLoading, setTallyLoading] = useState(false);
+  const [tallyError, setTallyError] = useState<string | null>(null);
+  const [proclaiming, setProclaiming] = useState(false);
   const [schoolYear, setSchoolYear] = useState(electionPeriod.schoolYear || "");
   const [meetingDate, setMeetingDate] = useState("");
   const [meetingTime, setMeetingTime] = useState("09:00");
@@ -191,6 +201,12 @@ export default function AdminElectionSetup() {
   // the RPCs already refuse them, and in mock mode the handlers would walk
   // the election backwards to application/campaign.
   const pastCampaign = currentStage === "voting" || currentStage === "results";
+
+  // Results unlock only after the vote was actually opened (stage voting /
+  // results) and then closed: saving the schedule alone leaves the period at
+  // campaign / fingerprint_registration.  publish_results_rpc is itself what
+  // moves the stage to 'results', so that stage cannot be the gate.
+  const votingConcluded = pastCampaign && !electionPeriod.isActive;
 
   const [form, setForm] = useState({
     startDate: electionPeriod.startDate,
@@ -624,22 +640,58 @@ export default function AdminElectionSetup() {
     }
   };
 
+  // 069 — clicking "Proclaim Winners" opens the review dialog and loads the
+  // running order for every position.  Mock mode has no tally to show, so it
+  // keeps the old one-shot behaviour.
   const handleProclaim = async () => {
     setError(null);
+    if (!isSupabaseConfigured) {
+      const ok = await proclaimConfirm.confirm();
+      if (!ok) return;
+      applyElectionPeriod({ ...electionPeriod, proclaimed: true, proclaimedAt: new Date().toISOString() });
+      addLog({
+        user: logUser, role: "Admin",
+        action: "Winners Proclaimed",
+        details: "Winners proclaimed (offline mode).",
+        type: "success",
+      });
+      showSuccess("Winners proclaimed.");
+      return;
+    }
+
+    setTally([]);
+    setTallyError(null);
+    setProclamationOpen(true);
+
+    const id = electionPeriod.id || electionId;
+    if (!id) {
+      setTallyError("There is no election period to proclaim winners for.");
+      return;
+    }
+    setTallyLoading(true);
+    try {
+      setTally(await getProclamationTallyRpc(id));
+    } catch (err: any) {
+      setTallyError(err.message || "Failed to load the vote tally.");
+    } finally {
+      setTallyLoading(false);
+    }
+  };
+
+  // 069 — the dialog has collected a resolution for every tie; this commits
+  // the proclamation and reports the winners it produced.
+  const commitProclaim = async (resolutions: Record<string, TieResolution>) => {
+    setTallyError(null);
     const ok = await proclaimConfirm.confirm();
     if (!ok) return;
-    setLoading(true);
+    setProclaiming(true);
     try {
-      let winners: { position: string; winnerName: string; votes: number }[] = [];
-      if (isSupabaseConfigured) {
-        const id = electionPeriod.id || electionId;
-        if (!id) throw new Error("There is no election period to proclaim winners for.");
-        winners = await proclaimWinnersRpc(id);
-        await refreshPeriod();
-      } else {
-        applyElectionPeriod({ ...electionPeriod, proclaimed: true, proclaimedAt: new Date().toISOString() });
-      }
+      const id = electionPeriod.id || electionId;
+      if (!id) throw new Error("There is no election period to proclaim winners for.");
+      const winners = await proclaimWinnersRpc(id, resolutions);
+      await refreshPeriod();
       setProclaimedWinners(winners);
+      setProclamationOpen(false);
       addLog({
         user: logUser, role: "Admin",
         action: "Winners Proclaimed",
@@ -648,10 +700,16 @@ export default function AdminElectionSetup() {
       });
       showSuccess(`Winners proclaimed for ${winners.length} positions.`);
     } catch (err: any) {
-      showError(err.message || "Failed to proclaim winners.");
+      // Keep the dialog open so the board can see what went wrong and retry.
+      setTallyError(err.message || "Failed to proclaim winners.");
     } finally {
-      setLoading(false);
+      setProclaiming(false);
     }
+  };
+
+  const closeProclamation = () => {
+    if (proclaiming) return;
+    setProclamationOpen(false);
   };
 
   const submitReset = async () => {
@@ -1160,7 +1218,7 @@ export default function AdminElectionSetup() {
 
       {/* Stage 5 � Results */}
       <div className={`bg-white rounded-xl p-6 shadow-sm border mb-6 transition-all ${
-        !isStageAccessible("results", electionPeriod, currentStage, hasPeriod) ? "opacity-60" : ""
+        !votingConcluded ? "opacity-60" : ""
       }`}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-gray-900 text-sm flex items-center gap-2">
@@ -1195,9 +1253,9 @@ export default function AdminElectionSetup() {
             </div>
           )}
 
-          {!electionPeriod.resultsPublished && !electionPeriod.proclaimed && !isStageAccessible("results", electionPeriod, currentStage, hasPeriod) && (
+          {!electionPeriod.resultsPublished && !electionPeriod.proclaimed && !votingConcluded && (
             <div className="flex items-center gap-2 text-xs text-gray-400 p-3 bg-gray-50 rounded-lg">
-              <Lock size={14} /> Close the voting period first to access results.
+              <Lock size={14} /> Open and close the voting period first to access results.
             </div>
           )}
 
@@ -1205,7 +1263,7 @@ export default function AdminElectionSetup() {
             {!electionPeriod.resultsPublished && (
               <button
                 onClick={handlePublishResults}
-                disabled={loading || electionPeriod.isActive || complaintBlocked}
+                disabled={loading || complaintBlocked || !votingConcluded}
                 title={complaintBlocked ? "Resolve the filed complaint before publishing results." : undefined}
                 className="px-5 py-2.5 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:opacity-90 disabled:opacity-50"
                 style={{ backgroundColor: "#5C0102" }}
@@ -1235,6 +1293,11 @@ export default function AdminElectionSetup() {
                     <div className="text-xs text-gray-500">{w.position}</div>
                     <div className="font-medium text-gray-900">{w.winnerName}</div>
                     <div className="text-xs text-gray-400">{w.votes} vote{w.votes !== 1 ? "s" : ""}</div>
+                    {w.resolutionMethod === "manual" && (
+                      <div className="mt-1 text-[10px] font-bold uppercase tracking-wider text-amber-700 flex items-center gap-1">
+                        <Gavel size={11} /> Tie — board choice
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1286,6 +1349,16 @@ export default function AdminElectionSetup() {
       {closeConfirm.dialog}
       {publishConfirm.dialog}
       {proclaimConfirm.dialog}
+
+      <ProclamationDialog
+        open={proclamationOpen}
+        loading={tallyLoading}
+        confirming={proclaiming}
+        error={tallyError}
+        tally={tally}
+        onCancel={closeProclamation}
+        onConfirm={commitProclaim}
+      />
 
       {resetOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

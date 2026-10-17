@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router";
 import {
   Menu,
   X,
@@ -7,31 +7,64 @@ import {
   User,
   ChevronDown,
   ChevronUp,
-  ChevronRight,
-  Search,
-  Calendar,
-  Users,
-  Vote,
-  BarChart2,
-  Folder,
-  Shield,
 } from "lucide-react";
 import { useApp } from "../../context/AppContext";
 import { supabase, isSupabaseConfigured } from "../../lib/supabase";
 import cnnhsLogo from "../../assets/CNNHS_Logo1.png";
 
+/** Every dropdown shut — the state each "close all" path returns to. */
+const CLOSED_DROPDOWNS = {
+  voterReg: false,
+  elections: false,
+  voting: false,
+  results: false,
+  resources: false,
+  user: false,
+};
+
 export function Header() {
   const { currentUser, setCurrentUser } = useApp();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [dropdowns, setDropdowns] = useState({
-    voterReg: false,
-    elections: false,
-    voting: false,
-    results: false,
-    resources: false,
-    user: false,
-  });
+  const [dropdowns, setDropdowns] = useState(CLOSED_DROPDOWNS);
+
+  // The desktop bar and the mobile panel are siblings, so the outside-click
+  // check needs a ref for each.
+  const headerRef = useRef<HTMLElement>(null);
+  const mobilePanelRef = useRef<HTMLDivElement>(null);
+
+  /** Close every menu — used by outside click, Escape and navigation. */
+  const closeAll = () => {
+    setDropdowns(CLOSED_DROPDOWNS);
+    setMobileOpen(false);
+  };
+
+  // Clicking away or pressing Escape closes whatever is open.
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (headerRef.current?.contains(target) || mobilePanelRef.current?.contains(target)) {
+        return;
+      }
+      closeAll();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeAll();
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
+  // Following a link must not leave a menu dangling over the new page.
+  useEffect(() => {
+    closeAll();
+  }, [pathname]);
 
   const handleLogout = async () => {
     if (isSupabaseConfigured && supabase) {
@@ -39,15 +72,7 @@ export function Header() {
     }
     setCurrentUser(null);
     navigate("/");
-    // Close all dropdowns
-    setDropdowns({
-      voterReg: false,
-      elections: false,
-      voting: false,
-      results: false,
-      resources: false,
-      user: false,
-    });
+    closeAll();
   };
 
   const getDashboardLink = () => {
@@ -57,16 +82,17 @@ export function Header() {
     return "/";
   };
 
+  // Opening one menu closes the others: only a single panel is ever open.
   const toggleDropdown = (dropdownName: keyof typeof dropdowns) => {
     setDropdowns((prev) => ({
-      ...prev,
+      ...CLOSED_DROPDOWNS,
       [dropdownName]: !prev[dropdownName],
     }));
   };
 
   return (
     <>
-      <header className="w-full bg-white border-b border-gray-200 sticky top-0 z-50 shadow-sm">
+      <header ref={headerRef} className="w-full bg-white border-b border-gray-200 sticky top-0 z-50 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             {/* Logo + Name */}
@@ -299,12 +325,28 @@ export function Header() {
                 </div>
               )}
             </div>
+
+            {/* Mobile menu toggle — the mobile panel below is hidden until tapped */}
+            <button
+              type="button"
+              onClick={() => setMobileOpen((open) => !open)}
+              aria-label="Toggle navigation menu"
+              aria-expanded={mobileOpen}
+              aria-controls="mobile-nav"
+              className="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg text-gray-700 hover:bg-gray-100 transition-colors"
+            >
+              {mobileOpen ? <X size={22} /> : <Menu size={22} />}
+            </button>
           </div>
         </div>
       </header>
 
-      {/* Mobile Menu */}
-      <div className="md:hidden border-t border-gray-200 bg-white px-4 py-4 space-y-2">
+      {/* Mobile Menu — toggled by the hamburger; hidden until opened */}
+      <div
+        id="mobile-nav"
+        ref={mobilePanelRef}
+        className={`${mobileOpen ? "block" : "hidden"} md:hidden border-t border-gray-200 bg-white px-4 py-4 space-y-2`}
+      >
         <Link
           to="/"
           onClick={() => setMobileOpen(false)}
@@ -316,10 +358,7 @@ export function Header() {
           {/* Mobile Voter Registration */}
           <div className="py-2">
             <button
-              onClick={() => {
-                setMobileOpen(false);
-                toggleDropdown("voterReg");
-              }}
+              onClick={() => toggleDropdown("voterReg")}
               className="w-full text-left text-gray-700 py-2 hover:bg-gray-50"
             >
               Voter Registration
@@ -348,10 +387,7 @@ export function Header() {
           {/* Mobile Elections */}
           <div className="py-2">
             <button
-              onClick={() => {
-                setMobileOpen(false);
-                toggleDropdown("elections");
-              }}
+              onClick={() => toggleDropdown("elections")}
               className="w-full text-left text-gray-700 py-2 hover:bg-gray-50"
             >
               Elections
@@ -410,10 +446,7 @@ export function Header() {
           {/* Mobile Voting */}
           <div className="py-2">
             <button
-              onClick={() => {
-                setMobileOpen(false);
-                toggleDropdown("voting");
-              }}
+              onClick={() => toggleDropdown("voting")}
               className="w-full text-left text-gray-700 py-2 hover:bg-gray-50"
             >
               Voting
@@ -452,10 +485,7 @@ export function Header() {
           {/* Mobile Results */}
           <div className="py-2">
             <button
-              onClick={() => {
-                setMobileOpen(false);
-                toggleDropdown("results");
-              }}
+              onClick={() => toggleDropdown("results")}
               className="w-full text-left text-gray-700 py-2 hover:bg-gray-50"
             >
               Results
@@ -494,10 +524,7 @@ export function Header() {
           {/* Mobile Resources */}
           <div className="py-2">
             <button
-              onClick={() => {
-                setMobileOpen(false);
-                toggleDropdown("resources");
-              }}
+              onClick={() => toggleDropdown("resources")}
               className="w-full text-left text-gray-700 py-2 hover:bg-gray-50"
             >
               Resources

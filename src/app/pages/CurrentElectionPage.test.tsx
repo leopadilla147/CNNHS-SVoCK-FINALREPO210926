@@ -26,6 +26,7 @@ function candidate(overrides: Partial<PublicCurrentCandidate> = {}): PublicCurre
 function election(overrides: Partial<PublicCurrentElection> = {}): PublicCurrentElection {
   return {
     id: "election-1",
+    stage: "voting",
     electionDate: "2026-09-25",
     startTime: "08:00",
     endDate: "2026-09-25",
@@ -93,6 +94,60 @@ describe("CurrentElectionPage", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "No Approved Candidates Yet" })).toBeTruthy();
     });
+  });
+
+  it("publicizes the approved slate during the campaign stage", async () => {
+    mockGetCurrentPublicElection.mockResolvedValue(
+      election({ stage: "campaign", candidates: [candidate()] }),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Campaign period")).toBeTruthy();
+      expect(screen.getByText("Candidate One")).toBeTruthy();
+    });
+  });
+
+  it("keeps the voting badge while voting is in progress", async () => {
+    mockGetCurrentPublicElection.mockResolvedValue(election());
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Voting in progress")).toBeTruthy();
+    });
+  });
+
+  it.each([
+    ["fingerprint_registration", "Fingerprint Registration"],
+    ["results", "Voting concluded"],
+  ] as const)("shows the %s stage badge", async (stage, label) => {
+    mockGetCurrentPublicElection.mockResolvedValue(election({ stage }));
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(label)).toBeTruthy();
+    });
+  });
+
+  it("announces the underway election during the Application of Candidacy stage", async () => {
+    mockGetCurrentPublicElection.mockResolvedValue(
+      election({ stage: "application", candidates: [candidate()] }),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("The election is underway")).toBeTruthy();
+      expect(screen.getByText("Current stage: Application of Candidacy")).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "Application of Candidacy" })).toBeTruthy();
+    });
+
+    // Stage 1 publicizes the period only — the slate stays hidden.
+    expect(screen.queryByText("Candidate One")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "No Current Election" })).toBeNull();
   });
 
   it("shows an error state when the election query fails", async () => {

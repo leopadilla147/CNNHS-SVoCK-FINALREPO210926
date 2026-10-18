@@ -3,6 +3,7 @@ import {
   buildPartyOptions,
   buildPartyPositionBoard,
   candidatesInLivePeriod,
+  distinctPartyNames,
   isInPartyRace,
   isPartyFounder,
   isPartyPositionOpen,
@@ -137,6 +138,47 @@ describe("livePeriodPartyNames", () => {
     ];
 
     expect(livePeriodPartyNames(mixed, period())).toEqual(["Alpha"]);
+  });
+});
+
+describe("distinctPartyNames", () => {
+  it("excludes unaffiliated candidates so Independent is not counted as a party", () => {
+    const rows = [
+      candidate({ id: "1", partyAffiliation: "Alpha" }),
+      candidate({ id: "2", partyAffiliation: undefined }),
+      candidate({ id: "3", partyAffiliation: "Beta" }),
+    ];
+
+    expect(distinctPartyNames(rows)).toEqual(["Alpha", "Beta"]);
+  });
+
+  it("excludes an affiliation literally named Independent, ignoring case and spacing", () => {
+    const rows = [
+      candidate({ id: "1", partyAffiliation: "Independent" }),
+      candidate({ id: "2", partyAffiliation: " independent " }),
+      candidate({ id: "3", partyAffiliation: "Alpha" }),
+    ];
+
+    expect(distinctPartyNames(rows)).toEqual(["Alpha"]);
+  });
+
+  it("de-duplicates parties and sorts the result", () => {
+    const rows = [
+      candidate({ id: "1", partyAffiliation: "Beta" }),
+      candidate({ id: "2", partyAffiliation: "Alpha" }),
+      candidate({ id: "3", partyAffiliation: "Beta" }),
+    ];
+
+    expect(distinctPartyNames(rows)).toEqual(["Alpha", "Beta"]);
+  });
+
+  it("returns an empty list when every candidate is unaffiliated", () => {
+    const rows = [
+      candidate({ id: "1", partyAffiliation: undefined }),
+      candidate({ id: "2", partyAffiliation: "Independent" }),
+    ];
+
+    expect(distinctPartyNames(rows)).toEqual([]);
   });
 });
 

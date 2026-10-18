@@ -143,6 +143,25 @@ export function livePeriodPartyId(
   return approvedPartyPresident(candidates, electionPeriod, partyName)?.partyId;
 }
 
+/**
+ * The distinct real party names among a set of candidates.
+ *
+ * Unaffiliated candidates are NOT a party.  A row with no `partyAffiliation`
+ * is displayed as "Independent" everywhere, and a candidate can also literally
+ * carry that name, so both the empty string and "Independent" (trimmed,
+ * case-insensitive) are dropped here.  This is what keeps a count of parties
+ * from reporting the Independent field as one of them.
+ */
+export function distinctPartyNames(candidates: Candidate[]): string[] {
+  return Array.from(
+    new Set(
+      candidates
+        .map((candidate) => (candidate.partyAffiliation || "").trim())
+        .filter((name) => name && name.toLowerCase() !== "independent")
+    )
+  ).sort();
+}
+
 /** A founder is whoever registered the slate by running for its President. */
 export function isPartyFounder(candidate: Candidate): boolean {
   return !!candidate.partyAffiliation && candidate.position === "President";

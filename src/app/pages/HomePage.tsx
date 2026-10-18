@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import { motion } from "motion/react";
 import { Shield, Users, Calendar, ChevronRight, Award } from "lucide-react";
 import { useApp } from "../context/AppContext";
+import { distinctPartyNames } from "../lib/partyScope";
 import cnnhsHero from "../assets/CNNHS1.jpg";
 import cnnhsLogo from "../assets/CNNHS_Logo1.png";
 
@@ -199,7 +200,7 @@ export default function HomePage() {
                   </div>
                   <h3 className="text-gray-900 mb-2">Political Parties</h3>
                   <p className="text-gray-600 text-sm">
-                    {Array.from(new Set(candidates.map(c => c.partyAffiliation || "Independent"))).length} parties
+                    {distinctPartyNames(candidates).length} parties
                   </p>
                 </div>
                 <div className="bg-gray-50 rounded-xl p-6 text-center">

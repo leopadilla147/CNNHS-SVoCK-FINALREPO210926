@@ -148,7 +148,7 @@ export function DashboardSidebar() {
                 : currentUser.role}
             </div>
           </div>
-          <NotificationBell />
+          <NotificationBell align="left" />
         </div>
       </div>
 

@@ -43,7 +43,7 @@ function timeAgo(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString();
 }
 
-export function NotificationBell() {
+export function NotificationBell({ align = "right" }: { align?: "left" | "right" }) {
   const { notifications, unreadCount, markAsRead, markAllAsRead, currentUser } = useApp();
   const [open, setOpen] = useState(false);
   const bellRef = useRef<HTMLDivElement>(null);
@@ -93,7 +93,13 @@ export function NotificationBell() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -8, scale: 0.95 }}
             transition={{ duration: 0.15 }}
-            className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-xl shadow-xl border border-gray-200 overflow-hidden z-50"
+            // "left" opens the panel rightward (over the main content) for
+            // the narrow sidebar, where a right-anchored w-96 panel would run
+            // off the left edge of the viewport.  The mobile top bar keeps the
+            // default "right" anchor (bell sits near the right edge there).
+            className={`absolute mt-2 w-80 sm:w-96 max-w-[calc(100vw-2rem)] bg-white rounded-xl shadow-xl border border-gray-200 overflow-hidden z-50 ${
+              align === "left" ? "left-0" : "right-0"
+            }`}
             style={{ maxHeight: "480px" }}
           >
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100" style={{ backgroundColor: "#5C0102" }}>

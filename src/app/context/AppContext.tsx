@@ -392,11 +392,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setLogs(state.logs);
   };
 
+  // Re-run on login/logout, not just mount: the initial mount happens on
+  // the login page where no session token exists yet, so the very first
+  // fetch runs unauthenticated and (per RLS) returns empty lists.  When
+  // currentUser changes the token is already saved, so this refetch finally
+  // returns the real data (previously a page reload was required).
   useEffect(() => {
     if (!isSupabaseConfigured) return;
 
     loadSupabaseState();
-  }, []);
+  }, [currentUser?.id]);
 
   // Session bootstrap (phase-02 spine): when a saved user exists, validate
   // the saved session token against the server once per mount.  A dead

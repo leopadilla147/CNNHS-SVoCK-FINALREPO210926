@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router";
 import { Search, CheckCircle, XCircle, AlertCircle, Clock, Eye, FileCheck, ChevronDown, ChevronUp, Users, Shield, FileSignature, Calendar } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useApp, Candidate } from "../../context/AppContext";
@@ -14,6 +15,14 @@ const PARTY_COLORS: Record<string, { bg: string; border: string; badge: string; 
 
 const fallbackColor = { bg: "#F9FAFB", border: "#6B7280", badge: "bg-gray-100 text-gray-600", text: "#6B7280" };
 
+// Deep links (dashboard stat cards, the pending banners) land here with a
+// filter in the query string.  Anything that is not a filter chip of this
+// page — notably "rejected", which this surface no longer offers — falls
+// back to "all" instead of producing an empty, unexplained list.
+const FILTER_VALUES = ["all", "pending", "approved"] as const;
+const readStatusFilter = (param: string | null) =>
+  param && FILTER_VALUES.includes(param as (typeof FILTER_VALUES)[number]) ? param : "all";
+
 export default function AdminCandidates() {
   const { currentUser, candidates, setCandidates, electionPeriod, addLog, insertNotification, students } = useApp();
   const isChief = currentUser?.commissionerRole === "chief";
@@ -27,11 +36,11 @@ export default function AdminCandidates() {
     : isScreening ? "Commissioner of Screening & Validation"
     : "Admin";
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [statusFilter, setStatusFilter] = useState(() => readStatusFilter(searchParams.get("filter")));
   const [expandedParty, setExpandedParty] = useState<string | null>(null);
   const [selected, setSelected] = useState<Candidate | null>(null);
   const [processing, setProcessing] = useState<string | null>(null);
-  const [submittedToChief, setSubmittedToChief] = useState<Set<string>>(new Set());
   const [officialListPosted, setOfficialListPosted] = useState(false);
   const [rejectDialog, setRejectDialog] = useState<Candidate | null>(null);
   const [rejectReasons, setRejectReasons] = useState<{ reason: string; tier: "low" | "high" }[]>([]);
@@ -40,10 +49,21 @@ export default function AdminCandidates() {
   const rejectReason = rejectReasons.map((r) => r.reason).join("; ");
   const [actionError, setActionError] = useState<string | null>(null);
   const approveConfirm = useConfirm({ title: "Approve Candidate?", description: "This will approve the candidate's application for the election.", confirmText: "Approve" });
-  const submitToChiefConfirm = useConfirm({ title: "Submit to Chief?", description: "Send this candidate to the Chief Commissioner for final approval.", confirmText: "Submit to Chief" });
   const postListConfirm = useConfirm({ title: officialListPosted ? "Unpost Official List?" : "Post Official List?", description: officialListPosted ? "The official list will no longer be visible." : "The official list of candidates will be made visible.", confirmText: officialListPosted ? "Unpost" : "Post" });
   const informConfirm = useConfirm({ title: "Inform Candidates?", description: "Send notifications to all approved candidates about their status.", confirmText: "Send" });
   const meetingNoticeConfirm = useConfirm({ title: "Send Rules Discussion Meeting Notice?", description: "Send the meeting notice to all submitted and approved candidates.", confirmText: "Send Notice" });
+
+  // Deep links (dashboard stat cards, banners, notification links) arrive
+  // with ?filter=...; the chip is applied and the param is immediately
+  // stripped from the address bar (replace, so Back doesn't resurrect it).
+  // That way the tab always OPENS on "All" — the deep link only decides
+  // which filter the very first view shows, it never sticks.
+  useEffect(() => {
+    const param = searchParams.get("filter");
+    if (!param) return;
+    setStatusFilter(readStatusFilter(param));
+    setSearchParams({}, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   // A party candidate is only the Screening Office's business once their party
   // President has approved them.  The database refuses the action either way
@@ -148,22 +168,6 @@ export default function AdminCandidates() {
     setProcessing(null);
     setRejectDialog(null);
     setSelected(null);
-  };
-
-  const handleSubmitToChief = async (candidate: Candidate) => {
-    const ok = await submitToChiefConfirm.confirm();
-    if (!ok) return;
-    setProcessing(candidate.id);
-    await new Promise((r) => setTimeout(r, 600));
-    setSubmittedToChief((prev) => new Set(prev).add(candidate.id));
-    addLog({
-      user: logUser,
-      role: "Admin",
-      action: "Submitted to Chief Commissioner",
-      details: `Submitted ${candidate.givenName} ${candidate.surname} for ${candidate.position} to Chief Commissioner for final approval`,
-      type: "info",
-    });
-    setProcessing(null);
   };
 
   const handlePostOfficialList = async () => {
@@ -315,18 +319,20 @@ export default function AdminCandidates() {
       const matchStatus = statusFilter === "all" || c.status === statusFilter;
       // A screening commissioner only sees what is ready to be screened.
       const matchGate = isChief || !awaitingPartyPresident(c);
-      return matchParty && matchSearch && matchStatus && matchGate;
+      // Rejected candidacies are no longer part of this review surface.
+      const notRejected = c.status !== "rejected";
+      return matchParty && matchSearch && matchStatus && matchGate && notRejected;
     });
   };
 
   // Party summary stats
   const getPartySummary = (party: string) => {
-    const members = candidates.filter((c) => (c.partyAffiliation || "Independent") === party);
+    const members = candidates.filter(
+      (c) => (c.partyAffiliation || "Independent") === party && c.status !== "rejected"
+    );
     return {
       total: members.length,
-      approved: members.filter((c) => c.status === "approved").length,
       pending: members.filter((c) => c.status === "pending").length,
-      rejected: members.filter((c) => c.status === "rejected").length,
     };
   };
 
@@ -391,20 +397,16 @@ export default function AdminCandidates() {
               <Calendar size={14} />
               {processing === "meeting-notice" ? "Sending Notice..." : "Send Meeting Notice"}
             </button>
-            <span className="text-xs text-gray-400">
-              {submittedToChief.size} candidate(s) submitted to Chief Commissioner
-            </span>
           </div>
         </div>
       )}
 
       {/* Overall Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6">
         {[
           { label: "Total Applications", count: candidates.length, color: "#5C0102" },
           { label: "Pending", count: candidates.filter((c) => c.status === "pending").length, color: "#F59E0B" },
           { label: "Approved", count: candidates.filter((c) => c.status === "approved").length, color: "#10B981" },
-          { label: "Rejected", count: candidates.filter((c) => c.status === "rejected").length, color: "#EF4444" },
         ].map((s) => (
           <div key={s.label} className="bg-white rounded-xl p-4 shadow-sm border border-gray-100 text-center">
             <div className="text-2xl font-bold mb-0.5" style={{ color: s.color }}>{s.count}</div>
@@ -427,7 +429,7 @@ export default function AdminCandidates() {
             />
           </div>
           <div className="flex gap-2 flex-wrap">
-            {["all", "pending", "approved", "rejected"].map((f) => (
+            {["all", "pending", "approved"].map((f) => (
               <button
                 key={f}
                 onClick={() => setStatusFilter(f)}
@@ -476,12 +478,8 @@ export default function AdminCandidates() {
                       <span className="text-xs text-gray-400 flex items-center gap-1">
                         <Users size={11} /> {summary.total} member{summary.total !== 1 ? "s" : ""}
                       </span>
-                      <span className="text-xs text-green-600 font-medium">{summary.approved} approved</span>
                       {summary.pending > 0 && (
                         <span className="text-xs text-amber-600 font-medium">{summary.pending} pending</span>
-                      )}
-                      {summary.rejected > 0 && (
-                        <span className="text-xs text-red-500 font-medium">{summary.rejected} rejected</span>
                       )}
                     </div>
                   </div>
@@ -605,21 +603,6 @@ export default function AdminCandidates() {
                                             <XCircle size={12} /> Reject
                                           </button>
                                         </>
-                                      )}
-                                      {candidate.status === "approved" && !isChief && !submittedToChief.has(candidate.id) && (
-                                        <button
-                                          onClick={() => handleSubmitToChief(candidate)}
-                                          disabled={processing === candidate.id}
-                                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-white text-xs hover:opacity-90 disabled:opacity-60"
-                                          style={{ backgroundColor: "#5C0102" }}
-                                        >
-                                          <Shield size={11} /> Submit to Chief
-                                        </button>
-                                      )}
-                                      {submittedToChief.has(candidate.id) && (
-                                        <span className="flex items-center gap-1 text-xs text-green-600">
-                                          <CheckCircle size={11} /> Submitted to Chief
-                                        </span>
                                       )}
                                     </div>
                                   </td>
@@ -926,7 +909,6 @@ export default function AdminCandidates() {
         </div>
       )}
       {approveConfirm.dialog}
-      {submitToChiefConfirm.dialog}
       {postListConfirm.dialog}
       {informConfirm.dialog}
       {meetingNoticeConfirm.dialog}

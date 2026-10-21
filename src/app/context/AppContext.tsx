@@ -26,6 +26,11 @@ export interface CurrentUser {
   commissionerRole?: CommissionerRole;
   /** 030 forced-change flag (D-04): the next login must go through /change-password. */
   mustChangePassword: boolean;
+  /** 073: optional photo.  Staff read it straight from here (profile RPC
+   *  refresh); students resolve theirs from the students list, which is
+   *  live after an upload — this copy (also returned by the profile RPC)
+   *  serves the public Navbar for every role. */
+  profilePictureUrl?: string;
 }
 
 export interface Student {
@@ -41,6 +46,8 @@ export interface Student {
   email?: string;
   password?: string;
   registeredAt: string;
+  /** 072: optional student-uploaded photo (student-pictures bucket URL). */
+  profilePictureUrl?: string;
   verificationStatus?: "autoApproved" | "forReview" | "blocked";
   mismatchCount?: number;
 }
@@ -81,9 +88,6 @@ export interface Candidate {
   documents: {
     applicationForm: boolean;
     introductoryProfile: boolean;
-    screeningForm: boolean;
-    reportCard: boolean;
-    goodMoralCert: boolean;
     eafFront?: boolean;
     eafBack?: boolean;
   };
@@ -176,6 +180,9 @@ export interface ElectionPeriod {
   rulesDiscussionAt?: string;
   /** 029 column: fixed D-06 voting method ('plurality' default). */
   votingMethod?: string;
+  /** 082 column: Digital / Manual / Hybrid election modality ('digital'
+   *  default).  Informational for now — it does not gate the kiosks. */
+  electionModality?: string;
   /** 058 column: the authoritative lifecycle stage. */
   lifecycleStage?: ElectionStage;
   /** UNIQUE (020:404) — a reset that retires a period must pick a new one. */
@@ -184,6 +191,10 @@ export interface ElectionPeriod {
    *  written by the plain schedule editor (see buildElectionPeriodSyncPayload). */
   fingerprintRegistrationStartAt?: string;
   fingerprintRegistrationEndAt?: string;
+  /** 081 columns: the merged publish & proclaim flow's board decision text.
+   *  RPC-owned (proclaim_winners_rpc) — never in the schedule sync payload. */
+  proclamationDecisionReason?: string;
+  proclamationComplaintNote?: string;
 }
 
 export interface Complaint {
@@ -311,7 +322,7 @@ interface AppContextType {
   registeredLRNs: Set<string>;
   notifications: AppNotification[];
   unreadCount: number;
-  markAsRead: (id: string) => void;
+  markAsRead: (id: string) => Promise<void>;
   markAllAsRead: () => void;
   insertNotification: (notif: Omit<AppNotification, "id" | "isRead" | "createdAt">) => void;
 }
@@ -325,7 +336,7 @@ export const emptyElectionPeriod: ElectionPeriod = {
   endDate: "",
   endTime: "",
   isActive: false,
-  venue: "IoT biometric kiosk precinct",
+  venue: "CNNHS Covered Court",
   candidacyOpen: false,
   nominationOpen: false,
   resultsPublished: false,
@@ -338,10 +349,13 @@ export const emptyElectionPeriod: ElectionPeriod = {
   proclaimed: false,
   proclaimedAt: "",
   votingMethod: "plurality",
+  electionModality: "digital",
   lifecycleStage: "application",
   schoolYear: "",
   fingerprintRegistrationStartAt: "",
   fingerprintRegistrationEndAt: "",
+  proclamationDecisionReason: "",
+  proclamationComplaintNote: "",
 };
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -438,13 +452,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
             Boolean(profile.must_change_password) !== Boolean(currentUser.mustChangePassword);
           const identityChanged =
             (profile.full_name || currentUser.name) !== currentUser.name ||
-            (profile.email || currentUser.email) !== currentUser.email;
+            (profile.email || currentUser.email) !== currentUser.email ||
+            (profile.profile_picture_url || undefined) !== currentUser.profilePictureUrl;
           if (flagChanged || identityChanged) {
             const merged: CurrentUser = {
               ...currentUser,
               name: profile.full_name || currentUser.name,
               email: profile.email || currentUser.email,
               mustChangePassword: profile.must_change_password,
+              profilePictureUrl: profile.profile_picture_url || undefined,
             };
             localStorage.setItem("svock_current_user", JSON.stringify(merged));
             setCurrentUser(merged);
@@ -542,10 +558,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (isSupabaseConfigured) void insertAuditLog(entry, currentUser?.id);
   };
 
-  const markAsRead = (id: string) => {
+  const markAsRead = async (id: string) => {
+    const wasRead = notifications.find((n) => n.id === id)?.isRead ?? false;
     setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, isRead: true } : n));
-    if (isSupabaseConfigured) {
-      supabase!.rpc("mark_notification_read_rpc", { p_notification_id: id }).then(() => {}, () => {});
+    if (!isSupabaseConfigured || !supabase) return;
+    try {
+      const { error } = await supabase.rpc("mark_notification_read_rpc", { p_notification_id: id });
+      if (error) throw error;
+    } catch {
+      // The write did not persist — undo the optimistic flag so the UI never
+      // claims a read that the database does not have (it would reappear
+      // unread on the next fetch anyway).
+      setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, isRead: wasRead } : n));
     }
   };
 

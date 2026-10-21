@@ -15,23 +15,7 @@ import {
   type PublicCurrentElection,
   type PublicCurrentStage,
 } from "../lib/supabaseData";
-
-const POSITION_ORDER = [
-  "President",
-  "Vice President",
-  "Secretary",
-  "Treasurer",
-  "Auditor",
-  "PRO",
-  "PIO",
-  "Protocol Officer",
-  "Grade 7 Representative",
-  "Grade 8 Representative",
-  "Grade 9 Representative",
-  "Grade 10 Representative",
-  "Grade 11 Representative",
-  "Grade 12 Representative",
-];
+import { FULL_POSITION_ORDER as POSITION_ORDER } from "../lib/partyScope";
 
 const POSITION_INDEX = new Map<string, number>(
   POSITION_ORDER.map((position, index) => [position, index]),

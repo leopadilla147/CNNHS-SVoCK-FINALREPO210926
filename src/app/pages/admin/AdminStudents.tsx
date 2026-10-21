@@ -344,9 +344,13 @@ export default function AdminStudents() {
                 <tr key={student.id} className="hover:bg-gray-50 transition-colors">
                   <td className="py-3 px-4">
                     <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{ backgroundColor: "#5C0102" }}>
-                        {student.firstName.charAt(0)}{student.lastName.charAt(0)}
-                      </div>
+                      {student.profilePictureUrl ? (
+                        <img src={student.profilePictureUrl} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
+                      ) : (
+                        <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{ backgroundColor: "#5C0102" }}>
+                          {student.firstName.charAt(0)}{student.lastName.charAt(0)}
+                        </div>
+                      )}
                       <div>
                         <div className="font-medium text-gray-900">{student.firstName} {student.middleName ? student.middleName + " " : ""}{student.lastName}</div>
                         <div className="text-xs text-gray-400">{student.email}</div>
@@ -415,9 +419,13 @@ export default function AdminStudents() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="p-6 text-white text-center" style={{ backgroundColor: "#5C0102" }}>
-              <div className="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-3 text-2xl font-bold text-white">
-                {selected.firstName.charAt(0)}{selected.lastName.charAt(0)}
-              </div>
+              {selected.profilePictureUrl ? (
+                <img src={selected.profilePictureUrl} alt="" className="w-16 h-16 rounded-full object-cover mx-auto mb-3 border-2 border-white/30" />
+              ) : (
+                <div className="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-3 text-2xl font-bold text-white">
+                  {selected.firstName.charAt(0)}{selected.lastName.charAt(0)}
+                </div>
+              )}
               <h3 className="text-white">
                 {selected.firstName} {selected.middleName ? selected.middleName + " " : ""}{selected.lastName}
               </h3>

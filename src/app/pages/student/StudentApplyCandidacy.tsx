@@ -665,9 +665,6 @@ export default function StudentApplyCandidacy() {
       documents: {
         applicationForm: true,
         introductoryProfile: false,
-        screeningForm: false,
-        reportCard: false,
-        goodMoralCert: false,
         eafFront: false,
         eafBack: false,
       },
@@ -936,9 +933,6 @@ export default function StudentApplyCandidacy() {
                     documents: {
                       ...c.documents,
                       introductoryProfile: dbRow.doc_introductory_profile ?? true,
-                      screeningForm: dbRow.doc_screening_form ?? true,
-                      reportCard: dbRow.doc_report_card ?? true,
-                      goodMoralCert: dbRow.doc_good_moral_cert ?? true,
                     },
                     status: dbRow.status as Candidate["status"],
                   }
@@ -955,9 +949,6 @@ export default function StudentApplyCandidacy() {
                   documents: {
                     ...c.documents,
                     introductoryProfile: true,
-                    screeningForm: true,
-                    reportCard: true,
-                    goodMoralCert: true,
                   },
                   status: "pending",
                 }

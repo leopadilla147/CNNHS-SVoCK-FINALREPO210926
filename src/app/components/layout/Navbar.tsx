@@ -54,8 +54,12 @@ export function Navbar() {
                   onClick={() => setDropdownOpen(!dropdownOpen)}
                   className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors text-sm"
                 >
-                  <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold" style={{ backgroundColor: "#5C0102" }}>
-                    {currentUser.name.charAt(0)}
+                  <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold overflow-hidden" style={{ backgroundColor: "#5C0102" }}>
+                    {currentUser.profilePictureUrl ? (
+                      <img src={currentUser.profilePictureUrl} alt="" className="w-7 h-7 object-cover" />
+                    ) : (
+                      currentUser.name.charAt(0)
+                    )}
                   </div>
                   <span className="text-gray-700">{currentUser.name}</span>
                   <ChevronDown size={14} className="text-gray-500" />

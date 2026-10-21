@@ -81,6 +81,42 @@ describe("Header dropdowns", () => {
   });
 });
 
+describe("Header avatar", () => {
+  const staffUser = {
+    id: "admin-1",
+    name: "Maria Santos",
+    role: "admin" as const,
+    email: "maria@cnnhs.edu",
+    commissionerRole: "electoral_board" as const,
+    mustChangePassword: false,
+  };
+
+  const userButton = () => desktop().getByRole("button", { name: /Maria Santos/ });
+
+  it("shows a staff photo instead of the initial when one is set", () => {
+    mockUseApp.mockReturnValue({
+      currentUser: {
+        ...staffUser,
+        profilePictureUrl:
+          "https://example.supabase.co/storage/v1/object/public/admin-pictures/admin_1_1000.jpg",
+      },
+      setCurrentUser: vi.fn(),
+    });
+
+    renderHeader();
+
+    expect(userButton().querySelector('img[src*="admin-pictures"]')).toBeTruthy();
+  });
+
+  it("falls back to the initial when no photo is set", () => {
+    mockUseApp.mockReturnValue({ currentUser: staffUser, setCurrentUser: vi.fn() });
+
+    renderHeader();
+
+    expect(userButton().querySelector("img")).toBeNull();
+  });
+});
+
 describe("Header mobile menu", () => {
   beforeEach(() => {
     mockUseApp.mockReturnValue({ currentUser: null, setCurrentUser: vi.fn() });

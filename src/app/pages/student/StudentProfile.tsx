@@ -1,20 +1,35 @@
 // file: StudentProfile.tsx
-import { useState } from "react";
-import { User, Mail, Calendar, BookOpen, GraduationCap, Hash, CheckCircle, Activity, Clock, AlertCircle, Eye, EyeOff } from "lucide-react";
+import { useRef, useState } from "react";
+import { User, Mail, Calendar, BookOpen, GraduationCap, Hash, CheckCircle, Activity, Clock, AlertCircle, Eye, EyeOff, Camera, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 import { useApp } from "../../context/AppContext";
-import { updateStudentPassword } from "../../lib/supabaseData";
+import { updateStudentPassword, uploadStudentPicture, updateMyProfilePictureRpc, deleteStudentPictureRpc } from "../../lib/supabaseData";
 import { useConfirm } from "../../lib/useConfirm";
 
 const formatStatus = (status: string) =>
   status === "ongoingSubmission" ? "Ongoing Submission" : status.charAt(0).toUpperCase() + status.slice(1);
 
+// Mirrors the student-pictures bucket limits (072): 2 MB, jpeg/png/webp.
+const MAX_PICTURE_BYTES = 2 * 1024 * 1024;
+const PICTURE_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
 export default function StudentProfile() {
-  const { currentUser, students, candidates, logs, setCurrentUser } = useApp();
+  const { currentUser, students, candidates, logs, setCurrentUser, setStudents } = useApp();
   const passwordConfirm = useConfirm({
     title: "Change Password?",
     description: "Are you sure you want to update your password?",
     confirmText: "Update",
+  });
+  const pictureConfirm = useConfirm({
+    title: "Update Profile Picture?",
+    description: "This will replace your current profile picture.",
+    confirmText: "Upload",
+  });
+  const removePictureConfirm = useConfirm({
+    title: "Remove Profile Picture?",
+    description: "Your profile will show your initials instead.",
+    confirmText: "Remove",
+    destructive: true,
   });
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -24,6 +39,10 @@ export default function StudentProfile() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [saved, setSaved] = useState(false);
   const [passwordError, setPasswordError] = useState("");
+  const [pictureUploading, setPictureUploading] = useState(false);
+  const [pictureError, setPictureError] = useState("");
+  const [pictureSaved, setPictureSaved] = useState(false);
+  const pictureInputRef = useRef<HTMLInputElement>(null);
 
   const student = students.find((s) => s.id === currentUser?.id);
   const myApplication = candidates.find((c) => c.studentId === currentUser?.id);
@@ -58,6 +77,76 @@ export default function StudentProfile() {
     }
   };
 
+  // Best-effort storage cleanup via the delete_profile_picture edge
+  // function — the profile_picture_url column is the source of truth, so
+  // a storage hiccup must never surface an error or undo a removal/
+  // replace that the RPC already persisted (worst case: one orphaned file
+  // until a manual bucket sweep).
+  const cleanupPictureObject = async (url: string | undefined) => {
+    if (!url) return;
+    try {
+      await deleteStudentPictureRpc(url);
+    } catch {
+      /* best-effort — see comment above */
+    }
+  };
+
+  // 072: upload -> RPC (the RPC re-validates the URL bucket server-side) ->
+  // local context refresh so the header/sidebar pick the photo up too.
+  const handlePictureSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file after a cancel
+    if (!file || !student?.id) return;
+    setPictureError("");
+    if (!PICTURE_MIME_TYPES.includes(file.type)) {
+      setPictureError("Only JPEG, PNG, or WebP images are allowed.");
+      return;
+    }
+    if (file.size > MAX_PICTURE_BYTES) {
+      setPictureError("Image must be 2 MB or smaller.");
+      return;
+    }
+    const confirmed = await pictureConfirm.confirm();
+    if (!confirmed) return;
+    const previousUrl = student.profilePictureUrl;
+    setPictureUploading(true);
+    try {
+      const url = await uploadStudentPicture(student.id, file);
+      await updateMyProfilePictureRpc(url);
+      setStudents(students.map((s) => (s.id === student.id ? { ...s, profilePictureUrl: url } : s)));
+      setPictureSaved(true);
+      setTimeout(() => setPictureSaved(false), 2000);
+      // The upload minted a NEW object; drop the old one only after
+      // the column points at the new URL (the edge function refuses to
+      // delete a still-referenced object).
+      await cleanupPictureObject(previousUrl);
+    } catch (err) {
+      setPictureError(err instanceof Error ? err.message : "Picture upload failed.");
+    } finally {
+      setPictureUploading(false);
+    }
+  };
+
+  const handlePictureRemove = async () => {
+    if (!student?.id) return;
+    const confirmed = await removePictureConfirm.confirm();
+    if (!confirmed) return;
+    setPictureError("");
+    const previousUrl = student.profilePictureUrl;
+    setPictureUploading(true);
+    try {
+      await updateMyProfilePictureRpc(null);
+      setStudents(students.map((s) => (s.id === student.id ? { ...s, profilePictureUrl: undefined } : s)));
+      // Column cleared first — the object is unreferenced now, so the
+      // edge function will allow the storage delete.
+      await cleanupPictureObject(previousUrl);
+    } catch (err) {
+      setPictureError(err instanceof Error ? err.message : "Could not remove the picture.");
+    } finally {
+      setPictureUploading(false);
+    }
+  };
+
   if (!student) return <div className="p-8 text-gray-500">Student information not found.</div>;
 
   const InfoRow = ({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) => (
@@ -88,10 +177,36 @@ export default function StudentProfile() {
             className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden"
           >
             <div className="p-8 text-center" style={{ background: "linear-gradient(135deg, #5C0102, #8B0103)" }}>
-              <div className="w-20 h-20 rounded-full bg-white/20 border-4 border-white/30 flex items-center justify-center mx-auto mb-3">
-                <span className="text-3xl font-bold text-white">
-                  {student.firstName.charAt(0)}{student.lastName.charAt(0)}
-                </span>
+              <div className="relative w-20 h-20 mx-auto mb-3">
+                {student.profilePictureUrl ? (
+                  <img
+                    src={student.profilePictureUrl}
+                    alt={`${student.firstName} ${student.lastName}`}
+                    className="w-20 h-20 rounded-full object-cover border-4 border-white/30"
+                  />
+                ) : (
+                  <div className="w-20 h-20 rounded-full bg-white/20 border-4 border-white/30 flex items-center justify-center">
+                    <span className="text-3xl font-bold text-white">
+                      {student.firstName.charAt(0)}{student.lastName.charAt(0)}
+                    </span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => pictureInputRef.current?.click()}
+                  disabled={pictureUploading}
+                  title={student.profilePictureUrl ? "Change profile picture" : "Upload profile picture"}
+                  className="absolute -bottom-1 -right-1 w-8 h-8 rounded-full bg-white border border-gray-200 shadow-sm flex items-center justify-center text-[#5C0102] hover:bg-gray-50 transition-colors disabled:opacity-60"
+                >
+                  <Camera size={14} />
+                </button>
+                <input
+                  ref={pictureInputRef}
+                  type="file"
+                  accept={PICTURE_MIME_TYPES.join(",")}
+                  className="hidden"
+                  onChange={handlePictureSelect}
+                />
               </div>
               <h3 className="text-white">{student.firstName} {student.lastName}</h3>
               <p className="text-white/70 text-xs mt-1">{student.gradeLevel}</p>
@@ -101,6 +216,26 @@ export default function StudentProfile() {
               }`}>
                 {student.status.charAt(0).toUpperCase() + student.status.slice(1)}
               </span>
+              {pictureError && (
+                <p className="mt-3 text-xs text-red-200 flex items-center justify-center gap-1">
+                  <AlertCircle size={12} /> {pictureError}
+                </p>
+              )}
+              {pictureSaved && (
+                <p className="mt-3 text-xs text-green-200 flex items-center justify-center gap-1">
+                  <CheckCircle size={12} /> Picture updated
+                </p>
+              )}
+              {student.profilePictureUrl && (
+                <button
+                  type="button"
+                  onClick={handlePictureRemove}
+                  disabled={pictureUploading}
+                  className="mt-3 inline-flex items-center gap-1.5 text-xs text-white/70 hover:text-white transition-colors disabled:opacity-60"
+                >
+                  <Trash2 size={12} /> Remove picture
+                </button>
+              )}
             </div>
             <div className="p-4 space-y-1">
               <InfoRow icon={<User size={14} />} label="Full Name" value={`${student.firstName} ${student.middleName ? student.middleName + " " : ""}${student.lastName}`} />
@@ -309,6 +444,8 @@ export default function StudentProfile() {
         </div>
       </div>
       {passwordConfirm.dialog}
+      {pictureConfirm.dialog}
+      {removePictureConfirm.dialog}
     </div>
   );
 }

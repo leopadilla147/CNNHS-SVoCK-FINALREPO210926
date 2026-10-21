@@ -76,6 +76,35 @@ describe("PastElectionsPage", () => {
     expect(screen.queryByText("Winners proclaimed")).toBeNull();
   });
 
+  it("badges elections that resolved a tie or were decided over a complaint", async () => {
+    mockListPastElections.mockResolvedValue([
+      election({ id: "election-3", hadTies: true, hadComplaint: true }),
+    ]);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Tie resolved")).toBeTruthy();
+    });
+
+    expect(screen.getByText("Complaint on record")).toBeTruthy();
+  });
+
+  it("shows no tie or complaint badges when the record has neither", async () => {
+    mockListPastElections.mockResolvedValue([
+      election({ id: "election-4", hadTies: false, hadComplaint: false }),
+    ]);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "2025-2026" })).toBeTruthy();
+    });
+
+    expect(screen.queryByText("Tie resolved")).toBeNull();
+    expect(screen.queryByText("Complaint on record")).toBeNull();
+  });
+
   it("shows an empty state when nothing has been published", async () => {
     mockListPastElections.mockResolvedValue([]);
 

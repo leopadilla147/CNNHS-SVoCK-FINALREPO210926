@@ -7,7 +7,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const POSITIONS = ["President", "Vice President", "Secretary", "Treasurer", "Auditor", "PRO", "PIO", "Protocol Officer", "Grade 7 Representative", "Grade 8 Representative", "Grade 9 Representative", "Grade 10 Representative", "Grade 11 Representative", "Grade 12 Representative"];
+const POSITIONS = ["President", "Vice President", "Secretary", "Treasurer", "Auditor", "PIO", "Protocol Officer", "Grade 7 Representative", "Grade 8 Representative", "Grade 9 Representative", "Grade 10 Representative", "Grade 11 Representative", "Grade 12 Representative"];
 const GRADE_LEVELS = ["Grade 7", "Grade 8", "Grade 9", "Grade 10", "Grade 11", "Grade 12"];
 const GENDERS = ["Male", "Female"];
 
@@ -93,9 +93,6 @@ serve(async (req) => {
       const { error: updateError } = await admin.from("candidates").update({
         status: "pending",
         doc_introductory_profile: true,
-        doc_screening_form: true,
-        doc_report_card: true,
-        doc_good_moral_cert: true,
       }).eq("id", candidateId);
       if (updateError) throw new Error(updateError.message);
 
@@ -264,9 +261,6 @@ serve(async (req) => {
       picture_url: pictureUrl,
       doc_application_form: true,
       doc_introductory_profile: false,
-      doc_screening_form: false,
-      doc_report_card: false,
-      doc_good_moral_cert: false,
       doc_eaf_front: false,
       doc_eaf_back: false,
       // Derived server-side. This function runs with the service role and

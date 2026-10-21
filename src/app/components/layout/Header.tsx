@@ -23,7 +23,7 @@ const CLOSED_DROPDOWNS = {
 };
 
 export function Header() {
-  const { currentUser, setCurrentUser } = useApp();
+  const { currentUser, setCurrentUser, students } = useApp();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -89,6 +89,15 @@ export function Header() {
       [dropdownName]: !prev[dropdownName],
     }));
   };
+
+  // 072/073: the signed-in user's photo (when set) instead of the initial.
+  // Students resolve theirs off the students list (live after an upload);
+  // staff read it off currentUser (073 profile RPC refresh).  Photo-less
+  // users keep the initial.
+  const avatarPictureUrl =
+    currentUser?.role === "student"
+      ? students?.find((s) => s.id === currentUser.id)?.profilePictureUrl
+      : currentUser?.profilePictureUrl;
 
   return (
     <>
@@ -299,8 +308,12 @@ export function Header() {
                     onClick={() => toggleDropdown("user")}
                     className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors text-sm"
                   >
-                    <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold" style={{ backgroundColor: "#5C0102" }}>
-                      {currentUser.name.charAt(0)}
+                    <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold overflow-hidden" style={{ backgroundColor: "#5C0102" }}>
+                      {avatarPictureUrl ? (
+                        <img src={avatarPictureUrl} alt="" className="w-7 h-7 object-cover" />
+                      ) : (
+                        currentUser.name.charAt(0)
+                      )}
                     </div>
                     <span className="text-gray-700">{currentUser.name}</span>
                     <ChevronDown size={14} className="text-gray-500" />

@@ -297,8 +297,14 @@ export default function StudentDashboard() {
             {unreadNotifications.map((notif) => (
               <button
                 key={notif.id}
-                onClick={() => {
-                  markAsRead(notif.id);
+                onClick={async () => {
+                  // The click navigates with a full page reload, which would
+                  // abort an in-flight request — wait for the read to persist
+                  // first, but never let a slow RPC block navigation.
+                  await Promise.race([
+                    markAsRead(notif.id),
+                    new Promise((resolve) => setTimeout(resolve, 1500)),
+                  ]);
                   if (notif.link) window.location.href = notif.link;
                 }}
                 className="w-full text-left flex items-start gap-3 p-3.5 rounded-xl hover:bg-gray-50/90 border border-transparent hover:border-gray-200 transition-all cursor-pointer"

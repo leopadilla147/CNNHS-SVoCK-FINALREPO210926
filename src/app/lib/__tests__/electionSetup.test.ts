@@ -50,8 +50,6 @@ describe("buildElectionPeriodSyncPayload", () => {
     for (const dropped of [
       "start_at",
       "end_at",
-      "campaign_start_at",
-      "campaign_end_at",
       "nomination_open",
       "official_list_posted",
       "plan_finalized",
@@ -60,9 +58,35 @@ describe("buildElectionPeriodSyncPayload", () => {
     }
   });
 
-  it("writes rules_discussion_at, which 058 re-added after 036 dropped it", () => {
+  it("no longer writes rules_discussion_at — 082 moved the meeting to its own Stage 1 RPC", () => {
+    // save_meeting_schedule_rpc (082) guards the stage, so the plain editor
+    // (Stage 4's Save Schedule) must not be able to clobber the meeting.
     const payload = buildElectionPeriodSyncPayload(basePeriod({ rulesDiscussionAt: "2026-09-30" }));
-    expect(payload).toHaveProperty("rules_discussion_at", "2026-09-30");
+    expect("rules_discussion_at" in payload).toBe(false);
+  });
+
+  it("writes the 082 Campaign window", () => {
+    const payload = buildElectionPeriodSyncPayload(
+      basePeriod({
+        campaignStartDate: "2026-09-20T06:00:00.000Z",
+        campaignEndDate: "2026-10-11T17:00:00.000Z",
+      }),
+    );
+    expect(payload.campaign_start_at).toBe("2026-09-20T06:00:00.000Z");
+    expect(payload.campaign_end_at).toBe("2026-10-11T17:00:00.000Z");
+  });
+
+  it("defaults election_modality to 'digital' when unset (082 column default)", () => {
+    expect(buildElectionPeriodSyncPayload(basePeriod()).election_modality).toBe("digital");
+  });
+
+  it("accepts every modality in the fixed 082 set", () => {
+    for (const modality of ["digital", "manual", "hybrid"]) {
+      const payload = buildElectionPeriodSyncPayload(
+        basePeriod({ electionModality: modality as ElectionPeriod["electionModality"] }),
+      );
+      expect(payload.election_modality).toBe(modality);
+    }
   });
 
   it("never lets the plain schedule editor move the election between stages", () => {

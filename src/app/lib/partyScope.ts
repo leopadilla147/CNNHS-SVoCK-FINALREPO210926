@@ -10,11 +10,22 @@ export const PARTY_GATE_OPEN = "presidentApproved";
 export const PARTY_GATE_PENDING = "presidentApprovalRequired";
 export const PARTY_GATE_CLOSED = "presidentRejected";
 
-/** The 001:238 position CHECK splits into these 8 executive offices ... */
-export const EXECUTIVE_POSITIONS = ["President", "Vice President", "Secretary", "Treasurer", "Auditor", "PRO", "PIO", "Protocol Officer"];
+/** The candidates position CHECK splits into these 7 executive offices ... */
+export const EXECUTIVE_POSITIONS = ["President", "Vice President", "Secretary", "Treasurer", "Auditor", "PIO", "Protocol Officer"];
 export const GRADE_LEVELS = ["Grade 7", "Grade 8", "Grade 9", "Grade 10", "Grade 11", "Grade 12"];
 
-/** ... plus one representative seat per grade level. */
+/**
+ * ... plus one representative seat per grade level: the full canonical
+ * position order shared by every results / ballot / proclamation view.
+ * (The old "PRO" office was removed from the election entirely — see
+ * migration 076.)
+ */
+export const FULL_POSITION_ORDER = [
+  ...EXECUTIVE_POSITIONS,
+  ...GRADE_LEVELS.map((grade) => `${grade} Representative`),
+];
+
+/** The seats a student of `gradeLevel` may contest. */
 export function getPositionsForGrade(gradeLevel: string): string[] {
   const base = [...EXECUTIVE_POSITIONS];
   if (gradeLevel && GRADE_LEVELS.includes(gradeLevel)) {

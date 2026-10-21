@@ -2,8 +2,8 @@
 -- AZ/seed_extra_parties_and_candidates.sql
 --
 -- ADDITIVE companion to AZ/seed_parties_and_candidates_param.sql.
--- Inserts 3 NEW parties and 50 NEW candidates (three full 14-seat
--- slates + 8 independents) into an election period you name.  Nothing
+-- Inserts 3 NEW parties and 46 NEW candidates (three full 13-seat
+-- slates + 7 independents) into an election period you name.  Nothing
 -- is deleted, updated or reset -- it is designed to run against a
 -- database that already holds parties, candidates and votes.
 --
@@ -13,13 +13,15 @@
 --                 Bagong Alab Alliance
 --                 Samahan ng Kabataan Tungo sa Kinabukasan
 --                 Pagbabago at Serbisyo Party
---   candidates  50 rows, all status = 'approved':
---                 Party A (LRN 999900000201-214)  full 14-seat slate
---                 Party B (LRN 999900000215-228)  full 14-seat slate
---                 Party C (LRN 999900000229-242)  full 14-seat slate
---                 Independents (LRN 999900000251-258):
+--   candidates  46 rows, all status = 'approved':
+--                 Party A (LRN 999900000201-214)  full 13-seat slate
+--                 Party B (LRN 999900000215-228)  full 13-seat slate
+--                 Party C (LRN 999900000229-242)  full 13-seat slate
+--                 Independents (LRN 999900000251-257):
 --                   President x2, Vice President x2, Secretary,
---                   Treasurer, Auditor, PRO  (party_id = null)
+--                   Treasurer, Auditor  (party_id = null)
+--                 (the old PRO seats are gone: lrns 212, 226, 240 and
+--                  258 are intentionally unused)
 --
 -- WHERE THE STUDENTS COME FROM
 --   Every candidate is one of the 300 synthetic students created by
@@ -36,13 +38,13 @@
 --   contains every grade, so all six Rep seats are fillable.
 --
 -- PICTURES
---   The 50 picture_url values are reused from
+--   The 46 picture_url values are reused from
 --   AZ/seed_parties_and_candidates.sql (candidate-pictures/ bucket),
 --   one per candidate in row order.
 --
 -- STATUSES (mirrors the original dump so the approval workflows stay
 -- testable)
---   Party Presidents and the 8 independents : status 'approved',
+--   Party Presidents and the 7 independents : status 'approved',
 --     position_approval_status 'notRequired'
 --   Other 36 party members                 : status 'approved',
 --     position_approval_status 'presidentApprovalRequired'
@@ -52,7 +54,7 @@
 -- WHY THE GUARDS DO NOT DELETE ANYTHING
 --   Plain INSERTs plus loud guards, the same contract as the _param
 --   file: the script aborts before touching anything if the pasted
---   period is unusable, if any of the 50 students is missing or
+--   period is unusable, if any of the 46 students is missing or
 --   already a candidate in that period, or if a party id/name is
 --   already taken.  One transaction, so a failure rolls the whole
 --   thing back and it is safe to fix and re-run.
@@ -92,7 +94,7 @@ select set_config('svock.seed_election_period_id', 'PASTE-ELECTION-PERIOD-ID-HER
 -- #####################################################################
 
 -- Single source of truth for election_period_id in this file.  Reads the
--- value pasted above, so all 3 party rows and all 50 candidate rows get
+-- value pasted above, so all 3 party rows and all 46 candidate rows get
 -- the exact same period.
 create or replace function pg_temp.seed_election_period_id()
 returns uuid
@@ -115,7 +117,7 @@ declare
   v_conflict text;
   v_hint constant text :=
     'Edit the set_config call at the top of this script: put your election period id between the quotes, replacing PASTE-ELECTION-PERIOD-ID-HERE.';
-  v_lrns constant text[] := array['999900000207', '999900000208', '999900000209', '999900000210', '999900000211', '999900000212', '999900000213', '999900000214', '999900000205', '999900000206', '999900000201', '999900000202', '999900000203', '999900000204', '999900000221', '999900000222', '999900000223', '999900000224', '999900000225', '999900000226', '999900000227', '999900000228', '999900000217', '999900000218', '999900000219', '999900000220', '999900000215', '999900000216', '999900000235', '999900000236', '999900000237', '999900000238', '999900000239', '999900000240', '999900000241', '999900000242', '999900000229', '999900000230', '999900000231', '999900000232', '999900000233', '999900000234', '999900000251', '999900000252', '999900000253', '999900000254', '999900000255', '999900000256', '999900000257', '999900000258'];
+  v_lrns constant text[] := array['999900000207', '999900000208', '999900000209', '999900000210', '999900000211', '999900000213', '999900000214', '999900000205', '999900000206', '999900000201', '999900000202', '999900000203', '999900000204', '999900000221', '999900000222', '999900000223', '999900000224', '999900000225', '999900000227', '999900000228', '999900000217', '999900000218', '999900000219', '999900000220', '999900000215', '999900000216', '999900000235', '999900000236', '999900000237', '999900000238', '999900000239', '999900000241', '999900000242', '999900000229', '999900000230', '999900000231', '999900000232', '999900000233', '999900000234', '999900000251', '999900000252', '999900000253', '999900000254', '999900000255', '999900000256', '999900000257'];
   v_parties constant text[] := array['b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d401', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d402', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d403'];
 begin
   if v_raw is null or v_raw = 'PASTE-ELECTION-PERIOD-ID-HERE' then
@@ -183,7 +185,7 @@ INSERT INTO public.parties (id, name, description, president_student_id, created
   ('b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d403', 'Pagbabago at Serbisyo Party', 'Full-slate test party C - 14 seats, party-president approval flow live.', null, now(), pg_temp.seed_election_period_id());
 
 -- ---------------------------------------------------------------------
--- 2) CANDIDATES -- 50 rows, keyed by lrn so they resolve to whatever
+-- 2) CANDIDATES -- 46 rows, keyed by lrn so they resolve to whatever
 --    ids AZ/seed_students_300.sql generated.  Inserted after parties
 --    because of the composite FK (party_id, election_period_id).
 --    055's BEFORE INSERT trigger candidates_one_president_per_party
@@ -201,7 +203,6 @@ with spec (lrn, position, party_id, picture_url) as (
   ('999900000209', 'Secretary', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d401'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_0bc38684-978a-4afa-b190-5db7ccad88bb_1786898884551.jpg'),
   ('999900000210', 'Treasurer', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d401'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_141b5469-d666-46b2-ab8f-96b1109303b0_1786897965231.jpg'),
   ('999900000211', 'Auditor', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d401'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_1cbae83b-3e63-416f-9278-43759f3846d2_1786890126995.jpg'),
-  ('999900000212', 'PRO', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d401'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_21040e91-0bbd-4709-89be-9b7886ffff1c_1786890766407.jpg'),
   ('999900000213', 'PIO', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d401'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_2409dcd1-d0a5-4eca-8fe0-e7eb7a982658_1786898316265.jpg'),
   ('999900000214', 'Protocol Officer', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d401'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_265606ae-365c-4a5f-9a3c-63b980ed4ac3_1786898165921.jpg'),
   ('999900000205', 'Grade 7 Representative', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d401'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_2aa10635-bf2b-416b-bbc5-b9158ca6a14e_1786897633306.jpg'),
@@ -215,7 +216,6 @@ with spec (lrn, position, party_id, picture_url) as (
   ('999900000223', 'Secretary', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d402'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_49c5d6c8-4101-4321-b75b-d129e1f69317_1786891036718.jpg'),
   ('999900000224', 'Treasurer', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d402'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_4bdeb75f-b2cc-4b96-9f52-8542f1a70844_1786897451612.jpg'),
   ('999900000225', 'Auditor', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d402'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_5523bc93-5c8d-4ca4-9b6b-e67efa8e0a9e_1786890240394.jpg'),
-  ('999900000226', 'PRO', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d402'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_5a93bb43-a99e-44cc-a823-37a2d3a5561e_1783434580070.jpg'),
   ('999900000227', 'PIO', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d402'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_5cec4032-3a28-4740-94f4-c428905c72c7_1786889870563.jpg'),
   ('999900000228', 'Protocol Officer', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d402'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_613409c5-0706-4251-9d4e-b4ee5d4e05fb_1786898256906.jpg'),
   ('999900000217', 'Grade 7 Representative', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d402'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_65d51991-35dc-46b1-9ac0-9a6ccc678d06_1786897939851.jpg'),
@@ -229,7 +229,6 @@ with spec (lrn, position, party_id, picture_url) as (
   ('999900000237', 'Secretary', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d403'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_87606c2f-53ad-4195-b3e3-dfeb10b8b626_1786899001445.jpg'),
   ('999900000238', 'Treasurer', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d403'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_9299e954-6949-45ac-8b4c-e557eaff9210_1786896681441.jpg'),
   ('999900000239', 'Auditor', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d403'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_9adfa1f7-137b-4a10-80c2-14e74c7e0504_1786896807487.jpg'),
-  ('999900000240', 'PRO', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d403'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_9bff18c0-3f4d-49a9-a039-7acb7057e914_1783426988844.jpg'),
   ('999900000241', 'PIO', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d403'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_a2010b04-4c95-43d7-9a1a-4c65539cd8ad_1786890611704.jpg'),
   ('999900000242', 'Protocol Officer', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d403'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_a2815899-3e8c-41b8-bced-42b92a115deb_1786280187150.jpg'),
   ('999900000229', 'Grade 7 Representative', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d403'::uuid, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_a31a668b-43cb-4673-9f68-17d65f8713f6_1783437996425.jpg'),
@@ -244,8 +243,7 @@ with spec (lrn, position, party_id, picture_url) as (
   ('999900000254', 'Vice President', null, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_d9c5ee18-9899-4fb4-93fc-0438f31973dd_1786897520236.jpg'),
   ('999900000255', 'Secretary', null, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_da4a0bc4-ffa1-4501-9e98-48c11f3b9f19_1786891166854.jpg'),
   ('999900000256', 'Treasurer', null, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_da661475-eb73-4368-bca4-c8853bdcae5b_1786890893415.jpg'),
-  ('999900000257', 'Auditor', null, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_e2898ec3-e837-41e2-bc29-86aed32200e1_1778507946977.jpg'),
-  ('999900000258', 'PRO', null, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_ff708111-0c49-4623-9995-622e17e4d734_1786896966262.jpg')
+  ('999900000257', 'Auditor', null, 'https://hfeozvpwfxbdjhuhhkjg.supabase.co/storage/v1/object/public/candidate-pictures/candidate_e2898ec3-e837-41e2-bc29-86aed32200e1_1778507946977.jpg')
 )
 insert into public.candidates (
   student_id, election_period_id,
@@ -254,8 +252,8 @@ insert into public.candidates (
   gender, date_of_birth, age,
   email, mobile_number, home_address,
   picture_url, leadership_profile,
-  doc_application_form, doc_introductory_profile, doc_screening_form,
-  doc_report_card, doc_good_moral_cert, doc_eaf_front, doc_eaf_back,
+  doc_application_form, doc_introductory_profile,
+  doc_eaf_front, doc_eaf_back,
   position_approval_status, status
 )
 select
@@ -270,7 +268,7 @@ select
   'Purok 1 Brgy. Bagong Silang I Labo, Camarines Norte',
   spec.picture_url,
   '{"skills":["Leadership","Teamwork","Problem-Solving"],"qualities":"I believe discipline, reliability and fairness make a dependable representative. I am ready to listen to my fellow students and work with them on what matters most."}'::jsonb,
-  true, true, true, true, true, false, false,
+  true, true, false, false,
   case when spec.party_id is null or spec.position = 'President'
        then 'notRequired'
        else 'presidentApproved'
@@ -290,26 +288,26 @@ where c.party_id = p.id
 commit;
 
 -- ---------------------------------------------------------------------
--- Verify: expect 3 new parties, 50 new candidates (42 with a party,
--- 8 independents), 5 presidents (3 party + 2 independent), and every
+-- Verify: expect 3 new parties, 46 new candidates (39 with a party,
+-- 7 independents), 5 presidents (3 party + 2 independent), and every
 -- grade-rep grade_level matching its position.
 -- ---------------------------------------------------------------------
 select
   (select count(*) from public.parties
     where id in ('b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d401', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d402', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d403'))            as new_parties,
   (select count(*) from public.candidates
-    where student_id in (select id from public.students where lrn = any(array['999900000207', '999900000208', '999900000209', '999900000210', '999900000211', '999900000212', '999900000213', '999900000214', '999900000205', '999900000206', '999900000201', '999900000202', '999900000203', '999900000204', '999900000221', '999900000222', '999900000223', '999900000224', '999900000225', '999900000226', '999900000227', '999900000228', '999900000217', '999900000218', '999900000219', '999900000220', '999900000215', '999900000216', '999900000235', '999900000236', '999900000237', '999900000238', '999900000239', '999900000240', '999900000241', '999900000242', '999900000229', '999900000230', '999900000231', '999900000232', '999900000233', '999900000234', '999900000251', '999900000252', '999900000253', '999900000254', '999900000255', '999900000256', '999900000257', '999900000258']))) as new_candidates,
+    where student_id in (select id from public.students where lrn = any(array['999900000207', '999900000208', '999900000209', '999900000210', '999900000211', '999900000213', '999900000214', '999900000205', '999900000206', '999900000201', '999900000202', '999900000203', '999900000204', '999900000221', '999900000222', '999900000223', '999900000224', '999900000225', '999900000227', '999900000228', '999900000217', '999900000218', '999900000219', '999900000220', '999900000215', '999900000216', '999900000235', '999900000236', '999900000237', '999900000238', '999900000239', '999900000241', '999900000242', '999900000229', '999900000230', '999900000231', '999900000232', '999900000233', '999900000234', '999900000251', '999900000252', '999900000253', '999900000254', '999900000255', '999900000256', '999900000257']))) as new_candidates,
   (select count(*) from public.candidates
-    where student_id in (select id from public.students where lrn = any(array['999900000207', '999900000208', '999900000209', '999900000210', '999900000211', '999900000212', '999900000213', '999900000214', '999900000205', '999900000206', '999900000201', '999900000202', '999900000203', '999900000204', '999900000221', '999900000222', '999900000223', '999900000224', '999900000225', '999900000226', '999900000227', '999900000228', '999900000217', '999900000218', '999900000219', '999900000220', '999900000215', '999900000216', '999900000235', '999900000236', '999900000237', '999900000238', '999900000239', '999900000240', '999900000241', '999900000242', '999900000229', '999900000230', '999900000231', '999900000232', '999900000233', '999900000234', '999900000251', '999900000252', '999900000253', '999900000254', '999900000255', '999900000256', '999900000257', '999900000258']))
+    where student_id in (select id from public.students where lrn = any(array['999900000207', '999900000208', '999900000209', '999900000210', '999900000211', '999900000213', '999900000214', '999900000205', '999900000206', '999900000201', '999900000202', '999900000203', '999900000204', '999900000221', '999900000222', '999900000223', '999900000224', '999900000225', '999900000227', '999900000228', '999900000217', '999900000218', '999900000219', '999900000220', '999900000215', '999900000216', '999900000235', '999900000236', '999900000237', '999900000238', '999900000239', '999900000241', '999900000242', '999900000229', '999900000230', '999900000231', '999900000232', '999900000233', '999900000234', '999900000251', '999900000252', '999900000253', '999900000254', '999900000255', '999900000256', '999900000257']))
       and party_id is not null)                                                          as with_party,
   (select count(*) from public.candidates
-    where student_id in (select id from public.students where lrn = any(array['999900000207', '999900000208', '999900000209', '999900000210', '999900000211', '999900000212', '999900000213', '999900000214', '999900000205', '999900000206', '999900000201', '999900000202', '999900000203', '999900000204', '999900000221', '999900000222', '999900000223', '999900000224', '999900000225', '999900000226', '999900000227', '999900000228', '999900000217', '999900000218', '999900000219', '999900000220', '999900000215', '999900000216', '999900000235', '999900000236', '999900000237', '999900000238', '999900000239', '999900000240', '999900000241', '999900000242', '999900000229', '999900000230', '999900000231', '999900000232', '999900000233', '999900000234', '999900000251', '999900000252', '999900000253', '999900000254', '999900000255', '999900000256', '999900000257', '999900000258']))
+    where student_id in (select id from public.students where lrn = any(array['999900000207', '999900000208', '999900000209', '999900000210', '999900000211', '999900000213', '999900000214', '999900000205', '999900000206', '999900000201', '999900000202', '999900000203', '999900000204', '999900000221', '999900000222', '999900000223', '999900000224', '999900000225', '999900000227', '999900000228', '999900000217', '999900000218', '999900000219', '999900000220', '999900000215', '999900000216', '999900000235', '999900000236', '999900000237', '999900000238', '999900000239', '999900000241', '999900000242', '999900000229', '999900000230', '999900000231', '999900000232', '999900000233', '999900000234', '999900000251', '999900000252', '999900000253', '999900000254', '999900000255', '999900000256', '999900000257']))
       and party_id is null)                                                              as independents,
   (select count(*) from public.candidates
-    where student_id in (select id from public.students where lrn = any(array['999900000207', '999900000208', '999900000209', '999900000210', '999900000211', '999900000212', '999900000213', '999900000214', '999900000205', '999900000206', '999900000201', '999900000202', '999900000203', '999900000204', '999900000221', '999900000222', '999900000223', '999900000224', '999900000225', '999900000226', '999900000227', '999900000228', '999900000217', '999900000218', '999900000219', '999900000220', '999900000215', '999900000216', '999900000235', '999900000236', '999900000237', '999900000238', '999900000239', '999900000240', '999900000241', '999900000242', '999900000229', '999900000230', '999900000231', '999900000232', '999900000233', '999900000234', '999900000251', '999900000252', '999900000253', '999900000254', '999900000255', '999900000256', '999900000257', '999900000258']))
+    where student_id in (select id from public.students where lrn = any(array['999900000207', '999900000208', '999900000209', '999900000210', '999900000211', '999900000213', '999900000214', '999900000205', '999900000206', '999900000201', '999900000202', '999900000203', '999900000204', '999900000221', '999900000222', '999900000223', '999900000224', '999900000225', '999900000227', '999900000228', '999900000217', '999900000218', '999900000219', '999900000220', '999900000215', '999900000216', '999900000235', '999900000236', '999900000237', '999900000238', '999900000239', '999900000241', '999900000242', '999900000229', '999900000230', '999900000231', '999900000232', '999900000233', '999900000234', '999900000251', '999900000252', '999900000253', '999900000254', '999900000255', '999900000256', '999900000257']))
       and position = 'President')                                                        as presidents,
   (select count(*) from public.candidates c
-    where c.student_id in (select id from public.students where lrn = any(array['999900000207', '999900000208', '999900000209', '999900000210', '999900000211', '999900000212', '999900000213', '999900000214', '999900000205', '999900000206', '999900000201', '999900000202', '999900000203', '999900000204', '999900000221', '999900000222', '999900000223', '999900000224', '999900000225', '999900000226', '999900000227', '999900000228', '999900000217', '999900000218', '999900000219', '999900000220', '999900000215', '999900000216', '999900000235', '999900000236', '999900000237', '999900000238', '999900000239', '999900000240', '999900000241', '999900000242', '999900000229', '999900000230', '999900000231', '999900000232', '999900000233', '999900000234', '999900000251', '999900000252', '999900000253', '999900000254', '999900000255', '999900000256', '999900000257', '999900000258']))
+    where c.student_id in (select id from public.students where lrn = any(array['999900000207', '999900000208', '999900000209', '999900000210', '999900000211', '999900000213', '999900000214', '999900000205', '999900000206', '999900000201', '999900000202', '999900000203', '999900000204', '999900000221', '999900000222', '999900000223', '999900000224', '999900000225', '999900000227', '999900000228', '999900000217', '999900000218', '999900000219', '999900000220', '999900000215', '999900000216', '999900000235', '999900000236', '999900000237', '999900000238', '999900000239', '999900000241', '999900000242', '999900000229', '999900000230', '999900000231', '999900000232', '999900000233', '999900000234', '999900000251', '999900000252', '999900000253', '999900000254', '999900000255', '999900000256', '999900000257']))
       and c.position like '%Representative'
       and c.grade_level <> replace(c.position, ' Representative', ''))                  as rep_grade_mismatches,
   public.current_election_period_id()                                                    as current_period,

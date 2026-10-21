@@ -2,11 +2,9 @@ import { Link } from "react-router";
 import { motion } from "motion/react";
 import { Shield, Users, Calendar, ChevronRight, Award } from "lucide-react";
 import { useApp } from "../context/AppContext";
-import { distinctPartyNames } from "../lib/partyScope";
+import { distinctPartyNames, FULL_POSITION_ORDER as POSITIONS } from "../lib/partyScope";
 import cnnhsHero from "../assets/CNNHS1.jpg";
 import cnnhsLogo from "../assets/CNNHS_Logo1.png";
-
-const POSITIONS = ["President", "Vice President", "Secretary", "Treasurer", "Auditor", "PRO"];
 
 export default function HomePage() {
   const { candidates, electionPeriod } = useApp();
@@ -211,7 +209,7 @@ export default function HomePage() {
                   <p className="text-gray-600 text-sm">
                     {electionPeriod.startDate ? `${electionPeriod.startDate}${electionPeriod.startTime ? ` at ${electionPeriod.startTime}` : ""}` : "To be announced"}
                   </p>
-                  <p className="text-gray-500 text-xs mt-1">{electionPeriod.venue || "IoT biometric kiosk precinct"}</p>
+                  <p className="text-gray-500 text-xs mt-1">{electionPeriod.venue || "CNNHS Covered Court"}</p>
                 </div>
                 <div className="bg-gray-50 rounded-xl p-6 text-center">
                   <div className="flex items-center justify-center mb-4">

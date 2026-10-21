@@ -30,3 +30,10 @@ verify_jwt = false
 # = false; same reasoning as change_password/create_commissioner above).
 [functions.create_sslg_adviser]
 verify_jwt = false
+
+# delete_profile_picture (student + staff picture cleanup in one function)
+# authenticates via the x-session-token side channel (same reasoning as
+# create_commissioner / change_password above): storage cleanup is gated
+# by the 022 session spine, not a platform JWT.
+[functions.delete_profile_picture]
+verify_jwt = false

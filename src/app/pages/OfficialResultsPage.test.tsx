@@ -93,6 +93,34 @@ describe("OfficialResultsPage", () => {
     expect(screen.queryByText(/No Official Results Yet/i)).toBeNull();
   });
 
+  it("marks a tied position and shows the complaint note on the record", async () => {
+    mockGetOfficialResults.mockResolvedValue({
+      ...results(),
+      election: {
+        ...results().election,
+        complaintNote: "The complaint was reviewed and weighed before the announcement.",
+      },
+      positions: [
+        {
+          ...results().positions[0],
+          wasTie: true,
+          tieBreakNote: "Coin Toss",
+        },
+      ],
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Tie — resolved via Coin Toss")).toBeTruthy();
+    });
+
+    expect(screen.getByText("A complaint was on record for this election.")).toBeTruthy();
+    expect(
+      screen.getByText(/Electoral Board note: The complaint was reviewed/),
+    ).toBeTruthy();
+  });
+
   it("shows a friendly empty state when nothing is published yet", async () => {
     mockGetOfficialResults.mockResolvedValue(null);
 

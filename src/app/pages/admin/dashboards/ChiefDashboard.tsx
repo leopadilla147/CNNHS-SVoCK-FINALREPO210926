@@ -26,6 +26,7 @@ import {
 import { useApp, type CommissionerRole } from "../../../context/AppContext";
 import { listStaffRosterRpc, type StaffRosterRow } from "../../../lib/supabaseData";
 import { useReportImages } from "../../../lib/reportImages";
+import ElectionStageBanner from "../../../components/ElectionStageBanner";
 
 // adminprofiles officer roles (035): chief + the three commissioner roles.
 const TOTAL_OFFICER_ROLES = 4;
@@ -168,6 +169,9 @@ export default function ChiefDashboard() {
           </div>
         </div>
       </motion.div>
+
+      {/* Election Stage announcement */}
+      <ElectionStageBanner />
 
       {/* Primary KPI Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

@@ -2,17 +2,41 @@ import { useState } from "react";
 import { Activity, Search, Filter, CheckCircle, AlertCircle, Info, XCircle, Download, RefreshCw } from "lucide-react";
 import { motion } from "motion/react";
 import { useApp } from "../../context/AppContext";
+import { canonicalAuditRole, auditRoleLabel, type AuditRole } from "../../lib/auditRoles";
+
+// Letters, numbers, and spaces only (see search input below).
+const SEARCH_ALLOWED = /[^a-zA-Z0-9 ]/g;
+
+// 027's constraint set — 'Officer' was removed from audit_logs.actor_role
+// by migration 027, so no row can ever match it; the adviser lands here
+// via the 075 RLS widening.
+const ROLE_FILTERS: { value: AuditRole; label: string }[] = [
+  { value: "admin", label: "Admin" },
+  { value: "student", label: "Student" },
+  { value: "sslg_adviser", label: "SSLG Adviser" },
+  { value: "system", label: "System" },
+];
+
+const ROLE_BADGE_CLASSES: Record<AuditRole, string> = {
+  admin: "bg-red-100 text-red-700",
+  student: "bg-green-100 text-green-700",
+  sslg_adviser: "bg-blue-100 text-blue-700",
+  system: "bg-gray-100 text-gray-600",
+};
 
 export default function AdminLogs() {
   const { logs } = useApp();
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
-  const [roleFilter, setRoleFilter] = useState("all");
+  const [roleFilter, setRoleFilter] = useState<"all" | AuditRole>("all");
 
   const filtered = logs.filter((log) => {
     const matchSearch = `${log.user} ${log.action} ${log.details}`.toLowerCase().includes(search.toLowerCase());
     const matchType = typeFilter === "all" || log.type === typeFilter;
-    const matchRole = roleFilter === "all" || log.role === roleFilter;
+    // DB rows are lowercase ("admin", "sslg_adviser") while local
+    // optimistic entries are display strings ("Admin") — canonicalize
+    // both before comparing.
+    const matchRole = roleFilter === "all" || canonicalAuditRole(log.role) === roleFilter;
     return matchSearch && matchType && matchRole;
   });
 
@@ -44,7 +68,6 @@ export default function AdminLogs() {
     { label: "Errors", count: logs.filter((l) => l.type === "error").length, color: "#EF4444" },
   ];
 
-  const roles = ["all", "Admin", "Officer", "Student", "System"];
   const types = ["all", "success", "info", "warning", "error"];
 
   return (
@@ -82,7 +105,10 @@ export default function AdminLogs() {
               type="text"
               placeholder="Search logs by user, action, or details..."
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              // Letters, numbers, and spaces only — strip anything else
+              // (symbols pasted in are dropped, spaces are kept so
+              // multi-word names stay searchable).
+              onChange={(e) => setSearch(e.target.value.replace(SEARCH_ALLOWED, ""))}
               className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50"
             />
           </div>
@@ -99,14 +125,21 @@ export default function AdminLogs() {
               </button>
             ))}
             <span className="text-xs text-gray-400 flex items-center gap-1 py-2 ml-2">Role:</span>
-            {roles.map((r) => (
+            <button
+              onClick={() => setRoleFilter("all")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${roleFilter === "all" ? "text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+              style={roleFilter === "all" ? { backgroundColor: "#5C0102" } : {}}
+            >
+              All
+            </button>
+            {ROLE_FILTERS.map((r) => (
               <button
-                key={r}
-                onClick={() => setRoleFilter(r)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize transition-all ${roleFilter === r ? "text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
-                style={roleFilter === r ? { backgroundColor: "#5C0102" } : {}}
+                key={r.value}
+                onClick={() => setRoleFilter(r.value)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${roleFilter === r.value ? "text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                style={roleFilter === r.value ? { backgroundColor: "#5C0102" } : {}}
               >
-                {r}
+                {r.label}
               </button>
             ))}
           </div>
@@ -134,11 +167,9 @@ export default function AdminLogs() {
                   <td className="py-3 px-4 text-gray-800 text-xs font-medium">{log.user}</td>
                   <td className="py-3 px-4">
                     <span className={`text-xs px-2 py-0.5 rounded-full ${
-                      log.role === "Admin" ? "bg-red-100 text-red-700" :
-                      log.role === "Officer" ? "bg-blue-100 text-blue-700" :
-                      log.role === "Student" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"
+                      ROLE_BADGE_CLASSES[canonicalAuditRole(log.role)]
                     }`}>
-                      {log.role}
+                      {auditRoleLabel(log.role)}
                     </span>
                   </td>
                   <td className="py-3 px-4 text-gray-700 text-xs font-medium">{log.action}</td>

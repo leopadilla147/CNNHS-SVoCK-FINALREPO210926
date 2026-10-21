@@ -9,6 +9,7 @@ import {
   Gavel,
   Loader2,
   MapPin,
+  ShieldAlert,
   Trophy,
   Users,
 } from "lucide-react";
@@ -160,12 +161,26 @@ export default function PastElectionsPage() {
                         ) : null}
                       </div>
                     </div>
-                    {election.proclaimed ? (
-                      <span className="inline-flex items-center gap-1.5 self-start rounded-full bg-amber-50 text-amber-700 border border-amber-200 px-3 py-1 text-xs font-medium">
-                        <Gavel size={13} />
-                        Winners proclaimed
-                      </span>
-                    ) : null}
+                    <div className="flex flex-col items-start sm:items-end gap-2 shrink-0">
+                      {election.proclaimed ? (
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 px-3 py-1 text-xs font-medium">
+                          <Gavel size={13} />
+                          Winners proclaimed
+                        </span>
+                      ) : null}
+                      {election.hadTies ? (
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 px-3 py-1 text-xs font-medium">
+                          <Gavel size={13} />
+                          Tie resolved
+                        </span>
+                      ) : null}
+                      {election.hadComplaint ? (
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 px-3 py-1 text-xs font-medium">
+                          <ShieldAlert size={13} />
+                          Complaint on record
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
 
                   <div className="mt-5 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">

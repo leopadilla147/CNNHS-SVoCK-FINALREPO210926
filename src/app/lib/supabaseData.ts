@@ -16,6 +16,7 @@ import type {
 } from "../context/AppContext";
 import { isSupabaseConfigured, supabase } from "./supabase";
 import { clearSessionToken, saveSessionToken } from "./session";
+import { canonicalAuditRole } from "./auditRoles";
 
 export const toDate = (value?: string) => value ? value.slice(0, 10) : "";
 // v1.1 election_periods stores start_time/end_time as PostgreSQL `time`
@@ -408,9 +409,12 @@ export async function syncStudents(next: Student[], previous: Student[]) {
 /**
  * Pure builder for the election_periods UPDATE payload.
  *
- * v1.2 (058) adds the two lifecycle columns: `lifecycle_stage` (the
- * authoritative stage) and `rules_discussion_at` (the campaign meeting,
- * re-added because 036 dropped it).  The legacy `campaign_*` /
+ * v1.3 (082) adds the Campaign window back (`campaign_start_at` /
+ * `campaign_end_at`, dropped by 036, re-added for the Stage 2 date pickers)
+ * and `election_modality` (Digital / Manual / Hybrid, informational).  The
+ * meeting is no longer written here: `rules_discussion_at` is saved from
+ * Stage 1 through save_meeting_schedule_rpc, which guards the stage — a
+ * Stage 4 "Save Schedule" click must not clobber it.  The legacy
  * `nomination_open` / `official_list_posted` / `plan_finalized` columns
  * remain dropped — referencing them would 400 (PGRST204 column not found).
  */
@@ -427,7 +431,9 @@ export function buildElectionPeriodSyncPayload(period: ElectionPeriod) {
     proclaimed: Boolean(period.proclaimed),
     proclaimed_at: period.proclaimedAt ? `${period.proclaimedAt}` : null,
     voting_method: period.votingMethod || "plurality",
-    rules_discussion_at: period.rulesDiscussionAt || null,
+    campaign_start_at: period.campaignStartDate || null,
+    campaign_end_at: period.campaignEndDate || null,
+    election_modality: period.electionModality || "digital",
     // lifecycle_stage is deliberately ABSENT.  This function backs the plain
     // schedule editor, which has no business moving the election between
     // stages: writing a default here would let a "Save Schedule" click reset a
@@ -567,7 +573,11 @@ export async function insertAuditLog(entry: Omit<LogEntry, "id" | "timestamp">, 
     await supabase.rpc("insert_audit_log_rpc", {
       p_actor_id: actorId && isUuid(actorId) ? actorId : null,
       p_actor_name: entry.user,
-      p_actor_role: entry.role.toLowerCase(),
+      // 027's check constraint only accepts admin|student|system|sslg_adviser.
+      // Callers pass display strings ("SSLG Adviser", "Administrator") — a
+      // rejected insert was previously swallowed silently, so those rows
+      // never persisted.  Canonicalize onto the constraint set first.
+      p_actor_role: canonicalAuditRole(entry.role),
       p_action: entry.action,
       p_details: entry.details,
       p_type: entry.type,
@@ -611,6 +621,7 @@ function mapStudent(row: any): Student {
     status: row.status,
     email: row.email,
     registeredAt: toDate(row.registered_at),
+    profilePictureUrl: row.profile_picture_url || undefined,
     verificationStatus: row.verification_status || undefined,
     mismatchCount: row.mismatch_count ?? undefined,
   };
@@ -643,10 +654,11 @@ function mapCommissioner(row: any): Commissioner {
 }
 
 function mapElectionPeriod(row: any): ElectionPeriod {
-  // v1.2 (058) shape: lifecycle_stage + rules_discussion_at are live again
-  // alongside election_date / start_time / end_time.  The campaign_* /
-  // nomination_open / official_list_posted / plan_finalized columns remain
-  // dropped, so each maps to an explicit empty/false default.
+  // v1.3 (082) shape: the Campaign window is back (campaign_start_at /
+  // campaign_end_at, re-added after 036 dropped them) and election_modality
+  // records Digital / Manual / Hybrid.  The nomination_open /
+  // official_list_posted / plan_finalized columns remain dropped, so each
+  // maps to an explicit empty/false default.
   return {
     id: row.id,
     startDate: toDate(row.election_date),
@@ -659,21 +671,25 @@ function mapElectionPeriod(row: any): ElectionPeriod {
     nominationOpen: false,
     resultsPublished: Boolean(row.results_published),
     officialListPosted: false,
-    campaignStartDate: "",
+    campaignStartDate: row.campaign_start_at || undefined,
     campaignStartTime: "",
-    campaignEndDate: "",
+    campaignEndDate: row.campaign_end_at || undefined,
     campaignEndTime: "",
     planFinalized: false,
     proclaimed: Boolean(row.proclaimed),
     proclaimedAt: row.proclaimed_at ? row.proclaimed_at : undefined,
     rulesDiscussionAt: row.rules_discussion_at || undefined,
     votingMethod: row.voting_method || undefined,
+    electionModality: row.election_modality || undefined,
     schoolYear: row.school_year || undefined,
     lifecycleStage: (row.lifecycle_stage as ElectionPeriod["lifecycleStage"]) || "application",
     // 060 columns.  Absent until the migration is applied, so keep the
     // undefined default rather than inventing a value.
     fingerprintRegistrationStartAt: row.fingerprint_registration_start_at || undefined,
     fingerprintRegistrationEndAt: row.fingerprint_registration_end_at || undefined,
+    // 081 columns — the merged publish & proclaim flow's board decision text.
+    proclamationDecisionReason: row.proclamation_decision_reason || undefined,
+    proclamationComplaintNote: row.proclamation_complaint_note || undefined,
   };
 }
 
@@ -701,9 +717,6 @@ function mapCandidate(row: any): Candidate {
     documents: {
       applicationForm: row.doc_application_form,
       introductoryProfile: row.doc_introductory_profile,
-      screeningForm: row.doc_screening_form,
-      reportCard: row.doc_report_card,
-      goodMoralCert: row.doc_good_moral_cert,
       eafFront: row.doc_eaf_front,
       eafBack: row.doc_eaf_back,
     },
@@ -789,6 +802,117 @@ export async function uploadCandidateImage(
   if (error) throw new Error(`Storage upload failed: ${error.message}`);
   const { data: { publicUrl } } = supabase.storage.from(bucket).getPublicUrl(fileName);
   return publicUrl;
+}
+
+/** 072: student profile pictures live in their own public bucket. */
+export async function uploadStudentPicture(studentId: string, file: File | Blob): Promise<string> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const ext = file instanceof File && file.name.match(/\.(\w+)$/)
+    ? file.name.match(/\.(\w+)$/)![1].toLowerCase()
+    : "jpg";
+  // Unique name per upload so the insert-only storage policy always
+  // applies (no upsert needed) and a replaced photo can never 409.
+  const fileName = `student_${studentId}_${Date.now()}.${ext}`;
+  const { error } = await supabase.storage.from("student-pictures").upload(fileName, file);
+  if (error) throw new Error(`Storage upload failed: ${error.message}`);
+  const { data: { publicUrl } } = supabase.storage.from("student-pictures").getPublicUrl(fileName);
+  return publicUrl;
+}
+
+/**
+ * 072: persist (or clear, with null) the signed-in student's picture URL.
+ * The RPC derives the actor from the session spine and refuses URLs that
+ * are not student-pictures uploads, so the URL argument is validated
+ * server-side too.
+ */
+export async function updateMyProfilePictureRpc(pPictureUrl: string | null): Promise<any> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("update_my_profile_picture", {
+    p_picture_url: pPictureUrl,
+  });
+  if (error) {
+    const msg = [error.message, error.details, error.hint].filter(Boolean).join(" | ");
+    throw new Error(msg);
+  }
+  return data;
+}
+
+/**
+ * Storage cleanup: ask the delete_profile_picture edge function
+ * (x-session-token side channel) to remove the storage object behind a
+ * student picture URL.  The function only deletes objects owned by the
+ * session's student AND no longer referenced by profile_picture_url, so
+ * callers must clear/replace the column via updateMyProfilePictureRpc
+ * FIRST.  (One edge function serves both audiences; the student session
+ * role routes this call to the student-pictures bucket.)
+ */
+export async function deleteStudentPictureRpc(pictureUrl: string): Promise<void> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.functions.invoke("delete_profile_picture", {
+    body: { pictureUrl },
+  });
+  // Prefer the function's own error body (real reason) over the
+  // generic non-2xx wrapper message invoke attaches.
+  if (data && (data as { error?: string }).error) {
+    throw new Error((data as { error?: string }).error!);
+  }
+  if (error) throw new Error(error.message);
+}
+
+/** 073: staff profile pictures live in their own public bucket. */
+export async function uploadAdminPicture(adminId: string, file: File | Blob): Promise<string> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const ext = file instanceof File && file.name.match(/\.(\w+)$/)
+    ? file.name.match(/\.(\w+)$/)![1].toLowerCase()
+    : "jpg";
+  // Unique name per upload so the insert-only storage policy always
+  // applies (no upsert needed) and a replaced photo can never 409;
+  // delete_profile_picture keys its ownership check on admin_<id>_.
+  const fileName = `admin_${adminId}_${Date.now()}.${ext}`;
+  const { error } = await supabase.storage.from("admin-pictures").upload(fileName, file);
+  if (error) throw new Error(`Storage upload failed: ${error.message}`);
+  const { data: { publicUrl } } = supabase.storage.from("admin-pictures").getPublicUrl(fileName);
+  return publicUrl;
+}
+
+/**
+ * 073: persist (or clear, with null) the signed-in staff member's picture
+ * URL.  The RPC derives the actor from the session spine, gates the role
+ * to admin/sslg_adviser, and refuses URLs that are not admin-pictures
+ * uploads, so the URL argument is validated server-side too.
+ */
+export async function updateMyAdminPictureRpc(pPictureUrl: string | null): Promise<any> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("update_my_admin_profile_picture", {
+    p_picture_url: pPictureUrl,
+  });
+  if (error) {
+    const msg = [error.message, error.details, error.hint].filter(Boolean).join(" | ");
+    throw new Error(msg);
+  }
+  return data;
+}
+
+/**
+ * 073: ask the delete_profile_picture edge function (x-session-token
+ * side channel) to remove the storage object behind a staff picture URL.
+ * The function only deletes objects owned by the session's staff member
+ * AND no longer referenced by profile_picture_url, so callers must
+ * clear/replace the column via updateMyAdminPictureRpc FIRST.  (One edge
+ * function serves both audiences; the staff session role routes this
+ * call to the admin-pictures bucket.)
+ */
+export async function deleteAdminPictureRpc(pictureUrl: string): Promise<void> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.functions.invoke("delete_profile_picture", {
+    body: { pictureUrl },
+  });
+  // Prefer the function's own error body (real reason) over the
+  // generic non-2xx wrapper message invoke attaches.
+  if (data && (data as { error?: string }).error) {
+    throw new Error((data as { error?: string }).error!);
+  }
+  if (error) throw new Error(error.message);
 }
 
 export async function submitCandidacyRpc(payload: {
@@ -897,6 +1021,10 @@ export interface CurrentProfile {
   full_name: string | null;
   email: string | null;
   must_change_password: boolean;
+  /** 073: staff photo (adminprofiles); students get theirs off the
+   *  students list (live after upload) — returned here too for the
+   *  public Navbar's single-field read. */
+  profile_picture_url: string | null;
 }
 
 export async function getCurrentProfileRpc(): Promise<CurrentProfile | null> {
@@ -911,6 +1039,7 @@ export async function getCurrentProfileRpc(): Promise<CurrentProfile | null> {
     full_name: row.full_name ?? null,
     email: row.email ?? null,
     must_change_password: Boolean(row.must_change_password),
+    profile_picture_url: row.profile_picture_url ?? null,
   };
 }
 
@@ -1174,6 +1303,27 @@ export async function getAbstainSummaryRpc(): Promise<AbstainSummaryRow[]> {
   }));
 }
 
+/**
+ * 079 — per-position abstain counts for the Live Results tab, gated like
+ * get_live_results_rpc (chief OR electoral_board) and scoped to the same
+ * active period, so abstains appear exactly when live results do.
+ */
+export interface LiveAbstainSummaryRow {
+  election_period_id: string;
+  position: string;
+  abstain_count: number;
+}
+
+export async function getLiveAbstainSummaryRpc(): Promise<LiveAbstainSummaryRow[]> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("get_live_abstain_summary_rpc");
+  if (error) throw new Error(error.message);
+  return (data || []).map((row: LiveAbstainSummaryRow) => ({
+    ...row,
+    abstain_count: Number(row.abstain_count) || 0,
+  }));
+}
+
 export interface PublicCurrentCandidate {
   id: string;
   name: string;
@@ -1313,6 +1463,10 @@ export interface PastElectionSummary {
   votesCast: number;
   abstentions: number;
   totalBallots: number;
+  /** 081 — the announcement resolved at least one tied position. */
+  hadTies?: boolean;
+  /** 081 — a complaint was on record when the winners were proclaimed. */
+  hadComplaint?: boolean;
 }
 
 export interface PastElectionCandidateTally {
@@ -1332,6 +1486,10 @@ export interface PastElectionPositionResult {
   votesCast: number;
   abstentions: number;
   candidates: PastElectionCandidateTally[];
+  /** 081 — this position ended in a tie the Board resolved manually. */
+  wasTie?: boolean;
+  /** How the Board recorded the resolution (e.g. "Coin Toss"). */
+  tieBreakNote?: string;
 }
 
 export interface PastElectionResults {
@@ -1344,6 +1502,8 @@ export interface PastElectionResults {
     votingMethod?: string;
     proclaimed: boolean;
     proclaimedAt?: string;
+    /** 081 — the board's public note on the complaint(s) of record. */
+    complaintNote?: string;
   };
   totals: {
     positionsContested: number;
@@ -1419,7 +1579,98 @@ export async function listPastElections(): Promise<PastElectionSummary[]> {
   const client = requireSupabase();
   const { data, error } = await client.rpc("list_past_elections_rpc");
   if (error) throw new Error(error.message);
-  return (data || []).map(mapPastElectionSummary);
+  const summaries = (data || []).map(mapPastElectionSummary);
+  // 081 — badge each card with whether the announcement resolved ties or was
+  // made over a complaint of record.  The proclamations table is publicly
+  // readable and its rows are retained forever, so the live read covers
+  // archived periods too.  Best effort: badges never break the list.
+  try {
+    const ids = summaries.map((s: PastElectionSummary) => s.id).filter(Boolean);
+    if (ids.length > 0) {
+      const [proclamationsRes, periodsRes] = await Promise.all([
+        client
+          .from("proclamations")
+          .select("election_period_id, resolution_method")
+          .in("election_period_id", ids),
+        client
+          .from("election_periods")
+          .select("id, proclamation_complaint_note")
+          .in("id", ids),
+      ]);
+      if (!proclamationsRes.error && !periodsRes.error) {
+        const tieIds = new Set(
+          (proclamationsRes.data || [])
+            .filter((row: any) => row.resolution_method === "manual")
+            .map((row: any) => row.election_period_id as string),
+        );
+        const complaintIds = new Set(
+          (periodsRes.data || [])
+            .filter((row: any) => row.proclamation_complaint_note)
+            .map((row: any) => row.id as string),
+        );
+        for (const summary of summaries) {
+          summary.hadTies = tieIds.has(summary.id);
+          summary.hadComplaint = complaintIds.has(summary.id);
+        }
+      }
+    }
+  } catch {
+    /* the badges are an addition to the record, never a gate */
+  }
+  return summaries;
+}
+
+export interface ProclamationTieAnnotation {
+  position: string;
+  wasTie: boolean;
+  tieBreakNote?: string;
+  /** The proclaimed candidate for this position (every proclaimed position
+   *  appears in `ties`, tie or not — so this doubles as the winners list). */
+  candidateId?: string;
+}
+
+export interface ProclamationAnnotations {
+  ties: ProclamationTieAnnotation[];
+  complaintNote?: string;
+}
+
+/**
+ * 081 — the proclamation's public decision record for one election: which
+ * positions ended in a tie the Board resolved (and how), the proclaimed
+ * winner per position, plus the board's note on the complaint(s) of record.
+ * Both source tables are publicly readable and the rows are retained
+ * forever, so this serves the current official results, the live results
+ * page, AND archived past elections.  Soft-fails to an empty record so an
+ * un-migrated database can never break the results pages.
+ */
+export async function getProclamationAnnotations(
+  electionPeriodId: string
+): Promise<ProclamationAnnotations> {
+  if (!supabase) return { ties: [] };
+  try {
+    const [proclamationsRes, periodRes] = await Promise.all([
+      supabase
+        .from("proclamations")
+        .select("winning_position, candidate_id, resolution_method, tie_break_note")
+        .eq("election_period_id", electionPeriodId),
+      supabase
+        .from("election_periods")
+        .select("proclamation_complaint_note")
+        .eq("id", electionPeriodId)
+        .maybeSingle(),
+    ]);
+    if (proclamationsRes.error || periodRes.error) return { ties: [] };
+    const ties: ProclamationTieAnnotation[] = (proclamationsRes.data || []).map((row: any) => ({
+      position: row.winning_position,
+      wasTie: row.resolution_method === "manual",
+      tieBreakNote: row.tie_break_note || undefined,
+      candidateId: row.candidate_id || undefined,
+    }));
+    const complaintNote = periodRes.data?.proclamation_complaint_note || undefined;
+    return { ties, complaintNote };
+  } catch {
+    return { ties: [] };
+  }
 }
 
 /** Full tallies, abstentions and proclaimed winners for one past election. */
@@ -1432,7 +1683,23 @@ export async function getPastElectionResults(
   });
   if (error) throw new Error(error.message);
   if (!data) return null;
-  return mapPastElectionResults(data);
+  const results = mapPastElectionResults(data);
+  // 081 — annotate the record with the tie/complaint facts; a failure here
+  // must never hide the tally itself.
+  try {
+    const annotations = await getProclamationAnnotations(electionPeriodId);
+    results.election.complaintNote = annotations.complaintNote;
+    for (const position of results.positions) {
+      const tie = annotations.ties.find((t) => t.position === position.position && t.wasTie);
+      if (tie) {
+        position.wasTie = true;
+        position.tieBreakNote = tie.tieBreakNote;
+      }
+    }
+  } catch {
+    /* the annotations are an addition to the record, never a gate */
+  }
+  return results;
 }
 
 /**
@@ -1476,6 +1743,32 @@ export async function closeElectionRpc(pElectionId: string): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
+/**
+ * Resume a paused vote (084).  Requires the caller's own Electoral Board
+ * password — the RPC verifies it server-side before flipping is_active.
+ */
+export async function reopenVotingRpc(pElectionId: string, password: string): Promise<void> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("reopen_voting_rpc", {
+    p_election_id: pElectionId,
+    p_password: password,
+  });
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Finalize the Voting Stage into Stage 5 (084).  Requires the caller's own
+ * Electoral Board password — verified server-side by the RPC.
+ */
+export async function endVotingStageRpc(pElectionId: string, password: string): Promise<void> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("end_voting_stage_rpc", {
+    p_election_id: pElectionId,
+    p_password: password,
+  });
+  if (error) throw new Error(error.message);
+}
+
 export async function publishResultsRpc(pElectionId: string): Promise<void> {
   if (!supabase) throw new Error("Supabase is not configured.");
   const { error } = await supabase.rpc("publish_results_rpc", {
@@ -1512,9 +1805,10 @@ export async function getProclamationTallyRpc(electionId: string): Promise<Procl
   }));
 }
 
-/** How the Electoral Board resolves a tied position before proclaiming. */
+/** How the Electoral Board resolves a tied position before proclaiming.
+ *  081 — the pick records how the tie was resolved (e.g. "Coin Toss"). */
 export type TieResolution =
-  | { method: "manual"; candidateId: string };
+  | { method: "manual"; candidateId: string; tieBreak?: string };
 
 export interface ProclaimedWinner {
   position: string;
@@ -1527,20 +1821,29 @@ export interface ProclaimedWinner {
 /**
  * 069 — proclaim the winners.  A tied position (two or more candidates on
  * the same top count, including an all-zero position) must carry a
- * resolution naming the tied candidate the Electoral Board chose.
+ * resolution naming the tied candidate the Electoral Board chose.  081 adds
+ * the per-tie how-resolved text and the board's complaint note.  The RPC's
+ * other optional params (p_decision_reason) are simply left at their
+ * defaults.
  */
 export async function proclaimWinnersRpc(
   pElectionId: string,
   resolutions: Record<string, TieResolution> = {},
+  decision?: { complaintNote?: string },
 ): Promise<ProclaimedWinner[]> {
   if (!supabase) throw new Error("Supabase is not configured.");
-  const payload: Record<string, { method: string; candidate_id?: string }> = {};
+  const payload: Record<string, { method: string; candidate_id?: string; tie_break?: string }> = {};
   for (const [position, resolution] of Object.entries(resolutions)) {
-    payload[position] = { method: "manual", candidate_id: resolution.candidateId };
+    payload[position] = {
+      method: "manual",
+      candidate_id: resolution.candidateId,
+      tie_break: resolution.tieBreak || undefined,
+    };
   }
   const { data, error } = await supabase.rpc("proclaim_winners_rpc", {
     p_election_id: pElectionId,
     p_resolutions: payload,
+    p_complaint_note: decision?.complaintNote || null,
   });
   if (error) throw new Error(error.message);
   return (data || []).map((row: any) => ({
@@ -1590,23 +1893,27 @@ export async function startCandidacyPeriodRpc(schoolYear?: string): Promise<stri
   return String(data);
 }
 
-/** Stage 1: pause applications without leaving the stage. */
-export async function closeCandidacyPeriodRpc(): Promise<string | null> {
-  const client = requireSupabase();
-  const { data, error } = await client.rpc("close_candidacy_period_rpc");
-  if (error) throw new Error(error.message);
-  return data ? String(data) : null;
-}
-
-/** Stage 2: record the meeting AND end the Candidate Application Period. */
-export async function endCandidacyAndScheduleMeetingRpc(
+/** Stage 1: save (or re-save) the Rules Discussion meeting.  The RPC refuses
+ *  once the Application Stage has ended — the schedule locks with the stage. */
+export async function saveMeetingScheduleRpc(
   pElectionId: string,
   meetingAtIso: string
 ): Promise<void> {
   const client = requireSupabase();
-  const { error } = await client.rpc("end_candidacy_and_schedule_meeting_rpc", {
+  const { error } = await client.rpc("save_meeting_schedule_rpc", {
     p_election_id: pElectionId,
     p_meeting_at: meetingAtIso,
+  });
+  if (error) throw new Error(error.message);
+}
+
+/** Stage 1: end the Application Stage.  Applications close for the rest of
+ *  the election and the lifecycle moves to the Campaign Stage.  One-way; the
+ *  RPC requires the meeting to be saved first. */
+export async function endCandidacyPeriodRpc(pElectionId: string): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client.rpc("end_candidacy_period_rpc", {
+    p_election_id: pElectionId,
   });
   if (error) throw new Error(error.message);
 }
@@ -1635,6 +1942,16 @@ export async function closeFingerprintRegistrationRpc(pElectionId: string): Prom
   if (error) throw new Error(error.message);
 }
 
+/** Stop the Campaign Period early (080): advance straight to the Fingerprint
+ *  Registration stage without opening an enrolment window. */
+export async function stopCampaignRpc(pElectionId: string): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client.rpc("stop_campaign_rpc", {
+    p_election_id: pElectionId,
+  });
+  if (error) throw new Error(error.message);
+}
+
 /** Filed (unresolved) complaints for one election period — the Stage 4 banner count. */
 export async function countActiveComplaintsRpc(pElectionId: string): Promise<number> {
   const client = requireSupabase();
@@ -1646,12 +1963,18 @@ export async function countActiveComplaintsRpc(pElectionId: string): Promise<num
 }
 
 export interface ResetElectionPlanResult {
-  electionPeriodId: string;
+  /** Null when the reset archived the period without starting a new one —
+   * the School Year is then set in Stage 1, which creates the period. */
+  electionPeriodId: string | null;
   archivedPrevious: boolean;
   archivedElectionPeriodId?: string;
   schoolYear?: string;
-  /** "cleared" = reset in place, "archived" = old period retired, "started" = nothing existed. */
-  mode: "cleared" | "archived" | "started";
+  /**
+   * "cleared" = reset in place, "archived" = old period retired,
+   * "started" = a new period was created in the same transaction,
+   * "noop" = nothing was in progress.
+   */
+  mode: "cleared" | "archived" | "started" | "noop";
 }
 
 /**
@@ -1670,7 +1993,7 @@ export async function resetElectionPlanRpc(
   if (error) throw new Error(error.message);
   const row = (data || {}) as Record<string, unknown>;
   return {
-    electionPeriodId: String(row.election_period_id ?? ""),
+    electionPeriodId: row.election_period_id ? String(row.election_period_id) : null,
     archivedPrevious: Boolean(row.archived_previous),
     archivedElectionPeriodId: row.archived_election_period_id
       ? String(row.archived_election_period_id)

@@ -42,6 +42,8 @@ const chiefTopItems: NavItem[] = [
 const sslgAdviserTopItems: NavItem[] = [
   { label: "Dashboard", href: "/admin/dashboard", icon: <LayoutDashboard size={18} /> },
   { label: "Student Enrollment", href: "/admin/students", icon: <GraduationCap size={18} /> },
+  { label: "System Logs", href: "/admin/logs", icon: <Activity size={18} /> },
+  { label: "My Profile", href: "/admin/profile", icon: <UserCheck size={18} /> },
 ];
 
 const screeningNavItems: NavItem[] = [
@@ -49,7 +51,6 @@ const screeningNavItems: NavItem[] = [
   { label: "Candidates Review", href: "/admin/candidates", icon: <Trophy size={18} /> },
   { label: "Archived Documents", href: "/admin/archive", icon: <Archive size={18} /> },
   { label: "My Profile", href: "/admin/profile", icon: <UserCheck size={18} /> },
-  { label: "System Logs", href: "/admin/logs", icon: <Activity size={18} /> },
 ];
 
 const electoralNavItems: NavItem[] = [
@@ -57,7 +58,6 @@ const electoralNavItems: NavItem[] = [
   { label: "Election Setup", href: "/admin/election", icon: <Settings size={18} /> },
   { label: "Live Results", href: "/admin/live-results", icon: <Eye size={18} /> },
   { label: "My Profile", href: "/admin/profile", icon: <UserCheck size={18} /> },
-  { label: "System Logs", href: "/admin/logs", icon: <Activity size={18} /> },
 ];
 
 const grievanceNavItems: NavItem[] = [
@@ -65,7 +65,6 @@ const grievanceNavItems: NavItem[] = [
   { label: "Election Help Desk", href: "/admin/help-desk", icon: <HelpCircle size={18} /> },
   { label: "Complaints", href: "/admin/complaints", icon: <AlertCircle size={18} /> },
   { label: "My Profile", href: "/admin/profile", icon: <UserCheck size={18} /> },
-  { label: "System Logs", href: "/admin/logs", icon: <Activity size={18} /> },
 ];
 
 const roleConfig: Record<NonNullable<UserRole>, { items: NavItem[]; label: string; color: string }> = {
@@ -89,7 +88,7 @@ const commissionerLabelMap: Record<CommissionerRole, string> = {
 };
 
 export function DashboardSidebar() {
-  const { currentUser, setCurrentUser, candidates, electionPeriod } = useApp();
+  const { currentUser, setCurrentUser, candidates, electionPeriod, students } = useApp();
   const location = useLocation();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -114,6 +113,16 @@ export function DashboardSidebar() {
   const hasApprovedCandidacy = candidates.some((c) => c.studentId === currentUser?.id && c.status === "approved");
   const hasCandidacy = candidates.some((c) => c.studentId === currentUser?.id);
 
+  // 072/073: the signed-in user's photo (when set) instead of the initial.
+  // Students resolve theirs off the students list (live after an upload);
+  // staff read it off currentUser (073 profile RPC refresh).  `students`
+  // is absent in some test stubs, hence ?.  Photo-less users keep the
+  // initial.
+  const avatarPictureUrl =
+    currentUser.role === "student"
+      ? students?.find((s) => s.id === currentUser.id)?.profilePictureUrl
+      : currentUser.profilePictureUrl;
+
   const logoutConfirm = useConfirm({
     title: "Logout?",
     description: "Are you sure you want to logout of the voting system?",
@@ -137,8 +146,12 @@ export function DashboardSidebar() {
       {/* Header */}
       <div className="p-5 border-b border-white/10">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
-            {currentUser.name.charAt(0)}
+          <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center text-white font-bold text-sm flex-shrink-0 overflow-hidden">
+            {avatarPictureUrl ? (
+              <img src={avatarPictureUrl} alt="" className="w-10 h-10 object-cover" />
+            ) : (
+              currentUser.name.charAt(0)
+            )}
           </div>
           <div className="min-w-0 flex-1">
             <div className="text-white text-sm font-medium truncate">{currentUser.name}</div>

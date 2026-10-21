@@ -3,6 +3,7 @@ import { motion } from "motion/react";
 import { Link, useNavigate } from "react-router";
 import { Users, GraduationCap, Clock } from "lucide-react";
 import { useApp } from "../../../context/AppContext";
+import ElectionStageBanner from "../../../components/ElectionStageBanner";
 
 export default function SslgAdviserDashboard() {
   const { students, currentUser } = useApp();
@@ -55,6 +56,9 @@ export default function SslgAdviserDashboard() {
         <p className="text-gray-800 text-sm font-semibold">{currentUser?.name}</p>
         <p className="text-gray-500 text-sm">Student supervision and election oversight overview.</p>
       </motion.div>
+
+      {/* Election Stage announcement */}
+      <ElectionStageBanner className="mb-6" />
 
       <div className="grid grid-cols-2 lg:grid-cols-2 gap-4 mb-8">
         {stats.map((stat, i) => {

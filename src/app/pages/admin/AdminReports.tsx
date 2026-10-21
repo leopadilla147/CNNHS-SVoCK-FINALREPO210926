@@ -42,10 +42,11 @@ import {
 import {
   getLiveResultsRpc, getAbstainSummaryRpc, type LiveResultRow,
 } from "../../lib/supabaseData";
+import { EXECUTIVE_POSITIONS } from "../../lib/partyScope";
 
 // Canonical core-position ordering; every other position (including the
 // grade-level representatives) is derived from the live results.
-const CORE_POSITIONS = ["President", "Vice President", "Secretary", "Treasurer", "Auditor", "PRO"];
+const CORE_POSITIONS = EXECUTIVE_POSITIONS;
 const isGradeRep = (p: string) => /representative/i.test(p);
 
 /** Photo documentation: fixed render box for .docx embedding (in points). */

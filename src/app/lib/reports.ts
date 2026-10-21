@@ -1,5 +1,6 @@
 import type { Candidate, Student, ElectionPeriod, Complaint, Commissioner, LogEntry } from "../context/AppContext";
 import { escapeHtml } from "./escapeHtml";
+import { EXECUTIVE_POSITIONS } from "./partyScope";
 import {
   defaultAccomplishmentReportDraft,
   type AccomplishmentReportDraft,
@@ -74,8 +75,6 @@ export function generateEnclosure6(candidates: Candidate[]) {
       <td>${escapeHtml(c.partyAffiliation || 'Independent')}</td>
       <td>${escapeHtml(c.gradeLevel)}</td>
       <td style="text-align:center;">${c.documents.applicationForm ? '✓' : '☐'}</td>
-      <td style="text-align:center;">${c.documents.reportCard ? '✓' : '☐'}</td>
-      <td style="text-align:center;">${c.documents.goodMoralCert ? '✓' : '☐'}</td>
       <td style="text-align:center;">${c.status === 'approved' ? 'Approved' : c.status === 'pending' ? 'For Review' : 'In Progress'}</td>
     </tr>`).join('');
 
@@ -88,11 +87,9 @@ export function generateEnclosure6(candidates: Candidate[]) {
       <th>Position</th>
       <th>Party</th>
       <th>Grade</th>
-      <th style="width:50px;">App Form</th>
-      <th style="width:50px;">Report Card</th>
-      <th style="width:50px;">Good Moral</th>
+      <th style="width:60px;">EAF</th>
       <th>Status</th>
-    </tr></thead><tbody>${rows || '<tr><td colspan="9" style="text-align:center;">No records</td></tr>'}</tbody></table>
+    </tr></thead><tbody>${rows || '<tr><td colspan="7" style="text-align:center;">No records</td></tr>'}</tbody></table>
     <p class="note">Prepared by the Commissioner of Screening and Validation. This form tracks the completeness of each candidate's EAF and supporting documents.</p>
     <div class="signature">
       <div><div class="line">Commissioner of Screening and Validation</div></div>
@@ -114,7 +111,6 @@ export function generateEnclosure72(candidates: Candidate[]) {
     <td>${escapeHtml(c.partyAffiliation || 'Independent')}</td>
     <td style="text-align:center;">${escapeHtml(c.gradeLevel)}</td>
     <td style="text-align:center;">${c.documents.applicationForm ? '✓' : '✗'}</td>
-    <td style="text-align:center;">${c.documents.screeningForm ? '✓' : '✗'}</td>
     <td style="text-align:center;">${c.status === 'approved' ? 'Passed' : c.status === 'rejected' ? 'Failed' : 'Pending'}</td>
   </tr>`).join('');
 
@@ -133,10 +129,9 @@ export function generateEnclosure72(candidates: Candidate[]) {
       <th>Position</th>
       <th>Party</th>
       <th>Grade</th>
-      <th>App Form</th>
-      <th>Screening</th>
+      <th>EAF</th>
       <th>Result</th>
-    </tr></thead><tbody>${rows || '<tr><td colspan="8" style="text-align:center;">No records</td></tr>'}</tbody></table>
+    </tr></thead><tbody>${rows || '<tr><td colspan="7" style="text-align:center;">No records</td></tr>'}</tbody></table>
     <div class="signature">
       <div><div class="line">Commissioner of Screening and Validation</div></div>
       <div><div class="line">Chief Commissioner</div></div>
@@ -413,7 +408,7 @@ export function generateEnclosure17() {
 
 export function generateEnclosure18(candidates: Candidate[]) {
   const approved = candidates.filter(c => c.status === "approved");
-  const positions = ["President", "Vice President", "Secretary", "Treasurer", "Auditor", "PRO", "PIO", "Protocol Officer"];
+  const positions = EXECUTIVE_POSITIONS;
 
   let tables = '';
   positions.forEach(pos => {
@@ -448,7 +443,7 @@ export function generateEnclosure19(candidates: Candidate[]) {
 
 export function generateEnclosure20(candidates: Candidate[]) {
   const approved = candidates.filter(c => c.status === "approved");
-  const positions = ["President", "Vice President", "Secretary", "Treasurer", "Auditor", "PRO", "PIO", "Protocol Officer"];
+  const positions = EXECUTIVE_POSITIONS;
 
   let rows = '';
   positions.forEach(pos => {

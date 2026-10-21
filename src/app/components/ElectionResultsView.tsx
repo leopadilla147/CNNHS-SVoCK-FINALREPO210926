@@ -6,6 +6,7 @@ import {
   CalendarDays,
   Gavel,
   MapPin,
+  ShieldAlert,
   Trophy,
   Users,
 } from "lucide-react";
@@ -13,23 +14,7 @@ import type {
   PastElectionPositionResult,
   PastElectionResults,
 } from "../lib/supabaseData";
-
-const POSITION_ORDER = [
-  "President",
-  "Vice President",
-  "Secretary",
-  "Treasurer",
-  "Auditor",
-  "PRO",
-  "PIO",
-  "Protocol Officer",
-  "Grade 7 Representative",
-  "Grade 8 Representative",
-  "Grade 9 Representative",
-  "Grade 10 Representative",
-  "Grade 11 Representative",
-  "Grade 12 Representative",
-];
+import { FULL_POSITION_ORDER as POSITION_ORDER } from "../lib/partyScope";
 
 const POSITION_INDEX = new Map<string, number>(
   POSITION_ORDER.map((position, index) => [position, index]),
@@ -76,12 +61,18 @@ export function PositionCard({ position }: { position: PastElectionPositionResul
         >
           {position.position}
         </h2>
-        <div className="text-xs text-white/80 flex items-center gap-3">
+        <div className="text-xs text-white/80 flex items-center gap-3 flex-wrap">
           <span>{position.votesCast} vote{position.votesCast === 1 ? "" : "s"} cast</span>
           <span className="inline-flex items-center gap-1">
             <Ban size={12} />
             {position.abstentions} abstention{position.abstentions === 1 ? "" : "s"}
           </span>
+          {position.wasTie && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-400/20 border border-amber-300/60 px-2 py-0.5 text-[11px] font-medium text-amber-100">
+              <Gavel size={12} />
+              {position.tieBreakNote ? `Tie — resolved via ${position.tieBreakNote}` : "Tie resolved by the Board"}
+            </span>
+          )}
         </div>
       </div>
 
@@ -226,6 +217,16 @@ export default function ElectionResultsView({
           </div>
         </div>
       </motion.div>
+
+      {results.election.complaintNote && (
+        <div className="mb-8 rounded-2xl border border-amber-200 bg-amber-50 p-4 flex items-start gap-3 text-sm text-amber-800">
+          <ShieldAlert size={16} className="mt-0.5 shrink-0" />
+          <div>
+            <div className="font-medium">A complaint was on record for this election.</div>
+            <div className="text-xs mt-0.5">Electoral Board note: {results.election.complaintNote}</div>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm mb-8">
         <div className="rounded-2xl border border-gray-200 bg-white px-4 py-3 shadow-sm">

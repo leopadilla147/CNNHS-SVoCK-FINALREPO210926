@@ -2,16 +2,7 @@ import { useState } from "react";
 import { Search, Trophy, Mail, Phone, MapPin, EyeOff } from "lucide-react";
 import { motion } from "motion/react";
 import { useApp } from "../../context/AppContext";
-import { candidatesInLivePeriod } from "../../lib/partyScope";
-
-// Full canonical position order (001 candidates CHECK) — includes grade-level
-// representatives so every approved candidate is visible on the student side.
-const ALL_POSITION_ORDER = [
-  "President", "Vice President", "Secretary", "Treasurer", "Auditor", "PRO", "PIO",
-  "Protocol Officer",
-  "Grade 7 Representative", "Grade 8 Representative", "Grade 9 Representative",
-  "Grade 10 Representative", "Grade 11 Representative", "Grade 12 Representative",
-];
+import { candidatesInLivePeriod, FULL_POSITION_ORDER as ALL_POSITION_ORDER } from "../../lib/partyScope";
 
 export default function StudentCandidates() {
   const { candidates, currentUser, electionPeriod } = useApp();

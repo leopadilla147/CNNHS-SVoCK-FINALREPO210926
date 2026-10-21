@@ -35,7 +35,7 @@ const sampleInput = {
       email: "juan@test.local",
       mobileNumber: "09171234567",
       homeAddress: "Daet",
-      documents: { applicationForm: true, introductoryProfile: true, screeningForm: true, reportCard: true, goodMoralCert: true },
+      documents: { applicationForm: true, introductoryProfile: true },
       status: "approved" as const,
       submittedAt: "2026-01-01T00:00:00Z",
       votes: 750,

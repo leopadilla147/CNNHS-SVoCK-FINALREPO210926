@@ -2,6 +2,7 @@ import { motion } from "motion/react";
 import { Link } from "react-router";
 import { useApp } from "../../../context/AppContext";
 import { AlertCircle, HelpCircle, Activity, Clock, ArrowRight, Calendar } from "lucide-react";
+import ElectionStageBanner from "../../../components/ElectionStageBanner";
 
 export default function GrievanceDashboard() {
   const { complaints, currentUser } = useApp();
@@ -22,6 +23,9 @@ export default function GrievanceDashboard() {
         <p className="text-gray-800 text-sm font-semibold">{currentUser?.name}</p>
         <p className="text-gray-500 text-sm">Handle complaints and the election help desk.</p>
       </motion.div>
+
+      {/* Election Stage announcement */}
+      <ElectionStageBanner className="mb-6" />
 
       {filedComplaints > 0 && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6">

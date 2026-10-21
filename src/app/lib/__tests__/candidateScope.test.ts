@@ -31,9 +31,6 @@ function candidate(overrides: Partial<Candidate> = {}): Candidate {
     documents: {
       applicationForm: true,
       introductoryProfile: true,
-      screeningForm: true,
-      reportCard: true,
-      goodMoralCert: true,
     },
     positionApprovalStatus: "notRequired",
     status: "approved",

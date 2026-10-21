@@ -37,9 +37,6 @@ function candidate(overrides: Partial<Candidate> = {}): Candidate {
     documents: {
       applicationForm: true,
       introductoryProfile: true,
-      screeningForm: true,
-      reportCard: true,
-      goodMoralCert: true,
     },
     positionApprovalStatus: "notRequired",
     status: "approved",
@@ -465,8 +462,8 @@ describe("buildPartyOptions", () => {
   });
 
   it("blocks a party whose every seat already has a winner", () => {
-    // A Grade 12 roster is 9 seats: the 8 executive offices plus that grade's
-    // own representative seat, so all nine have to be filled before the party
+    // A Grade 12 roster is 8 seats: the 7 executive offices plus that grade's
+    // own representative seat, so all eight have to be filled before the party
     // counts as full.
     const full = [
       "President",
@@ -474,7 +471,6 @@ describe("buildPartyOptions", () => {
       "Secretary",
       "Treasurer",
       "Auditor",
-      "PRO",
       "PIO",
       "Protocol Officer",
       "Grade 12 Representative",
@@ -501,7 +497,6 @@ describe("buildPartyOptions", () => {
       "Secretary",
       "Treasurer",
       "Auditor",
-      "PRO",
       "PIO",
       "Protocol Officer",
     ].map((position, index) =>

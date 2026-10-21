@@ -1,19 +1,18 @@
 import { motion } from "motion/react";
 import { Link } from "react-router";
 import { useApp } from "../../../context/AppContext";
-import { ClipboardList, Trophy, BarChart2, Archive, Activity, Clock, ArrowRight, Send, CheckCircle } from "lucide-react";
+import { ClipboardList, Trophy, Archive, Activity, Clock, ArrowRight, Send, CheckCircle } from "lucide-react";
+import ElectionStageBanner from "../../../components/ElectionStageBanner";
 
 export default function ScreeningDashboard() {
   const { candidates, electionPeriod, currentUser } = useApp();
 
   const pendingCandidates = candidates.filter((c) => c.status === "pending").length;
   const approvedCandidates = candidates.filter((c) => c.status === "approved").length;
-  const rejectedCandidates = candidates.filter((c) => c.status === "rejected").length;
 
   const stats = [
-    { label: "Pending Review", value: pendingCandidates, icon: <ClipboardList size={20} />, color: "#EAB308", link: "/admin/candidates" },
-    { label: "Approved", value: approvedCandidates, icon: <Trophy size={20} />, color: "#22C55E", link: "/admin/candidates" },
-    { label: "Rejected", value: rejectedCandidates, icon: <BarChart2 size={20} />, color: "#EF4444", link: "/admin/candidates" },
+    { label: "Pending Review", value: pendingCandidates, icon: <ClipboardList size={20} />, color: "#EAB308", link: "/admin/candidates?filter=pending" },
+    { label: "Approved", value: approvedCandidates, icon: <Trophy size={20} />, color: "#22C55E", link: "/admin/candidates?filter=approved" },
     { label: "Total Applications", value: candidates.length, icon: <Activity size={20} />, color: "#5C0102", link: "/admin/candidates" },
   ];
 
@@ -25,15 +24,21 @@ export default function ScreeningDashboard() {
         <p className="text-gray-500 text-sm">Review and validate candidate applications.</p>
       </motion.div>
 
+      {/* Election Stage announcement */}
+      <ElectionStageBanner className="mb-6" />
+
       {pendingCandidates > 0 && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6">
-          <div className="flex items-center gap-2 text-amber-800 text-sm font-medium">
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mb-6">
+          <Link
+            to="/admin/candidates?filter=pending"
+            className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center gap-2 text-amber-800 text-sm font-medium hover:bg-amber-100 transition-colors"
+          >
             <Clock size={16} /> {pendingCandidates} candidate application(s) pending your review
-          </div>
+          </Link>
         </motion.div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
         {stats.map((stat, i) => {
           const card = (
             <motion.div

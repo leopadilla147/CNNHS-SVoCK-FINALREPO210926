@@ -1,9 +1,16 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { motion } from "motion/react";
 import { useApp } from "../../context/AppContext";
 import { isSupabaseConfigured, supabase } from "../../lib/supabase";
+import {
+  getLiveAbstainSummaryRpc,
+  getProclamationAnnotations,
+  type LiveAbstainSummaryRow,
+  type ProclamationAnnotations,
+} from "../../lib/supabaseData";
 import type { RealtimeChannel } from "@supabase/supabase-js";
-import { Lock, RefreshCw, Trophy, Activity, Users, BarChart3 } from "lucide-react";
+import { Lock, RefreshCw, Trophy, Activity, Users, BarChart3, MinusCircle, Gavel, ShieldAlert } from "lucide-react";
+import { FULL_POSITION_ORDER as POSITIONS } from "../../lib/partyScope";
 
 type LiveResult = {
   candidate_id: string;
@@ -14,18 +21,20 @@ type LiveResult = {
   votes: number;
 };
 
-const POSITIONS = [
-  "President", "Vice President", "Secretary", "Treasurer", "Auditor", "PRO", "PIO", "Protocol Officer",
-  "Grade 7 Representative", "Grade 8 Representative", "Grade 9 Representative",
-  "Grade 10 Representative", "Grade 11 Representative", "Grade 12 Representative"
-];
-
 export default function AdminLiveResults() {
   const { candidates: contextCandidates, electionPeriod } = useApp();
   const [liveResults, setLiveResults] = useState<Map<string, LiveResult[]>>(new Map());
+  // 079: per-position abstain counts, kept in step with the live tally —
+  // abstain rows are votes INSERTs, so the realtime subscription refreshes
+  // them through the same fetchLiveResults call.
+  const [abstainByPosition, setAbstainByPosition] = useState<Map<string, number>>(new Map());
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  // 081 — the proclamation record: which positions were ties (and how each
+  // was resolved), the proclaimed winner per position, and the board's note
+  // on the complaint(s) of record.  Loaded once per mount + manual refresh.
+  const [annotations, setAnnotations] = useState<ProclamationAnnotations>({ ties: [] });
   const channelRef = useRef<RealtimeChannel | null>(null);
   const electionIdRef = useRef<string | null>(null);
 
@@ -35,7 +44,12 @@ export default function AdminLiveResults() {
   const fetchLiveResults = useCallback(async () => {
     if (!isSupabaseConfigured || !supabase) return;
     try {
-      const { data, error } = await supabase.rpc("get_live_results_rpc");
+      // The abstain RPC fails soft (e.g. unexpected role gate) so the vote
+      // tally always renders; abstains just stay at their previous value.
+      const [{ data, error }, abstainRows] = await Promise.all([
+        supabase.rpc("get_live_results_rpc"),
+        getLiveAbstainSummaryRpc().catch(() => [] as LiveAbstainSummaryRow[]),
+      ]);
       if (error) {
         console.warn("get_live_results_rpc query failed, falling back to context candidates:", error.message);
         return;
@@ -47,6 +61,9 @@ export default function AdminLiveResults() {
         grouped.get(r.position)!.push(r);
       });
       setLiveResults(grouped);
+      const abstains = new Map<string, number>();
+      abstainRows.forEach((r) => abstains.set(r.position, r.abstain_count));
+      setAbstainByPosition(abstains);
       setLastUpdated(new Date());
     } catch (err) {
       console.warn("Failed to fetch live results:", err);
@@ -69,6 +86,13 @@ export default function AdminLiveResults() {
 
       if (!alive) return;
       electionIdRef.current = ep?.id || null;
+      // 081 — load the tie/proclamation/complaint record for the period; the
+      // helper fails soft so an un-migrated database just shows no badges.
+      if (electionIdRef.current) {
+        getProclamationAnnotations(electionIdRef.current).then((record) => {
+          if (alive) setAnnotations(record);
+        });
+      }
 
       if (channelRef.current) {
         supabase!.removeChannel(channelRef.current);
@@ -105,6 +129,11 @@ export default function AdminLiveResults() {
   const handleRefresh = async () => {
     setIsRefreshing(true);
     await fetchLiveResults();
+    // 081 — a manual refresh may follow a fresh proclamation, so the tie /
+    // winner / complaint record is re-read alongside the tally.
+    if (electionIdRef.current) {
+      setAnnotations(await getProclamationAnnotations(electionIdRef.current));
+    }
     setTimeout(() => setIsRefreshing(false), 600);
   };
 
@@ -116,6 +145,18 @@ export default function AdminLiveResults() {
     }
     return 0;
   };
+
+  // Header total: candidate votes summed across every position.  Abstains
+  // are not votes for a candidate, so they are excluded here (they show
+  // beside each position's vote count instead).
+  const totalVotesAll = useMemo(
+    () =>
+      [...liveResults.values()].reduce(
+        (sum, rows) => sum + rows.reduce((s, r) => s + (Number(r.votes) || 0), 0),
+        0,
+      ),
+    [liveResults],
+  );
 
   if (!showResults) {
     return (
@@ -166,6 +207,18 @@ export default function AdminLiveResults() {
         </div>
 
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-gray-50 p-4 rounded-2xl border border-gray-100">
+           <div className="flex items-center gap-2.5 min-w-[130px]">
+             <div className="p-2 rounded-xl bg-[#5C0102]/5 border border-[#5C0102]/10 text-[#5C0102]">
+               <BarChart3 size={16} />
+             </div>
+             <div className="leading-tight">
+               <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Total Votes</div>
+               <div className="text-lg font-black text-gray-900">{totalVotesAll.toLocaleString()}</div>
+             </div>
+           </div>
+
+           <div className="hidden sm:block h-6 w-px bg-gray-300"></div>
+
            <div className="flex items-center gap-2 min-w-[130px]">
              {isSubscribed ? (
                <>
@@ -206,6 +259,16 @@ export default function AdminLiveResults() {
         </div>
       </motion.div>
 
+      {annotations.complaintNote && (
+        <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 flex items-start gap-3 text-sm text-amber-800">
+          <ShieldAlert size={16} className="mt-0.5 shrink-0" />
+          <div>
+            <div className="font-medium">A complaint was on record for this election.</div>
+            <div className="text-xs mt-0.5">Electoral Board note: {annotations.complaintNote}</div>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
         {POSITIONS.map((pos) => {
           const posCandidates = approved.filter((c) => c.position === pos);
@@ -223,6 +286,10 @@ export default function AdminLiveResults() {
           const totalVotes = candidateVotes.reduce((s, c) => s + c.votes, 0);
           const winner = candidateVotes[0];
           const hasVotes = totalVotes > 0;
+          // 081 — the proclamation record for this position: the tie badge in
+          // the header and the per-candidate "Proclaimed winner" badge.
+          const positionProclamation = annotations.ties.find((t) => t.position === pos);
+          const positionTie = positionProclamation?.wasTie ? positionProclamation : undefined;
 
           return (
             <motion.div 
@@ -240,9 +307,18 @@ export default function AdminLiveResults() {
                    </div>
                    <div className="flex-1 min-w-0 pt-0.5">
                      <h3 className="text-gray-900 font-black text-lg leading-tight mb-1">{pos}</h3>
-                     <div className="flex items-center gap-1.5 text-[11px] font-bold text-gray-500 uppercase tracking-wider">
+                     <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-bold text-gray-500 uppercase tracking-wider">
                        <Users size={12}/> {totalVotes.toLocaleString()} {totalVotes === 1 ? "vote" : "votes"}
+                       <span className="text-gray-300">•</span>
+                       <MinusCircle size={12}/> {(abstainByPosition.get(pos) ?? 0).toLocaleString()}{" "}
+                       {(abstainByPosition.get(pos) ?? 0) === 1 ? "abstain" : "abstains"}
                      </div>
+                     {positionTie && (
+                       <span className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-700 border border-amber-200 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider">
+                         <Gavel size={11} />
+                         {positionTie.tieBreakNote ? `Tie — resolved via ${positionTie.tieBreakNote}` : "Tie resolved by the Board"}
+                       </span>
+                     )}
                    </div>
                 </div>
               </div>
@@ -284,7 +360,20 @@ export default function AdminLiveResults() {
                       )}
                       
                       <div className="flex-1 min-w-0 z-10">
-                        <div className={`text-sm font-bold truncate leading-tight ${isLeader ? 'text-gray-900' : 'text-gray-700'}`}>{candidate.name}</div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className={`text-sm font-bold truncate leading-tight ${isLeader ? 'text-gray-900' : 'text-gray-700'}`}>{candidate.name}</span>
+                          {positionProclamation?.candidateId === candidate.id ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 text-[10px] font-bold">
+                              <Gavel size={10} />
+                              Proclaimed winner
+                            </span>
+                          ) : !electionPeriod.proclaimed && isLeader ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 text-[10px] font-bold">
+                              <Trophy size={10} />
+                              Leading
+                            </span>
+                          ) : null}
+                        </div>
                         <div className="flex items-center gap-1.5 mt-0.5">
                            <span className="text-[11px] font-semibold text-gray-500 truncate max-w-[120px]">{candidate.party}</span>
                            {hasVotes && (

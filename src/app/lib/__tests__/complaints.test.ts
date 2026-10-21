@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toComplaintDto, buildSubmitPayload, statusLabel, statusMeta, sortFiledFirst } from "../complaints";
+import { toComplaintDto, buildSubmitPayload, statusLabel, statusMeta, sortFiledFirst, complaintWindowOpen, complaintsForElection } from "../complaints";
 import type { Complaint } from "../../context/AppContext";
 
 describe("buildSubmitPayload", () => {
@@ -33,6 +33,7 @@ describe("toComplaintDto", () => {
       status: "filed",
       submitted_at: "2026-09-18T01:00:00+08:00",
       resolution_note: "Rejected: insufficient evidence",
+      findings_note: "Reviewed CCTV footage; statement taken from the canvasser.",
       incident_date: "2026-09-17T10:00:00+08:00",
       resolved_at: "2026-09-19T02:00:00+08:00",
     });
@@ -44,6 +45,7 @@ describe("toComplaintDto", () => {
       status: "filed",
       submittedAt: "2026-09-18",
       rejectionReason: "Rejected: insufficient evidence",
+      findings: "Reviewed CCTV footage; statement taken from the canvasser.",
       incidentDate: "2026-09-17",
       resolvedAt: "2026-09-19",
     });
@@ -59,15 +61,16 @@ describe("toComplaintDto", () => {
     });
     expect(dto.studentName).toBe("Student");
     expect(dto.rejectionReason).toBeUndefined();
+    expect(dto.findings).toBeUndefined();
     expect(dto.incidentDate).toBeUndefined();
     expect(dto.resolvedAt).toBeUndefined();
   });
 });
 
 describe("statusLabel", () => {
-  it("produces the three D-01 labels", () => {
+  it("produces the three D-01 labels with the 086 'Resolved' wording", () => {
     expect(statusLabel("filed")).toBe("Filed");
-    expect(statusLabel("accepted")).toBe("Accepted");
+    expect(statusLabel("accepted")).toBe("Resolved");
     expect(statusLabel("rejected")).toBe("Rejected");
   });
 });
@@ -75,7 +78,7 @@ describe("statusLabel", () => {
 describe("statusMeta", () => {
   it("covers all three D-01 statuses with label + tone", () => {
     expect(statusMeta("filed")).toEqual({ label: "Filed", tone: "amber" });
-    expect(statusMeta("accepted")).toEqual({ label: "Accepted", tone: "green" });
+    expect(statusMeta("accepted")).toEqual({ label: "Resolved", tone: "green" });
     expect(statusMeta("rejected")).toEqual({ label: "Rejected", tone: "red" });
   });
 });
@@ -106,5 +109,46 @@ describe("sortFiledFirst", () => {
       row("a3", "filed", "2026-09-03"),
     ];
     expect(sortFiledFirst(rows).map((r) => r.id)).toEqual(["a2", "a3", "a1"]);
+  });
+});
+
+describe("complaintWindowOpen", () => {
+  it("opens at the campaign stage and stays open through voting (089)", () => {
+    expect(complaintWindowOpen({ lifecycleStage: "campaign" })).toBe(true);
+    expect(complaintWindowOpen({ lifecycleStage: "fingerprint_registration" })).toBe(true);
+    expect(complaintWindowOpen({ lifecycleStage: "voting" })).toBe(true);
+  });
+
+  it("is closed before the campaign and closes as soon as voting ends", () => {
+    expect(complaintWindowOpen({ lifecycleStage: "application" })).toBe(false);
+    expect(complaintWindowOpen({ lifecycleStage: "results" })).toBe(false);
+    expect(complaintWindowOpen({ lifecycleStage: "completed" })).toBe(false);
+    expect(complaintWindowOpen({})).toBe(false);
+  });
+});
+
+describe("complaintsForElection", () => {
+  const row = (id: string, electionPeriodId?: string): Complaint => ({
+    id,
+    studentName: "Juan Dela Cruz",
+    subject: "s",
+    description: "d",
+    status: "filed",
+    submittedAt: "2026-09-01",
+    electionPeriodId,
+  });
+
+  it("keeps only the complaints filed under the current election (089)", () => {
+    const rows = [
+      row("current-1", "period-2"),
+      row("past-1", "period-1"),
+      row("current-2", "period-2"),
+    ];
+    expect(complaintsForElection(rows, "period-2").map((r) => r.id)).toEqual(["current-1", "current-2"]);
+  });
+
+  it("shows nothing when there is no current election period", () => {
+    expect(complaintsForElection([row("c1", "period-1")], undefined)).toEqual([]);
+    expect(complaintsForElection([row("c1", "period-1")], "")).toEqual([]);
   });
 });

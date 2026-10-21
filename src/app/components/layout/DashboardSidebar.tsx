@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, UserCheck, FileText, BarChart2,
   AlertCircle, LogOut, Menu, X,
   Shield, GraduationCap, ChevronRight, Activity, UserPlus, Trophy,
-  HelpCircle, UserCog, Archive, Settings, Eye,
+  HelpCircle, UserCog, Archive, FolderArchive, Settings, Eye,
 } from "lucide-react";
 import { useApp, UserRole, CommissionerRole } from "../../context/AppContext";
 import { useConfirm } from "../../lib/useConfirm";
@@ -49,7 +49,7 @@ const sslgAdviserTopItems: NavItem[] = [
 const screeningNavItems: NavItem[] = [
   { label: "Dashboard", href: "/admin/dashboard", icon: <LayoutDashboard size={18} /> },
   { label: "Candidates Review", href: "/admin/candidates", icon: <Trophy size={18} /> },
-  { label: "Archived Documents", href: "/admin/archive", icon: <Archive size={18} /> },
+  { label: "Candidates Archived Document", href: "/admin/archive", icon: <Archive size={18} /> },
   { label: "My Profile", href: "/admin/profile", icon: <UserCheck size={18} /> },
 ];
 
@@ -62,8 +62,9 @@ const electoralNavItems: NavItem[] = [
 
 const grievanceNavItems: NavItem[] = [
   { label: "Dashboard", href: "/admin/dashboard", icon: <LayoutDashboard size={18} /> },
-  { label: "Election Help Desk", href: "/admin/help-desk", icon: <HelpCircle size={18} /> },
   { label: "Complaints", href: "/admin/complaints", icon: <AlertCircle size={18} /> },
+  { label: "Complaints Archive", href: "/admin/complaints-archive", icon: <FolderArchive size={18} /> },
+  { label: "Election Help Desk", href: "/admin/help-desk", icon: <HelpCircle size={18} /> },
   { label: "My Profile", href: "/admin/profile", icon: <UserCheck size={18} /> },
 ];
 

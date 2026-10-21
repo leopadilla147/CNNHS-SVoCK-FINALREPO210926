@@ -4,7 +4,7 @@ import {
   Calendar, Clock, MapPin, Save, Play, Square, Trophy,
   CheckCircle2, Lock, AlertCircle, Loader2, Eye, FileCheck2,
   Megaphone, Users, KeyRound, RotateCcw, ShieldAlert, X, Fingerprint,
-  Gavel, ChevronDown, ChevronLeft, ChevronRight,
+  Gavel, ChevronDown, ChevronLeft, ChevronRight, Pencil,
 } from "lucide-react";
 import { useApp } from "../../context/AppContext";
 import type { ElectionStage, ElectionPeriod } from "../../context/AppContext";
@@ -25,12 +25,14 @@ import {
   startFingerprintRegistrationRpc,
   closeFingerprintRegistrationRpc,
   stopCampaignRpc,
+  saveCampaignWindowRpc,
   countActiveComplaintsRpc,
   resetElectionPlanRpc,
 } from "../../lib/supabaseData";
 import type { ProclaimedWinner, ProclamationTallyRow, TieResolution } from "../../lib/supabaseData";
 import { isSupabaseConfigured } from "../../lib/supabase";
 import { FULL_POSITION_ORDER } from "../../lib/partyScope";
+import { complaintsForElection } from "../../lib/complaints";
 import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
 import { ProclamationDialog } from "../../components/ProclamationDialog";
 
@@ -284,6 +286,10 @@ export default function AdminElectionSetup() {
   // fixed: opens 06:00 on the start day, closes 17:00 on the end day).
   const [campaignStart, setCampaignStart] = useState("");
   const [campaignEnd, setCampaignEnd] = useState("");
+  // 093 — the committed Campaign window is locked: both pickers are
+  // disabled and only the Commissioner of Electoral Board gets an "Edit"
+  // button that re-enables them.  This flag is that unlock.
+  const [campaignEditing, setCampaignEditing] = useState(false);
   // Fingerprint Registration window, also date-only since 082.
   const [fpStart, setFpStart] = useState("");
   const [fpEnd, setFpEnd] = useState("");
@@ -318,6 +324,13 @@ export default function AdminElectionSetup() {
     setViewStage(currentStage);
   }, [currentStage]);
 
+  // 093 — the Campaign window unlocks only while the campaign stage is
+  // current.  Once the stage moves on (End Campaign Early, Open Voting) the
+  // window is final, so the editor closes itself.
+  useEffect(() => {
+    if (currentStage !== "campaign") setCampaignEditing(false);
+  }, [currentStage]);
+
   // Results unlock only after the vote was actually opened (stage voting /
   // results) and then closed: saving the schedule alone leaves the period at
   // campaign / fingerprint_registration.  publish_results_rpc is itself what
@@ -343,7 +356,10 @@ export default function AdminElectionSetup() {
   // "End Application Stage" is the separate, one-way transition.
   const saveMeetingConfirm = useConfirm({ title: "Save the Meeting Schedule?", description: "This records the Rules Discussion Meeting date and time. It can still be changed until the Application Stage ends.", confirmText: "Save Schedule" });
   const endCandidacyConfirm = useConfirm({ title: "End the Application Stage?", description: "Applications close for the rest of this election and cannot be reopened. The election moves to the Campaign Stage and the meeting schedule locks.", confirmText: "End Application Stage", destructive: true });
-  const startCampaignConfirm = useConfirm({ title: "Start the Campaign Period?", description: "This records the Campaign Period start and end dates and sets the campaign in motion. The window can still be updated until the campaign ends.", confirmText: "Start Campaign" });
+  const startCampaignConfirm = useConfirm({ title: "Start the Campaign Period?", description: "This records the Campaign Period start and end dates and sets the campaign in motion. The window is then locked — it can only be changed by the Commissioner of Electoral Board from the Edit button.", confirmText: "Start Campaign" });
+  // 093 — the update path gets its own wording: the window is already
+  // running, this moves its start and end dates.
+  const updateCampaignConfirm = useConfirm({ title: "Update the Campaign Period?", description: "This moves the Campaign Period start and end dates. The window locks again as soon as it is saved.", confirmText: "Update Window" });
   const stopCampaignConfirm = useConfirm({ title: "End the Campaign Period Early?", description: "This ends the Campaign Period early. The election moves to Fingerprint Registration; the enrolment window stays unscheduled until you start it.", confirmText: "End Campaign Early", destructive: true });
   const fpConfirm = useConfirm({ title: "Start Fingerprint Registration?", description: "Voters may enrol their fingerprint at the biometric kiosks for the window you set. Starting the Voting Period closes this window automatically.", confirmText: "Start Registration" });
   const fpCloseConfirm = useConfirm({ title: "End Fingerprint Registration Early?", description: "The enrolment window ends early. Voters will no longer be able to register a fingerprint for this election.", confirmText: "End Registration Early", destructive: true });
@@ -365,13 +381,16 @@ export default function AdminElectionSetup() {
   const logUser = currentUser?.name || "Electoral Board";
   const stageLabel = STAGE_LABELS[electionPeriod.lifecycleStage || "application"];
 
-  // Complaints are counted from the rows already in context: the complaint
-  // count is a UI affordance, and the authoritative gate lives in
-  // publish_results_rpc (036:472).  An RPC is only consulted when the period
+  // Complaints stay with the election they were filed under (089): only the
+  // current period's rows count.  The count is a UI affordance — the
+  // authoritative gate lives in publish_results_rpc / proclaim_winners_rpc
+  // (089 restores ELECT-02).  An RPC is only consulted when the period
   // exists and context has nothing to say.
-  const filedComplaints = complaints.filter((c) => c.status === "filed").length;
+  const electionComplaints = complaintsForElection(complaints, electionPeriod.id);
+  const filedComplaints = electionComplaints.filter((c) => c.status === "filed").length;
   const knownComplaintCount = filedComplaints > 0 ? filedComplaints : activeComplaints;
-  const filedComplaintSubjects = complaints
+  const complaintsPending = (knownComplaintCount ?? 0) > 0;
+  const filedComplaintSubjects = electionComplaints
     .filter((c) => c.status === "filed")
     .map((c) => c.subject);
 
@@ -681,11 +700,23 @@ export default function AdminElectionSetup() {
 
   /** 082 follow-up — "Start Campaign" commits the Campaign Period window.
    *  The stage transition itself stays with "End Application Stage"; this is
-   *  the plain schedule record the campaign runs on. */
+   *  the plain schedule record the campaign runs on.
+   *
+   *  093 — once the window exists it is locked, so this handler is reachable
+   *  in two ways: the first save (Start Campaign) and an explicit update
+   *  after the Commissioner of Electoral Board clicked "Edit".  The write
+   *  goes through save_campaign_window_rpc, which re-checks the role and the
+   *  stage server-side. */
   const handleStartCampaign = async () => {
     clearErrors();
     if (!hasPeriod) {
       showError("Start the Candidate Application Period first.", "campaign");
+      return;
+    }
+    // A locked window cannot be written: the pickers are disabled, so the
+    // only way here is a stale click.  Say so instead of silently saving.
+    if (campaignWindowLocked) {
+      showError("Click Edit to change the Campaign Period.", "campaign");
       return;
     }
     // The button stays clickable, so empty pickers surface here: the banner
@@ -711,28 +742,53 @@ export default function AdminElectionSetup() {
       showFieldError("campaign", "The campaign end date must be tomorrow or later.", ["campaignEnd"]);
       return;
     }
-    const ok = await startCampaignConfirm.confirm();
+    const isUpdate = hasCampaignWindow;
+    const ok = isUpdate
+      ? await updateCampaignConfirm.confirm()
+      : await startCampaignConfirm.confirm();
     if (!ok) return;
     setLoading(true);
     try {
-      const res = await setElectionPeriod({
-        ...electionPeriod,
-        campaignStartDate: dateInstant(campaignStart, FIXED_VOTING_START),
-        campaignEndDate: dateInstant(campaignEnd, FIXED_VOTING_END),
-      });
-      if (!res.ok) throw new Error(res.message || "Failed to start the Campaign Period.");
+      const startIso = dateInstant(campaignStart, FIXED_VOTING_START);
+      const endIso = dateInstant(campaignEnd, FIXED_VOTING_END);
+      if (isSupabaseConfigured) {
+        const id = electionPeriod.id || electionId;
+        if (!id) throw new Error("Start the Candidate Application Period first.");
+        await saveCampaignWindowRpc(id, startIso, endIso);
+        await refreshPeriod();
+      } else {
+        applyElectionPeriod({
+          ...electionPeriod,
+          campaignStartDate: startIso,
+          campaignEndDate: endIso,
+        });
+      }
+      // The window is committed — lock it again.  The pickers go back to
+      // their saved values through the mirror effect below.
+      setCampaignEditing(false);
       addLog({
         user: logUser, role: "Admin",
-        action: "Campaign Period Started",
+        action: isUpdate ? "Campaign Period Window Updated" : "Campaign Period Started",
         details: `Campaign period: ${campaignStart} - ${campaignEnd}.`,
         type: "success",
       });
-      showSuccess("The Campaign Period window has been saved.");
+      showSuccess(isUpdate
+        ? "The Campaign Period window has been updated."
+        : "The Campaign Period window has been saved.");
     } catch (err: any) {
-      showError(err.message || "Failed to start the Campaign Period.", "campaign");
+      showError(err.message || "Failed to save the Campaign Period.", "campaign");
     } finally {
       setLoading(false);
     }
+  };
+
+  /** 093 — leave edit mode without saving: the pickers snap back to the
+   *  saved window and lock again. */
+  const handleCancelCampaignEdit = () => {
+    clearErrors();
+    setCampaignStart(toLocalInput(electionPeriod.campaignStartDate).slice(0, 10));
+    setCampaignEnd(toLocalInput(electionPeriod.campaignEndDate).slice(0, 10));
+    setCampaignEditing(false);
   };
 
   const handleStartFingerprintRegistration = async () => {
@@ -1171,6 +1227,12 @@ export default function AdminElectionSetup() {
   // The Campaign window is committed by "Start Campaign"; once saved, the
   // button becomes "Update Campaign Window".
   const hasCampaignWindow = !!(electionPeriod.campaignStartDate && electionPeriod.campaignEndDate);
+  // 093 — the committed window is a locked record.  Both pickers go
+  // disabled and only the Commissioner of Electoral Board is offered the
+  // "Edit" button that re-enables them.  The database enforces the same
+  // rule (save_campaign_window_rpc); this is the affordance that reaches it.
+  const isElectoralBoard = currentUser?.commissionerRole === "electoral_board";
+  const campaignWindowLocked = hasCampaignWindow && !campaignEditing;
   // Strict sequencing — only one stage is active at a time: the vote may only
   // open while Stage 3 is the current stage, and the enrolment window must
   // have actually started. A stage cannot end without starting — and once
@@ -1529,35 +1591,68 @@ export default function AdminElectionSetup() {
                   type="date"
                   min={tomorrowDateStr()}
                   value={campaignStart}
+                  disabled={campaignWindowLocked}
                   onChange={(e) => { setCampaignStart(e.target.value); clearFieldError("campaignStart"); }}
-                  className={pickerClassName(fieldErrors.campaignStart)}
+                  className={pickerClassName(fieldErrors.campaignStart, `${PICKER_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`)}
                 />
               </div>
               <div>
                 <label htmlFor="campaign-end" className="block text-xs text-gray-600 mb-1">Campaign End</label>
-                <input
-                  id="campaign-end"
-                  type="date"
-                  min={tomorrowDateStr()}
-                  value={campaignEnd}
-                  onChange={(e) => { setCampaignEnd(e.target.value); clearFieldError("campaignEnd"); }}
-                  className={pickerClassName(fieldErrors.campaignEnd)}
-                />
+                <div className="flex items-center gap-2">
+                  <input
+                    id="campaign-end"
+                    type="date"
+                    min={tomorrowDateStr()}
+                    value={campaignEnd}
+                    disabled={campaignWindowLocked}
+                    onChange={(e) => { setCampaignEnd(e.target.value); clearFieldError("campaignEnd"); }}
+                    className={pickerClassName(fieldErrors.campaignEnd, `${PICKER_BASE_CLASS} flex-1 min-w-0 disabled:opacity-50 disabled:cursor-not-allowed`)}
+                  />
+                  {/* 093 — the lock toggle lives beside the end date: a pencil
+                      unlocks the window, an X puts the saved dates back.  Only
+                      the Commissioner of Electoral Board is offered it. */}
+                  {hasCampaignWindow && isElectoralBoard && (
+                    <button
+                      type="button"
+                      onClick={campaignEditing
+                        ? handleCancelCampaignEdit
+                        : () => { clearErrors(); setCampaignEditing(true); }}
+                      disabled={loading}
+                      aria-label={campaignEditing
+                        ? "Cancel editing the Campaign Period"
+                        : "Edit the Campaign Period"}
+                      title={campaignEditing
+                        ? "Discard the changes and lock the Campaign Period."
+                        : "Unlock the Campaign Period start and end dates."}
+                      className="shrink-0 h-[38px] w-[38px] flex items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-[#5C0102] disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {campaignEditing ? <X size={16} /> : <Pencil size={16} />}
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
-            <p className="text-xs text-gray-400">The window is booked for tomorrow or later, 6:00 AM to 5:00 PM each day.</p>
+            <p className="text-xs text-gray-400">
+              The window is booked for tomorrow or later, 6:00 AM to 5:00 PM each day.
+              {campaignWindowLocked && " It is locked — use the edit icon to move the dates."}
+            </p>
 
             {renderStageError("campaign")}
 
             <div className="flex flex-wrap items-center gap-3">
-              {/* Always clickable: empty pickers surface in the banner. */}
+              {/* 093 — the committed window is locked.  The primary action
+                  stays on screen but goes dead while the window is locked;
+                  the edit icon beside the end date is the way in. */}
               <button
                 onClick={handleStartCampaign}
-                disabled={loading}
+                disabled={loading || campaignWindowLocked}
+                title={campaignWindowLocked
+                  ? "Click the edit icon to change the Campaign Period."
+                  : undefined}
                 className="px-5 py-2.5 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{ backgroundColor: "#5C0102" }}
               >
-                {loading ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+                {loading ? <Loader2 size={16} className="animate-spin" /> : hasCampaignWindow ? <Save size={16} /> : <Play size={16} />}
                 {hasCampaignWindow ? "Update Campaign Window" : "Start Campaign"}
               </button>
               {currentStage === "campaign" && (
@@ -1916,17 +2011,17 @@ export default function AdminElectionSetup() {
         </div>
 
         <div className="space-y-4">
-          {(knownComplaintCount ?? 0) > 0 && !electionPeriod.proclaimed && (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2 text-sm text-amber-800">
+          {complaintsPending && !electionPeriod.proclaimed && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2 text-sm text-red-800">
               <ShieldAlert size={16} className="mt-0.5 shrink-0" />
               <div>
                 <div className="font-medium">
-                  {knownComplaintCount ?? 0} unresolved {(knownComplaintCount ?? 0) === 1 ? "complaint is" : "complaints are"} on record.
+                  {knownComplaintCount ?? 0} unresolved {(knownComplaintCount ?? 0) === 1 ? "complaint must" : "complaints must"} be resolved
+                  before results can be published and winners proclaimed.
                 </div>
                 <div className="text-xs mt-0.5">
-                  The Electoral Board will decide the winners — you will be asked for the decision reason and a note on the
-                  complaint{knownComplaintCount === 1 ? "" : "s"}. Review it in{" "}
-                  <a href="/admin/complaints" className="underline font-medium">Complaints</a>.
+                  Resolve {(knownComplaintCount ?? 0) === 1 ? "it" : "them"} in{" "}
+                  <a href="/admin/complaints" className="underline font-medium">Complaints</a> to unlock publishing.
                 </div>
               </div>
             </div>
@@ -1942,8 +2037,14 @@ export default function AdminElectionSetup() {
             {!electionPeriod.proclaimed && (
               <button
                 onClick={handlePublishAndProclaim}
-                disabled={loading || !votingConcluded}
-                title={!votingConcluded ? "Open and close the voting period first." : undefined}
+                disabled={loading || !votingConcluded || complaintsPending}
+                title={
+                  !votingConcluded
+                    ? "Open and close the voting period first."
+                    : complaintsPending
+                      ? "Resolve all complaints before publishing results and proclaiming winners."
+                      : undefined
+                }
                 className="px-5 py-2.5 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:opacity-90 disabled:opacity-50"
                 style={{ backgroundColor: "#5C0102" }}
               >
@@ -2037,6 +2138,7 @@ export default function AdminElectionSetup() {
       {saveMeetingConfirm.dialog}
       {endCandidacyConfirm.dialog}
       {startCampaignConfirm.dialog}
+      {updateCampaignConfirm.dialog}
       {stopCampaignConfirm.dialog}
       {fpConfirm.dialog}
       {fpCloseConfirm.dialog}

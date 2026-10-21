@@ -417,6 +417,9 @@ export async function syncStudents(next: Student[], previous: Student[]) {
  * Stage 4 "Save Schedule" click must not clobber it.  The legacy
  * `nomination_open` / `official_list_posted` / `plan_finalized` columns
  * remain dropped — referencing them would 400 (PGRST204 column not found).
+ *
+ * 093 moves the Campaign window out of this payload entirely: it is a
+ * locked record now, written only by save_campaign_window_rpc.
  */
 export function buildElectionPeriodSyncPayload(period: ElectionPeriod) {
   return {
@@ -431,13 +434,16 @@ export function buildElectionPeriodSyncPayload(period: ElectionPeriod) {
     proclaimed: Boolean(period.proclaimed),
     proclaimed_at: period.proclaimedAt ? `${period.proclaimedAt}` : null,
     voting_method: period.votingMethod || "plurality",
-    campaign_start_at: period.campaignStartDate || null,
-    campaign_end_at: period.campaignEndDate || null,
     election_modality: period.electionModality || "digital",
     // lifecycle_stage is deliberately ABSENT.  This function backs the plain
     // schedule editor, which has no business moving the election between
     // stages: writing a default here would let a "Save Schedule" click reset a
     // live campaign back to Stage 1.  Only the 058 RPCs may change it.
+    //
+    // campaign_start_at / campaign_end_at are ABSENT for the same reason
+    // (093): the Campaign window is a locked record with a guarded RPC of its
+    // own.  Leaving the columns here would let a Stage 4 "Save Schedule"
+    // click rewrite the window behind save_campaign_window_rpc's stage guard.
   };
 }
 
@@ -528,6 +534,7 @@ export async function syncComplaints(next: Complaint[], previous: Complaint[]) {
     return db.from("complaints").update({
       status: complaint.status,
       resolution_note: complaint.rejectionReason || null,
+      findings_note: complaint.findings || null,
       incident_date: complaint.incidentDate || null,
       resolved_at: complaint.resolvedAt || null,
     }).eq("id", complaint.id);
@@ -552,17 +559,26 @@ export async function insertComplaint(row: {
   return mapComplaint(data);
 }
 
-/** Decide a complaint via the 028 role-guarded RPC — the ONLY complaints mutation path (security R2). */
+/**
+ * Resolve a complaint via the role-guarded RPC — the ONLY complaints
+ * mutation path (security R2).  087 model: 'accepted' (displayed as
+ * "Resolved") is the only decision.  090: the RPC refuses to resolve a
+ * complaint without Findings.  091: the call may carry the Findings text
+ * itself (the Resolved button saves + decides in one step); a non-blank
+ * p_findings overwrites the saved note.
+ */
 export async function decideComplaintRpc(
   complaintId: string,
-  action: "accepted" | "rejected",
-  reason?: string
+  action: "accepted",
+  reason?: string,
+  findings?: string
 ): Promise<void> {
   const db = requireSupabase();
   const { error } = await db.rpc("decide_complaint_rpc", {
     p_complaint_id: complaintId,
     p_action: action,
     p_reason: reason || null,
+    p_findings: findings || null,
   });
   if (error) throw new Error(error.message);
 }
@@ -754,8 +770,11 @@ function mapComplaint(row: any): Complaint {
     status: row.status,
     submittedAt: toDate(row.submitted_at),
     rejectionReason: row.resolution_note || undefined,
+    findings: row.findings_note || undefined,
     incidentDate: row.incident_date ? toDate(row.incident_date) : undefined,
     resolvedAt: row.resolved_at ? toDate(row.resolved_at) : undefined,
+    resolvedByName: row.resolved_by_name || undefined,
+    electionPeriodId: row.election_period_id || undefined,
   };
 }
 
@@ -1703,6 +1722,97 @@ export async function getPastElectionResults(
 }
 
 /**
+ * 085 — one complaint frozen into a period's archive.  Unlike the tally
+ * snapshots this table is admin-only (its RLS mirrors the 028 complaints
+ * rule: `current_app_role() = 'admin'`), so any other session simply
+ * reads zero rows.
+ */
+export interface PastArchivedComplaint {
+  id: string;
+  electionPeriodId: string;
+  /** The live complaints.id at freeze time — traceability only, no FK. */
+  complaintId?: string;
+  studentName?: string;
+  subject: string;
+  description: string;
+  status: "filed" | "accepted" | "rejected";
+  submittedAt?: string;
+  incidentDate?: string;
+  resolutionNote?: string;
+  resolvedByName?: string;
+  resolvedAt?: string;
+  archivedDocumentUrl?: string;
+}
+
+export function mapPastArchivedComplaint(row: any): PastArchivedComplaint {
+  return {
+    id: row.id,
+    electionPeriodId: row.election_period_id,
+    complaintId: row.complaint_id || undefined,
+    studentName: row.student_name || undefined,
+    subject: row.subject || "",
+    description: row.description || "",
+    status:
+      row.status === "accepted" || row.status === "rejected"
+        ? row.status
+        : "filed",
+    submittedAt: row.submitted_at ? toDate(row.submitted_at) : undefined,
+    incidentDate: row.incident_date ? toDate(row.incident_date) : undefined,
+    resolutionNote: row.resolution_note || undefined,
+    resolvedByName: row.resolved_by_name || undefined,
+    resolvedAt: row.resolved_at ? toDate(row.resolved_at) : undefined,
+    archivedDocumentUrl: row.archived_document_url || undefined,
+  };
+}
+
+/**
+ * 085 — every complaint the archive holds, for the Admin Archive page.
+ * Rows only exist because an archive run froze them (publish, proclaim,
+ * the manual Electoral-Board freeze, or a reset), so a complaint filed
+ * on an election that was later reset survives here with the name it
+ * had at freeze time.  Best-effort: an un-migrated database degrades to
+ * an empty record, never an error.
+ */
+export async function listArchivedComplaints(): Promise<PastArchivedComplaint[]> {
+  if (!supabase) return [];
+  try {
+    const { data, error } = await supabase
+      .from("past_election_complaints")
+      .select("*")
+      .order("submitted_at", { ascending: true });
+    if (error) return [];
+    return (data || []).map(mapPastArchivedComplaint);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 092 — school-year labels for every election period, keyed by id.
+ *
+ * The Complaints Archive shows complaints from ALL elections, so each row
+ * names the election it was filed under.  The app context only carries the
+ * live period; this one-shot fetch covers the retired ones too.
+ * Best-effort: failure degrades to an empty map, never an error.
+ */
+export async function listElectionPeriodLabels(): Promise<Record<string, string>> {
+  if (!supabase) return {};
+  try {
+    const { data, error } = await supabase
+      .from("election_periods")
+      .select("id, school_year");
+    if (error) return {};
+    const labels: Record<string, string> = {};
+    for (const row of data || []) {
+      if (row?.id && row.school_year) labels[String(row.id)] = String(row.school_year);
+    }
+    return labels;
+  } catch {
+    return {};
+  }
+}
+
+/**
  * The CURRENT election's official results.
  *
  * Resolves the live, published, not-yet-superseded period (the row still
@@ -1948,6 +2058,24 @@ export async function stopCampaignRpc(pElectionId: string): Promise<void> {
   const client = requireSupabase();
   const { error } = await client.rpc("stop_campaign_rpc", {
     p_election_id: pElectionId,
+  });
+  if (error) throw new Error(error.message);
+}
+
+/** Stage 2 (093): record the Campaign Period window.  The RPC is the only
+ *  writer of `campaign_start_at` / `campaign_end_at` — it guards the stage
+ *  (the election must still be in the 'campaign' stage) and the commissioner
+ *  role, and it writes the audit row inside the transaction. */
+export async function saveCampaignWindowRpc(
+  pElectionId: string,
+  startAtIso: string,
+  endAtIso: string,
+): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client.rpc("save_campaign_window_rpc", {
+    p_election_id: pElectionId,
+    p_campaign_start_at: startAtIso,
+    p_campaign_end_at: endAtIso,
   });
   if (error) throw new Error(error.message);
 }

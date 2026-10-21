@@ -117,4 +117,36 @@ describe("DashboardSidebar", () => {
       ).toBe("/admin/logs");
     });
   });
+
+  describe("archive tabs (092)", () => {
+    it("shows the renamed Candidates Archived Document tab for the Screening & Validation commissioner", () => {
+      mockCurrentUser.commissionerRole = "screening_validation";
+
+      renderSidebar();
+
+      expect(
+        screen.getByRole("link", { name: /Candidates Archived Document/i }).getAttribute("href"),
+      ).toBe("/admin/archive");
+      // the old label is gone
+      expect(screen.queryByRole("link", { name: /^Archived Documents$/i })).toBeNull();
+    });
+
+    it("does not show the archive tabs for the Electoral Board commissioner", () => {
+      renderSidebar();
+
+      expect(screen.queryByRole("link", { name: /Candidates Archived Document/i })).toBeNull();
+      expect(screen.queryByRole("link", { name: /Complaints Archive/i })).toBeNull();
+    });
+
+    it("shows only Complaints Archive for the Grievance commissioner", () => {
+      mockCurrentUser.commissionerRole = "grievance";
+
+      renderSidebar();
+
+      expect(screen.queryByRole("link", { name: /Candidates Archived Document/i })).toBeNull();
+      expect(
+        screen.getByRole("link", { name: /Complaints Archive/i }).getAttribute("href"),
+      ).toBe("/admin/complaints-archive");
+    });
+  });
 });

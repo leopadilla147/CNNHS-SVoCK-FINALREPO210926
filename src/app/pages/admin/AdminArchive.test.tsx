@@ -140,17 +140,14 @@ describe("AdminArchive document preview", () => {
     expect(within(modal).getByText(/3\/4 complete/)).toBeInTheDocument();
   });
 
-  it("previews a complaint record with its resolution reason", async () => {
-    const user = userEvent.setup();
+  // 092: complaint records moved to the dedicated Complaints Archive —
+  // this page lists candidacy documents only.
+  it("keeps complaint records off the renamed Candidates Archived Document page", () => {
     renderPage();
 
-    const row = screen.getByText("Harassment during campaign").closest("div.cursor-pointer") as HTMLElement;
-    await user.click(row);
-
-    const modal = screen.getByRole("dialog");
-    expect(within(modal).getAllByText("Harassment during campaign").length).toBeGreaterThan(0);
-    expect(within(modal).getByText(/No evidence provided/)).toBeInTheDocument();
-    expect(within(modal).getByText(/two students blocked my poster setup/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Candidates Archived Document" })).toBeInTheDocument();
+    expect(screen.queryByText("Harassment during campaign")).toBeNull();
+    expect(screen.queryByText("Application - Juan Dela Cruz")).toBeInTheDocument();
   });
 
   it("closes the preview with Escape", async () => {

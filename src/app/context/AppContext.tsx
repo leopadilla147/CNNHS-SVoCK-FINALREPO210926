@@ -205,8 +205,16 @@ export interface Complaint {
   status: "filed" | "accepted" | "rejected";
   submittedAt: string;
   rejectionReason?: string;
+  /** Commissioner working notes (086 findings_note) — editable while 'filed'. */
+  findings?: string;
   incidentDate?: string;
   resolvedAt?: string;
+  /** 092: denormalized name of the deciding Commissioner — students cannot
+   *  read adminprofiles, so the response letter takes the name from here. */
+  resolvedByName?: string;
+  /** 089: the election the complaint was filed under.  Complaints only ever
+   *  show for their own election — the DB trigger stamps it on insert. */
+  electionPeriodId?: string;
 }
 
 export interface ReportTemplate {

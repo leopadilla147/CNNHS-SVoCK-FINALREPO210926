@@ -1,10 +1,12 @@
-import type { Complaint } from "../context/AppContext";
+import type { Complaint, ElectionStage } from "../context/AppContext";
 
 /**
  * Pure complaint helpers (Phase 4, Plan 04-02 - GRIEV-05 / D-01).
  *
  * D-01: the ONLY client statuses are 'filed' | 'accepted' | 'rejected'
  * (pending/resolved/dismissed are dead - 028 maps them server-side).
+ * 086 wording change: 'accepted' DISPLAYS as "Resolved" (statusLabel)
+ * while the stored literal stays 'accepted' - labels only, no DB rename.
  * toComplaintDto maps a raw complaints row (with the students join and
  * the 028 columns) into the client shape; buildSubmitPayload builds the
  * INSERT payload the page sends to insertComplaint.
@@ -21,6 +23,7 @@ export function toComplaintDto(row: any): Complaint {
     status: row.status,
     submittedAt: row.submitted_at?.slice(0, 10) || "",
     rejectionReason: row.resolution_note || undefined,
+    findings: row.findings_note || undefined,
     incidentDate: row.incident_date?.slice(0, 10) || undefined,
     resolvedAt: row.resolved_at?.slice(0, 10) || undefined,
   };
@@ -47,6 +50,8 @@ export function buildSubmitPayload(input: SubmitComplaintInput, studentId: strin
 
 /** D-01 status → human label + tone used by the history list pills. */
 export function statusLabel(status: Complaint["status"]): string {
+  // 086 wording change: the stored 'accepted' literal reads as "Resolved".
+  if (status === "accepted") return "Resolved";
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
@@ -68,4 +73,30 @@ export function sortFiledFirst(rows: Complaint[]): Complaint[] {
     if (rankDiff !== 0) return rankDiff;
     return a.submittedAt < b.submittedAt ? 1 : a.submittedAt > b.submittedAt ? -1 : 0;
   });
+}
+
+/**
+ * The complaint filing window (089): complaints open at the campaign stage
+ * and close as soon as voting ends — the moment the period reaches the
+ * 'results' stage.  'application' is not open yet; 'completed' is retired.
+ * Mirrors the trg_complaint_election_period gate (089) — the DB trigger
+ * stays authoritative, this only drives the UI.
+ */
+export function complaintWindowOpen(period: { lifecycleStage?: ElectionStage }): boolean {
+  return (
+    period.lifecycleStage === "campaign" ||
+    period.lifecycleStage === "fingerprint_registration" ||
+    period.lifecycleStage === "voting"
+  );
+}
+
+/**
+ * Complaints stay with the election they were filed under (089): only rows
+ * stamped with the current period's id belong in the live lists.  Rows from
+ * previous elections surface only in the admin archive; with no current
+ * period there is no election to show complaints for.
+ */
+export function complaintsForElection(complaints: Complaint[], electionPeriodId?: string): Complaint[] {
+  if (!electionPeriodId) return [];
+  return complaints.filter((c) => c.electionPeriodId === electionPeriodId);
 }

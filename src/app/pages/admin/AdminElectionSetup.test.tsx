@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AdminElectionSetup, { resolveStage } from "./AdminElectionSetup";
 import { emptyElectionPeriod } from "../../context/AppContext";
-import type { Candidate, ElectionPeriod } from "../../context/AppContext";
+import type { Candidate, CommissionerRole, ElectionPeriod } from "../../context/AppContext";
 import { FULL_POSITION_ORDER } from "../../lib/partyScope";
 
 const PERIOD_ID = "3f1d0b1e-9c4a-4a7f-8b21-2c0e5d7a1b33";
@@ -20,6 +20,7 @@ const {
   mockStartFingerprintRegistrationRpc,
   mockCloseFingerprintRegistrationRpc,
   mockStopCampaignRpc,
+  mockSaveCampaignWindowRpc,
   mockCountActiveComplaintsRpc,
   mockResetElectionPlanRpc,
   mockOpenElectionRpc,
@@ -41,6 +42,7 @@ const {
   mockStartFingerprintRegistrationRpc: vi.fn(),
   mockCloseFingerprintRegistrationRpc: vi.fn(),
   mockStopCampaignRpc: vi.fn(),
+  mockSaveCampaignWindowRpc: vi.fn(),
   mockCountActiveComplaintsRpc: vi.fn(),
   mockResetElectionPlanRpc: vi.fn(),
   mockOpenElectionRpc: vi.fn(),
@@ -64,6 +66,7 @@ vi.mock("../../lib/supabaseData", () => ({
   startFingerprintRegistrationRpc: mockStartFingerprintRegistrationRpc,
   closeFingerprintRegistrationRpc: mockCloseFingerprintRegistrationRpc,
   stopCampaignRpc: mockStopCampaignRpc,
+  saveCampaignWindowRpc: mockSaveCampaignWindowRpc,
   countActiveComplaintsRpc: mockCountActiveComplaintsRpc,
   resetElectionPlanRpc: mockResetElectionPlanRpc,
   openElectionRpc: mockOpenElectionRpc,
@@ -82,12 +85,15 @@ vi.mock("../../lib/useConfirm", () => ({
 }));
 
 let electionPeriod: ElectionPeriod;
-let complaints: { status: string }[];
+let complaints: { status: string; electionPeriodId?: string }[];
 // Voters the Stage 3 announcement is sent to; reset per test like complaints.
 let students: { id: string; status: string }[];
 // The approved-candidate roster — drives the "0 candidates per position"
 // Open-Voting gate, so tests can seed a full or partial roster.
 let candidates: Candidate[] = [];
+// 093 — the signed-in commissioner's role.  Only the Commissioner of Electoral
+// Board is offered the Campaign window's Edit button.
+let commissionerRole: CommissionerRole | undefined = "electoral_board";
 
 vi.mock("../../context/AppContext", async () => {
   const actual = await vi.importActual<typeof import("../../context/AppContext")>("../../context/AppContext");
@@ -98,7 +104,7 @@ vi.mock("../../context/AppContext", async () => {
       setElectionPeriod: mockSetElectionPeriod,
       applyElectionPeriod: mockApplyElectionPeriod,
       addLog: vi.fn(),
-      currentUser: { id: "admin-1", name: "Chief" },
+      currentUser: { id: "admin-1", name: "Chief", role: "admin", commissionerRole },
       candidates,
       complaints,
       students,
@@ -191,6 +197,7 @@ describe("AdminElectionSetup", () => {
     complaints = [];
     students = [];
     candidates = [];
+    commissionerRole = "electoral_board";
     mockConfirm.mockResolvedValue(true);
     // clearAllMocks keeps mockImplementations, so re-establish the no-op
     // default for tests that do not swap the period underneath the page.
@@ -207,6 +214,7 @@ describe("AdminElectionSetup", () => {
     mockStartFingerprintRegistrationRpc.mockResolvedValue(undefined);
     mockCloseFingerprintRegistrationRpc.mockResolvedValue(undefined);
     mockStopCampaignRpc.mockResolvedValue(undefined);
+    mockSaveCampaignWindowRpc.mockResolvedValue(undefined);
     mockResetElectionPlanRpc.mockResolvedValue({
       electionPeriodId: PERIOD_ID,
       archivedPrevious: false,
@@ -847,12 +855,13 @@ describe("AdminElectionSetup", () => {
     await user.type(screen.getByLabelText("Campaign End"), futureDate(4));
     await user.click(screen.getByRole("button", { name: /Start Campaign/ }));
 
+    // 093 — the window is written by its own guarded RPC, not the plain
+    // schedule editor.
     await waitFor(() => {
-      expect(mockSetElectionPeriod).toHaveBeenCalledWith(
-        expect.objectContaining({
-          campaignStartDate: expect.any(String),
-          campaignEndDate: expect.any(String),
-        }),
+      expect(mockSaveCampaignWindowRpc).toHaveBeenCalledWith(
+        PERIOD_ID,
+        expect.any(String),
+        expect.any(String),
       );
     });
   });
@@ -871,7 +880,7 @@ describe("AdminElectionSetup", () => {
     await user.click(screen.getByRole("button", { name: /Start Campaign/ }));
 
     expect(screen.getByText(/end date must be after the start date/)).toBeInTheDocument();
-    expect(mockSetElectionPeriod).not.toHaveBeenCalled();
+    expect(mockSaveCampaignWindowRpc).not.toHaveBeenCalled();
   });
 
   it("flags the empty campaign pickers and clears the flag once a date is chosen", async () => {
@@ -888,7 +897,7 @@ describe("AdminElectionSetup", () => {
     expect(screen.getByText("Choose the campaign start and end date before saving.")).toBeInTheDocument();
     expect(screen.getByLabelText("Campaign Start")).toHaveClass("border-red-300");
     expect(screen.getByLabelText("Campaign End")).toHaveClass("border-red-300");
-    expect(mockSetElectionPeriod).not.toHaveBeenCalled();
+    expect(mockSaveCampaignWindowRpc).not.toHaveBeenCalled();
 
     // Choosing a date clears its red outline immediately.
     await user.type(screen.getByLabelText("Campaign Start"), futureDate(2));
@@ -907,7 +916,8 @@ describe("AdminElectionSetup", () => {
     expect(screen.queryByLabelText("Campaign Start")).toBeNull();
   });
 
-  it("offers Update Campaign Window once the window has been saved", () => {
+  it("locks the saved Campaign window and offers the Electoral Board an edit icon", async () => {
+    const user = userEvent.setup();
     electionPeriod = period({
       lifecycleStage: "campaign",
       candidacyOpen: false,
@@ -917,11 +927,90 @@ describe("AdminElectionSetup", () => {
     });
     renderPage();
 
-    expect(screen.getByRole("button", { name: /Update Campaign Window/ })).toBeEnabled();
-    // The saved window mirrors back into the pickers.
+    // The committed window is a locked record: both pickers are disabled and
+    // the save button is dead — the edit icon is the way in.
+    expect(screen.getByLabelText("Campaign Start")).toBeDisabled();
+    expect(screen.getByLabelText("Campaign End")).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Update Campaign Window/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Edit the Campaign Period" })).toBeInTheDocument();
+
+    // The saved window still mirrors back into the (disabled) pickers.
     expect(screen.getByLabelText("Campaign Start")).toHaveValue(
       toLocalDate("2026-11-05T06:00:00.000Z"),
     );
+  });
+
+  it("hides the Campaign edit icon from a commissioner who is not the Electoral Board", () => {
+    commissionerRole = "screening_validation";
+    electionPeriod = period({
+      lifecycleStage: "campaign",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      campaignStartDate: "2026-11-05T06:00:00.000Z",
+      campaignEndDate: "2026-11-12T17:00:00.000Z",
+    });
+    renderPage();
+
+    expect(screen.queryByRole("button", { name: "Edit the Campaign Period" })).toBeNull();
+    expect(screen.getByLabelText("Campaign Start")).toBeDisabled();
+    expect(screen.getByLabelText("Campaign End")).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Update Campaign Window/ })).toBeDisabled();
+  });
+
+  it("unlocks the Campaign pickers on the edit icon and saves the moved window", async () => {
+    const user = userEvent.setup();
+    electionPeriod = period({
+      lifecycleStage: "campaign",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      campaignStartDate: localIso(2, "08:00"),
+      campaignEndDate: localIso(4, "17:00"),
+    });
+    renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Edit the Campaign Period" }));
+
+    expect(screen.getByLabelText("Campaign Start")).toBeEnabled();
+    expect(screen.getByLabelText("Campaign End")).toBeEnabled();
+    // Unlocking opens the save button; the icon becomes a cancel.
+    expect(screen.getByRole("button", { name: /Update Campaign Window/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel editing the Campaign Period" })).toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText("Campaign Start"));
+    await user.type(screen.getByLabelText("Campaign Start"), futureDate(3));
+    await user.click(screen.getByRole("button", { name: /Update Campaign Window/ }));
+
+    await waitFor(() => {
+      expect(mockSaveCampaignWindowRpc).toHaveBeenCalledWith(
+        PERIOD_ID,
+        expect.any(String),
+        expect.any(String),
+      );
+    });
+  });
+
+  it("discards a Campaign window edit on the cancel icon and locks the pickers again", async () => {
+    const user = userEvent.setup();
+    electionPeriod = period({
+      lifecycleStage: "campaign",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      campaignStartDate: localIso(2, "08:00"),
+      campaignEndDate: localIso(4, "17:00"),
+    });
+    renderPage();
+
+    const savedStart = toLocalDate(localIso(2, "08:00"));
+    await user.click(screen.getByRole("button", { name: "Edit the Campaign Period" }));
+    await user.clear(screen.getByLabelText("Campaign Start"));
+    await user.type(screen.getByLabelText("Campaign Start"), futureDate(3));
+    await user.click(screen.getByRole("button", { name: "Cancel editing the Campaign Period" }));
+
+    // The picker snaps back to the saved window and locks again.
+    expect(screen.getByLabelText("Campaign Start")).toHaveValue(savedStart);
+    expect(screen.getByLabelText("Campaign Start")).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Update Campaign Window/ })).toBeDisabled();
+    expect(mockSaveCampaignWindowRpc).not.toHaveBeenCalled();
   });
 
   it("ends the Campaign Period early via the End Campaign Early button", async () => {
@@ -1232,25 +1321,26 @@ describe("AdminElectionSetup", () => {
     expect(mockCloseFingerprintRegistrationRpc).not.toHaveBeenCalled();
   });
 
-  it("lets the board proceed past a filed complaint — the decision gets documented", () => {
+  it("blocks publish & proclaim while a complaint is filed — resolve it first", () => {
     electionPeriod = period({ lifecycleStage: "results", resultsPublished: false, isActive: false });
-    complaints = [{ status: "filed" }];
+    complaints = [{ status: "filed", electionPeriodId: PERIOD_ID }];
     renderPage();
 
+    // 089: the ELECT-02 gate is a hard block again — the board cannot
+    // publish or proclaim until the Grievance Commissioner resolves it.
     const proclaim = screen.getByRole("button", { name: /Publish & Proclaim Winners/ });
-    expect(proclaim).toBeEnabled();
-    expect(screen.getByText(/on record/)).toBeInTheDocument();
-    expect(screen.getByText(/The Electoral Board will decide the winners/)).toBeInTheDocument();
+    expect(proclaim).toBeDisabled();
+    expect(screen.getByText(/must be resolved before results can be published/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Complaints" })).toHaveAttribute("href", "/admin/complaints");
   });
 
-  it("reports the complaint count from the server when context has none", async () => {
+  it("reports the complaint count from the server when context has none — and blocks", async () => {
     electionPeriod = period({ lifecycleStage: "results", resultsPublished: false, isActive: false });
     mockCountActiveComplaintsRpc.mockResolvedValue(2);
     renderPage();
 
-    expect(await screen.findByText(/2 unresolved complaints are on record/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Publish & Proclaim Winners/ })).toBeEnabled();
+    expect(await screen.findByText(/2 unresolved complaints must be resolved/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Publish & Proclaim Winners/ })).toBeDisabled();
   });
 
   it("will not reset the plan without a password", async () => {
@@ -1352,7 +1442,7 @@ describe("AdminElectionSetup", () => {
       expect(mockGetProclamationTallyRpc).toHaveBeenCalledWith(PERIOD_ID);
     });
 
-    it("requires the board to choose a winner — recording how the tie was resolved", async () => {
+    it("requires the board to choose a winner — with one shared tie resolution method", async () => {
       const user = userEvent.setup();
       electionPeriod = publishedPeriod();
       mockGetProclamationTallyRpc.mockResolvedValue(tallyRows);
@@ -1361,12 +1451,17 @@ describe("AdminElectionSetup", () => {
       await user.click(screen.getByRole("button", { name: /Publish & Proclaim Winners/ }));
       const dialog = await screen.findByRole("dialog");
 
+      // 085b — the per-candidate confirm no longer asks for a method; the
+      // ONE shared decision lives below the complaint note in the dialog.
       await user.click(within(dialog).getByRole("button", { name: /Cara One/ }));
 
       const alert = await screen.findByRole("alertdialog");
-      await user.selectOptions(within(alert).getByLabelText("How the tie was resolved"), "Coin Toss");
       await user.click(within(alert).getByRole("button", { name: /Confirm Winner/ }));
 
+      await user.selectOptions(
+        within(dialog).getByLabelText("How the tie was resolved"),
+        "Coin Toss",
+      );
       await user.click(within(dialog).getByRole("button", { name: /Publish & Proclaim Winners/ }));
 
       await waitFor(() => {

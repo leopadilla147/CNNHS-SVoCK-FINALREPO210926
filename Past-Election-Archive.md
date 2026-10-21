@@ -126,3 +126,31 @@ from the live rows.
 | latest definitions confirmed | `036` still the newest `publish_results_rpc` / `proclaim_winners_rpc`; `053` still the newest past-election RPCs — so the `061` re-issues are based on the live bodies |
 
 **Not yet verified:** execution against PostgreSQL. The migration is unproven until it is applied.
+
+## 7. 085 — the complaint record joined the archive
+
+`085_archive_complaints.sql` extends the freeze to a period's **complaints**, so resetting an
+election archives them along with it (the tallies alone no longer tell the whole story).
+
+- **New snapshot table `past_election_complaints`** — one row per complaint filed against the
+  period, frozen denormalized: `student_name` (the live FK is `on delete set null`, so only the
+  snapshot keeps the name forever), `subject`, `description`, the complaint's final `status`
+  (a filed-but-never-decided complaint freezes as filed — the record shows what was left open),
+  `resolution_note`, `resolved_by_name` (from `adminprofiles.full_name`), the timestamps and
+  `archived_document_url`. `complaint_id` is a plain uuid for traceability — the same
+  no-FK independence rule as `candidate_id`/`party_id` after `064`.
+- **ADMIN-ONLY READ.** Unlike the three public tally tables, this snapshot's RLS mirrors the
+  `028` complaints rule: `for select using (public.current_app_role() = 'admin')`. Complaint
+  text and student names are sensitive; the public Past Election pages never see the rows
+  (they keep the `proclamation_complaint_note` badge). Writes are revoked from every client
+  role; the definer writer is the only mutation path.
+- **The writer grew one block.** `archive_election_results_internal` is re-issued (the `065`
+  body verbatim plus a complaint freeze, which — like every snapshot here — deletes the
+  period's rows first and re-inserts). Because `reset_election_plan_rpc` (078), `publish_results_rpc`,
+  `proclaim_winners_rpc` and the manual EB freeze all call this single writer, every archive
+  path now carries the complaint record. The live `complaints` rows are still never deleted.
+- **Frontend (admin-only surface):** `listArchivedComplaints()` in `supabaseData.ts` reads the
+  table best-effort (empty record, never an error) and `AdminArchive` merges the frozen records
+  into its list, skipping a snapshot entry whose `complaint_id` is still readable live — a live
+  row is fresher and can still be decided after a freeze.
+

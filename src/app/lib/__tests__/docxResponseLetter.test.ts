@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import JSZip from "jszip";
 import { Packer } from "docx";
-import { buildResponseLetter, saveResponseLetter } from "../docxResponseLetter";
+import { buildResponseLetter, saveResponseLetter, formatLetterDate } from "../docxResponseLetter";
 
 async function extractBodyXml(doc: Parameters<typeof buildResponseLetter>[0]): Promise<string> {
   const blob = await Packer.toBlob(buildResponseLetter(doc));
@@ -20,7 +20,8 @@ describe("buildResponseLetter", () => {
     });
     expect(xml).toContain("CAMARINES NORTE NATIONAL HIGH SCHOOL");
     expect(xml).toContain("COMMUNICATION FOR RESPONDENT");
-    expect(xml).toContain("ACCEPTED");
+    expect(xml).toContain("RESOLVED");
+    expect(xml).not.toContain("ACCEPTED");
     expect(xml).toContain("Vote buying");
     expect(xml).toContain("Juan Dela Cruz");
   });
@@ -95,5 +96,71 @@ describe("saveResponseLetter", () => {
       (URL as any).createObjectURL = originalCreate;
       (URL as any).revokeObjectURL = originalRevoke;
     }
+  });
+});
+
+// 092: the letter moved to the student's manual download — the Date line is
+// filled with the current date, the Findings are embedded, and the deciding
+// Commissioner's name replaces the template placeholder.
+describe("buildResponseLetter (092 student delivery)", () => {
+  it("fills the Date line with the current date", async () => {
+    const xml = await extractBodyXml({
+      studentName: "Juan Dela Cruz",
+      subject: "Vote buying",
+      status: "accepted",
+    });
+    expect(xml).toContain(`Date: ${formatLetterDate()}`);
+    expect(xml).not.toContain("Date: ________");
+  });
+
+  it("embeds the Findings of the Commission when provided", async () => {
+    const xml = await extractBodyXml({
+      studentName: "Juan Dela Cruz",
+      subject: "Vote buying",
+      status: "accepted",
+      findings: "The evidence was verified and the incident confirmed.",
+    });
+    expect(xml).toContain("Findings of the Commission:");
+    expect(xml).toContain("The evidence was verified and the incident confirmed.");
+  });
+
+  it("renders each line of a multi-line Findings note as its own paragraph", async () => {
+    const xml = await extractBodyXml({
+      studentName: "Juan Dela Cruz",
+      subject: "Vote buying",
+      status: "accepted",
+      findings: "First finding.\nSecond finding.",
+    });
+    expect(xml).toContain("First finding.");
+    expect(xml).toContain("Second finding.");
+  });
+
+  it("omits the Findings section when no note is provided", async () => {
+    const xml = await extractBodyXml({
+      studentName: "Juan Dela Cruz",
+      subject: "Vote buying",
+      status: "accepted",
+    });
+    expect(xml).not.toContain("Findings of the Commission:");
+  });
+
+  it("replaces the commissioner placeholder with the deciding Commissioner's name", async () => {
+    const xml = await extractBodyXml({
+      studentName: "Juan Dela Cruz",
+      subject: "Vote buying",
+      status: "accepted",
+      commissionerName: "Atty. Maria Luna",
+    });
+    expect(xml).toContain("Atty. Maria Luna");
+    expect(xml).not.toContain("NAME OF COMMISSIONER");
+  });
+
+  it("keeps the commissioner placeholder when no name is provided", async () => {
+    const xml = await extractBodyXml({
+      studentName: "Juan Dela Cruz",
+      subject: "Vote buying",
+      status: "accepted",
+    });
+    expect(xml).toContain("NAME OF COMMISSIONER");
   });
 });

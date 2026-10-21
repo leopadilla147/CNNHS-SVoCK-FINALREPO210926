@@ -75,6 +75,27 @@ Current order: `application → campaign → fingerprint_registration → voting
   Notice" button is disabled when no meeting date is set, instead of sending a placeholder.
 - `supabaseData.ts:613` currently hardcodes `rulesDiscussionAt: undefined`; it is mapped properly.
 
+**093 — the Campaign window is a locked record**
+- The window (`campaign_start_at` / `campaign_end_at`) used to be written by the plain schedule
+  editor — a bare `UPDATE` on `election_periods` whose RLS policy only checks
+  `current_app_role() = 'admin'`. Every other stage action goes through a role-guarded RPC;
+  the campaign window was the one window any administrator could rewrite at will.
+- New RPC `save_campaign_window_rpc(p_election_id uuid, p_campaign_start_at timestamptz,
+  p_campaign_end_at timestamptz)` records the window. Guards, in order: the admin gate, the
+  commissioner gate (`current_commissioner_role() in ('electoral_board','chief')`), both dates
+  present, end after start, and the election still being in the `campaign` stage. It writes only
+  the two window columns — never `lifecycle_stage` — and inserts its own `audit_logs` row.
+- `buildElectionPeriodSyncPayload` no longer carries `campaign_start_at` / `campaign_end_at`,
+  so a Stage 4 "Save Schedule" click cannot rewrite the window behind the RPC's stage guard.
+  The RPC is the single writer.
+- **UI rule:** once the window is saved, both date pickers are **disabled** and the
+  "Update Campaign Window" button goes **dead** (greyed out, with a tooltip pointing at the
+  edit icon). The **Commissioner of Electoral Board** is offered an **icon-only pencil button
+  beside the Campaign End picker** that unlocks the pickers and enables the save button; the
+  icon then becomes an **X** that discards the edit and re-locks the window. Other commissioners
+  see the window read-only. The editor closes itself when the stage leaves `campaign`
+  (End Campaign Early, Open Voting).
+
 ---
 
 ## Stage 3 — Fingerprint Registration (060)

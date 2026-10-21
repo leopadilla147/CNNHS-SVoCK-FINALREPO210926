@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { motion } from "motion/react";
-import { AlertCircle, Send, Clock, CheckCircle, XCircle, CalendarDays, MessageSquare } from "lucide-react";
+import { AlertCircle, Send, Clock, CheckCircle, XCircle, CalendarDays, MessageSquare, Lock, Download } from "lucide-react";
 import { useApp } from "../../context/AppContext";
 import type { Complaint } from "../../context/AppContext";
 import { insertComplaint } from "../../lib/supabaseData";
-import { statusMeta, sortFiledFirst } from "../../lib/complaints";
+import { saveResponseLetter } from "../../lib/docxResponseLetter";
+import { statusMeta, sortFiledFirst, complaintWindowOpen, complaintsForElection } from "../../lib/complaints";
 
 const TONE_CLASSES: Record<string, string> = {
   amber: "bg-amber-100 text-amber-700",
@@ -13,15 +14,21 @@ const TONE_CLASSES: Record<string, string> = {
 };
 
 export default function StudentComplaints() {
-  const { complaints, setComplaints, currentUser, addLog } = useApp();
+  const { complaints, setComplaints, currentUser, addLog, electionPeriod } = useApp();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [incidentDate, setIncidentDate] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  // 092: the resolved complaint's response letter downloads on demand.
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
-  const myComplaints = sortFiledFirst(complaints);
+  // 089: the filing window opens at the campaign stage and closes as soon as
+  // voting ends; complaints also only ever show for their own election.
+  const windowOpen = complaintWindowOpen(electionPeriod);
+  const myComplaints = sortFiledFirst(complaintsForElection(complaints, electionPeriod.id));
 
   const getStatusBadge = (status: string) => {
     const meta = statusMeta(status as Complaint["status"]);
@@ -31,6 +38,30 @@ export default function StudentComplaints() {
         {meta.label}
       </span>
     );
+  };
+
+  // 092: the response letter for a resolved complaint — generated in this
+  // browser with the Findings, the current date, and the deciding
+  // Commissioner's name, and downloaded on demand (the Commissioner's old
+  // auto-download was removed).
+  const downloadLetter = async (complaint: Complaint) => {
+    setDownloading(complaint.id);
+    setDownloadError(null);
+    try {
+      await saveResponseLetter(
+        {
+          studentName: complaint.studentName,
+          subject: complaint.subject,
+          status: "accepted",
+          findings: complaint.findings,
+          commissionerName: complaint.resolvedByName,
+        },
+        "grievance-response-letter.docx"
+      );
+    } catch {
+      setDownloadError(complaint.id);
+    }
+    setDownloading(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -72,7 +103,7 @@ export default function StudentComplaints() {
     <div className="p-6 md:p-8 max-w-4xl mx-auto">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
         <h1 className="text-gray-900 mb-1">My Complaints</h1>
-        <p className="text-gray-500 text-sm">File a complaint about the election process or track your previously filed complaints.</p>
+        <p className="text-gray-500 text-sm">File a complaint about the current election or track the complaints you have filed for it.</p>
       </motion.div>
 
       {/* Submit form */}
@@ -80,6 +111,7 @@ export default function StudentComplaints() {
         <h3 className="text-gray-900 text-sm mb-4 flex items-center gap-2">
           <AlertCircle size={16} style={{ color: "#5C0102" }} /> File a Complaint
         </h3>
+        {windowOpen ? (
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Subject</label>
@@ -126,6 +158,17 @@ export default function StudentComplaints() {
             Submit Complaint
           </button>
         </form>
+        ) : (
+          <div className="flex items-start gap-3 py-4">
+            <Lock size={16} className="mt-0.5 shrink-0 text-gray-400" />
+            <div>
+              <div className="text-sm font-medium text-gray-700">The complaint window for this election has closed.</div>
+              <div className="text-xs text-gray-500 mt-0.5">
+                Complaints could be filed from the campaign period until voting ended. You can still review the complaints you filed below.
+              </div>
+            </div>
+          </div>
+        )}
       </motion.div>
 
       {/* Status list */}
@@ -163,7 +206,31 @@ export default function StudentComplaints() {
                 {complaint.status === "accepted" && (
                   <div className="mt-3 p-3 rounded-lg bg-green-50 border border-green-100">
                     <div className="text-xs font-medium text-green-800 mb-0.5">{statusMeta(complaint.status).label}</div>
-                    <p className="text-xs text-green-700">Your complaint was reviewed and accepted by the Commissioner of Grievance.</p>
+                    <p className="text-xs text-green-700 mb-2">
+                      Your complaint was reviewed and resolved by the Commissioner of Grievance
+                      {complaint.resolvedByName ? ` — ${complaint.resolvedByName}` : ""}.
+                    </p>
+                    {complaint.findings && (
+                      <>
+                        <div className="text-xs font-medium text-green-800 mb-0.5 uppercase tracking-wide">Findings</div>
+                        <p className="text-xs text-green-900 whitespace-pre-wrap mb-3">{complaint.findings}</p>
+                        <button
+                          onClick={() => downloadLetter(complaint)}
+                          disabled={downloading === complaint.id}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs font-medium hover:bg-green-700 transition-colors disabled:opacity-60"
+                        >
+                          {downloading === complaint.id ? (
+                            <span className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />
+                          ) : (
+                            <Download size={12} />
+                          )}
+                          {downloading === complaint.id ? "Preparing letter..." : "Download Response Letter"}
+                        </button>
+                        {downloadError === complaint.id && (
+                          <p className="text-xs text-red-600 mt-2">The letter could not be generated. Please try again.</p>
+                        )}
+                      </>
+                    )}
                   </div>
                 )}
               </div>

@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { useApp, type CommissionerRole } from "../../../context/AppContext";
 import { listStaffRosterRpc, type StaffRosterRow } from "../../../lib/supabaseData";
+import { complaintsForElection } from "../../../lib/complaints";
 import { useReportImages } from "../../../lib/reportImages";
 import ElectionStageBanner from "../../../components/ElectionStageBanner";
 
@@ -88,7 +89,10 @@ export default function ChiefDashboard() {
   // The Chief's own row is always present, so it counts toward the
   // appointed officer total once the roster has resolved.
   const appointedOfficerCount = activeCommissioners.length + (rosterLoaded ? 1 : 0);
-  const openComplaints = complaints.filter((c) => c.status === "filed").length;
+  // 089: complaints stay with the election they were filed under — the
+  // Chief's pending-action callout counts only the current election's rows.
+  const openComplaints = complaintsForElection(complaints, electionPeriod.id)
+    .filter((c) => c.status === "filed").length;
 
   const activityData = Array.from(
     logs.reduce((map, log) => {

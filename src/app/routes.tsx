@@ -24,6 +24,7 @@ import AdminHelpDesk from "./pages/admin/AdminHelpDesk";
 import AdminArchive from "./pages/admin/AdminArchive";
 import AdminProfile from "./pages/admin/AdminProfile";
 import AdminComplaints from "./pages/admin/AdminComplaints";
+import AdminComplaintsArchive from "./pages/admin/AdminComplaintsArchive";
 import AdminElectionSetup from "./pages/admin/AdminElectionSetup";
 import ChiefAppointments from "./pages/admin/ChiefAppointments";
 
@@ -78,6 +79,7 @@ export const router = createBrowserRouter([
       { path: "live-results", Component: AdminLiveResults },
       { path: "help-desk", Component: AdminHelpDesk },
       { path: "archive", Component: AdminArchive },
+      { path: "complaints-archive", Component: AdminComplaintsArchive },
       { path: "profile", Component: AdminProfile },
       { path: "complaints", Component: AdminComplaints },
     ],

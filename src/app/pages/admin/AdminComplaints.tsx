@@ -1,11 +1,11 @@
-import { useState } from "react";
-import { AlertCircle, CheckCircle, XCircle, Clock, Search, MessageSquare, Send, Shield, Download } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router";
+import { AlertCircle, CheckCircle, XCircle, Clock, Search, MessageSquare, Shield } from "lucide-react";
 import { motion } from "motion/react";
 import { useApp, Complaint } from "../../context/AppContext";
 import { useConfirm } from "../../lib/useConfirm";
 import { decideComplaintRpc } from "../../lib/supabaseData";
-import { saveResponseLetter } from "../../lib/docxResponseLetter";
-import { statusMeta, sortFiledFirst } from "../../lib/complaints";
+import { statusMeta, sortFiledFirst, complaintsForElection } from "../../lib/complaints";
 
 const TONE_CLASSES: Record<string, string> = {
   amber: "bg-amber-100 text-amber-700",
@@ -13,39 +13,96 @@ const TONE_CLASSES: Record<string, string> = {
   red: "bg-red-100 text-red-700",
 };
 
-export default function AdminComplaints() {
-  const { complaints, setComplaints, addLog, currentUser } = useApp();
-  const isChief = currentUser?.commissionerRole === "chief";
-  const [filter, setFilter] = useState("all");
-  const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<Complaint | null>(null);
-  const [resolution, setResolution] = useState("");
-  const [processing, setProcessing] = useState<string | null>(null);
-  const [showFactFind, setShowFactFind] = useState<string | null>(null);
-  const [rejectingId, setRejectingId] = useState<string | null>(null);
-  const [rejectReason, setRejectReason] = useState("");
-  const acceptConfirm = useConfirm({ title: "Accept Complaint?", description: "Accept this complaint and generate the response letter.", confirmText: "Accept" });
-  const sendToChiefConfirm = useConfirm({ title: "Send to Chief?", description: "Forward this complaint's initial decision to the Chief Commissioner for review.", confirmText: "Send to Chief" });
+// 086/087/090/091 model: the stored 'accepted' literal displays as "Resolved",
+// and "Send to Chief" / "Notify Commissioners" / "Reject" / "Save Findings"
+// were removed.  The Commissioner records Findings — the single official
+// explanation (complaint true → actions taken; complaint false → the reason,
+// e.g. "No Evidence") — and 091: clicking Resolved SAVES those Findings and
+// decides in one atomic call (090 still refuses a blank explanation, and the
+// UI surfaces the requirement on click).  Status literals stay 'filed' |
+// 'accepted' in the DB.
+const FILTER_LABELS: Record<string, string> = { all: "All", filed: "Filed", accepted: "Resolved" };
 
-  const filtered = sortFiledFirst(complaints.filter((c) => {
+// Deep links (dashboard stat cards) arrive with ?filter=...; anything else
+// falls back to "all" instead of producing an empty, unexplained list.
+const FILTER_VALUES = ["all", "filed", "accepted"] as const;
+const readFilterParam = (param: string | null) =>
+  param && FILTER_VALUES.includes(param as (typeof FILTER_VALUES)[number]) ? param : "all";
+
+export default function AdminComplaints() {
+  const { complaints, setComplaints, addLog, currentUser, electionPeriod } = useApp();
+  const isChief = currentUser?.commissionerRole === "chief";
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [filter, setFilter] = useState(() => readFilterParam(searchParams.get("filter")));
+  const [search, setSearch] = useState("");
+  const [processing, setProcessing] = useState<string | null>(null);
+  const [showFindings, setShowFindings] = useState<string | null>(null);
+  const [findingsDraft, setFindingsDraft] = useState("");
+  // 090: the complaint that was blocked from resolving for lack of Findings —
+  // drives the inline "required" error on the Findings input.
+  const [findingsNeeded, setFindingsNeeded] = useState<string | null>(null);
+  const resolveConfirm = useConfirm({ title: "Mark as Resolved?", description: "Mark this complaint as resolved? The Findings are saved and the student is notified — they can download the response letter from My Complaints.", confirmText: "Resolved" });
+
+  // Deep links (dashboard stat cards) arrive with ?filter=...; the chip is
+  // applied and the param is immediately stripped from the address bar
+  // (replace, so Back doesn't resurrect it).  The tab always OPENS on "All"
+  // — the deep link only decides the very first view, it never sticks.
+  useEffect(() => {
+    const param = searchParams.get("filter");
+    if (!param) return;
+    setFilter(readFilterParam(param));
+    setSearchParams({}, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  // 089: complaints stay with the election they were filed under — this tab
+  // manages the current election's rows; earlier elections' complaints are
+  // kept in the Archive.
+  const electionComplaints = complaintsForElection(complaints, electionPeriod.id);
+
+  const filtered = sortFiledFirst(electionComplaints.filter((c) => {
     const matchSearch = `${c.studentName} ${c.subject}`.toLowerCase().includes(search.toLowerCase());
     const matchFilter = filter === "all" || c.status === filter;
     return matchSearch && matchFilter;
   }));
 
-  const handleAccept = async (complaint: Complaint) => {
-    const ok = await acceptConfirm.confirm();
+  const closeFindings = () => {
+    setShowFindings(null);
+    setFindingsDraft("");
+    setFindingsNeeded(null);
+  };
+
+  const toggleFindings = (complaint: Complaint) => {
+    if (showFindings === complaint.id) {
+      closeFindings();
+    } else {
+      setShowFindings(complaint.id);
+      setFindingsDraft(complaint.findings ?? "");
+      setFindingsNeeded(null);
+    }
+  };
+
+  const handleResolve = async (complaint: Complaint) => {
+    // 091: Resolved saves the Findings and decides in one step.  The draft
+    // (panel open) is the source of truth; otherwise the saved note stands.
+    const effectiveFindings = (showFindings === complaint.id ? findingsDraft : (complaint.findings ?? "")).trim();
+    if (!effectiveFindings) {
+      // 090: findings are mandatory — surface the requirement on the input
+      // (auto-open the panel) instead of a dead button.
+      setShowFindings(complaint.id);
+      setFindingsDraft(complaint.findings ?? "");
+      setFindingsNeeded(complaint.id);
+      return;
+    }
+    const ok = await resolveConfirm.confirm();
     if (!ok) return;
     setProcessing(complaint.id);
     try {
-      await decideComplaintRpc(complaint.id, "accepted");
-      await saveResponseLetter(
-        { studentName: complaint.studentName, subject: complaint.subject, status: "accepted" },
-        `grievance-response-${complaint.id}.docx`
-      );
+      // 092: the response letter is no longer auto-downloaded here — it
+      // belongs to the student, who downloads it from My Complaints.
+      await decideComplaintRpc(complaint.id, "accepted", undefined, effectiveFindings);
       const updated = complaints.map((c) =>
         c.id === complaint.id
-          ? { ...c, status: "accepted" as const, resolvedAt: new Date().toISOString().split("T")[0] }
+          ? { ...c, status: "accepted" as const, findings: effectiveFindings, resolvedAt: new Date().toISOString().split("T")[0] }
           : c
       );
       setComplaints(updated);
@@ -53,55 +110,13 @@ export default function AdminComplaints() {
       addLog({
         user: currentUser?.name || "Commissioner",
         role: "Admin",
-        action: "Accept Failed",
-        details: err instanceof Error ? err.message : "Failed to accept complaint",
+        action: "Resolve Failed",
+        details: err instanceof Error ? err.message : "Failed to resolve complaint",
         type: "error",
       });
     }
     setProcessing(null);
-    setSelected(null);
-  };
-
-  const handleReject = async (complaint: Complaint, reason: string) => {
-    if (!reason.trim()) return;
-    if (rejectingId !== complaint.id) return;
-    setProcessing(complaint.id);
-    try {
-      await decideComplaintRpc(complaint.id, "rejected", reason.trim());
-      const updated = complaints.map((c) =>
-        c.id === complaint.id
-          ? { ...c, status: "rejected" as const, rejectionReason: reason.trim(), resolvedAt: new Date().toISOString().split("T")[0] }
-          : c
-      );
-      setComplaints(updated);
-    } catch (err) {
-      addLog({
-        user: currentUser?.name || "Commissioner",
-        role: "Admin",
-        action: "Reject Failed",
-        details: err instanceof Error ? err.message : "Failed to reject complaint",
-        type: "error",
-      });
-    }
-    setProcessing(null);
-    setRejectingId(null);
-    setRejectReason("");
-    setSelected(null);
-  };
-
-  const handleSendToChief = async (complaint: Complaint) => {
-    const ok = await sendToChiefConfirm.confirm();
-    if (!ok) return;
-    setProcessing(complaint.id);
-    await new Promise((r) => setTimeout(r, 600));
-    addLog({
-      user: currentUser?.name || "Commissioner",
-      role: "Admin",
-      action: "Forwarded to Chief Commissioner",
-      details: `Initial decision forwarded for complaint: "${complaint.subject}"`,
-      type: "info",
-    });
-    setProcessing(null);
+    closeFindings();
   };
 
   const getStatusBadge = (status: Complaint["status"]) => {
@@ -115,10 +130,9 @@ export default function AdminComplaints() {
   };
 
   const stats = [
-    { label: "Total", count: complaints.length, color: "#5C0102" },
-    { label: "Filed", count: complaints.filter((c) => c.status === "filed").length, color: "#F59E0B" },
-    { label: "Accepted", count: complaints.filter((c) => c.status === "accepted").length, color: "#10B981" },
-    { label: "Rejected", count: complaints.filter((c) => c.status === "rejected").length, color: "#9CA3AF" },
+    { label: "Total", count: electionComplaints.length, color: "#5C0102" },
+    { label: "Filed", count: electionComplaints.filter((c) => c.status === "filed").length, color: "#F59E0B" },
+    { label: "Resolved", count: electionComplaints.filter((c) => c.status === "accepted").length, color: "#10B981" },
   ];
 
   return (
@@ -129,10 +143,14 @@ export default function AdminComplaints() {
           {!isChief && <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium">Grievance</span>}
           {isChief && <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">Chief Commissioner</span>}
         </div>
-        <p className="text-gray-500 text-sm">Review, validate, conduct fact-finding, and submit initial decisions to the Chief Commissioner.</p>
+        <p className="text-gray-500 text-sm">Review, validate, record findings, and resolve student complaints.</p>
+        <p className="text-xs text-gray-400 mt-1">
+          Showing complaints filed for the current election{electionPeriod.schoolYear ? ` (${electionPeriod.schoolYear})` : ""}.
+          Earlier elections' complaints are kept in the <a href="/admin/complaints-archive" className="underline">Complaints Archive</a>.
+        </p>
       </motion.div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">
         {stats.map((s) => (
           <div key={s.label} className="bg-white rounded-xl p-4 shadow-sm border border-gray-100 text-center">
             <div className="text-2xl font-bold mb-0.5" style={{ color: s.color }}>{s.count}</div>
@@ -154,14 +172,14 @@ export default function AdminComplaints() {
             />
           </div>
           <div className="flex gap-2">
-            {["all", "filed", "accepted", "rejected"].map((f) => (
+            {["all", "filed", "accepted"].map((f) => (
               <button
                 key={f}
                 onClick={() => setFilter(f)}
-                className={`px-3 py-2 rounded-lg text-xs font-medium capitalize transition-all ${filter === f ? "text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                className={`px-3 py-2 rounded-lg text-xs font-medium transition-all ${filter === f ? "text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
                 style={filter === f ? { backgroundColor: "#5C0102" } : {}}
               >
-                {f}
+                {FILTER_LABELS[f]}
               </button>
             ))}
           </div>
@@ -198,91 +216,57 @@ export default function AdminComplaints() {
                     <p className="text-xs text-red-700">{complaint.rejectionReason}</p>
                   </div>
                 )}
+                {complaint.status !== "filed" && complaint.findings && (
+                  <div className="mt-3 p-3 rounded-lg bg-gray-50 border border-gray-100">
+                    <div className="text-xs font-medium text-gray-600 mb-0.5">Findings</div>
+                    <p className="text-xs text-gray-700 whitespace-pre-wrap">{complaint.findings}</p>
+                  </div>
+                )}
               </div>
               {complaint.status === "filed" && (
                 <div className="flex gap-2 flex-shrink-0 flex-wrap">
                   <button
-                    onClick={() => setShowFactFind(showFactFind === complaint.id ? null : complaint.id)}
+                    onClick={() => toggleFindings(complaint)}
                     className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 transition-colors"
                   >
-                    Fact-Find
+                    Findings
                   </button>
                   <button
-                    onClick={() => handleAccept(complaint)}
+                    onClick={() => handleResolve(complaint)}
                     disabled={processing === complaint.id}
                     className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs font-medium hover:bg-green-700 transition-colors disabled:opacity-60 flex items-center gap-1"
                   >
-                    {processing === complaint.id ? "..." : <Download size={11} />}
-                    {processing === complaint.id ? "" : "Accept"}
+                    {processing === complaint.id ? "..." : <CheckCircle size={11} />}
+                    {processing === complaint.id ? "" : "Resolved"}
                   </button>
-                  {rejectingId === complaint.id ? (
-                    <div className="flex flex-col gap-2 p-3 bg-gray-50 border border-gray-200 rounded-lg w-72">
-                      <input
-                        type="text"
-                        value={rejectReason}
-                        onChange={(e) => setRejectReason(e.target.value)}
-                        placeholder="Reason for rejection (required)"
-                        autoFocus
-                        className="px-3 py-1.5 border border-gray-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-red-400"
-                      />
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleReject(complaint, rejectReason)}
-                          disabled={processing === complaint.id || !rejectReason.trim()}
-                          className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-medium hover:bg-red-700 transition-colors disabled:opacity-50"
-                        >
-                          {processing === complaint.id ? "..." : "Confirm Reject"}
-                        </button>
-                        <button
-                          onClick={() => { setRejectingId(null); setRejectReason(""); }}
-                          className="px-3 py-1.5 text-gray-600 rounded-lg text-xs font-medium hover:bg-gray-100"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => { setRejectingId(complaint.id); setRejectReason(""); }}
-                      disabled={processing === complaint.id}
-                      className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-medium hover:bg-red-700 transition-colors disabled:opacity-60"
-                    >
-                      Reject
-                    </button>
-                  )}
-                  {!isChief && (
-                    <button
-                      onClick={() => handleSendToChief(complaint)}
-                      disabled={processing === complaint.id}
-                      className="px-3 py-1.5 text-white rounded-lg text-xs font-medium flex items-center gap-1 hover:opacity-90 disabled:opacity-60"
-                      style={{ backgroundColor: "#5C0102" }}
-                    >
-                      <Send size={11} /> Send to Chief
-                    </button>
-                  )}
                 </div>
               )}
             </div>
-            {showFactFind === complaint.id && (
+            {showFindings === complaint.id && complaint.status === "filed" && (
               <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} className="mt-4 pt-4 border-t border-gray-100">
                 <div className="flex items-center gap-2 text-xs text-gray-600 mb-2">
-                  <Shield size={12} /> Fact-Finding Investigation
+                  <Shield size={12} /> Findings
+                  <span className="text-gray-400">(required to resolve — saved when you click Resolved)</span>
                 </div>
+                {findingsNeeded === complaint.id && (
+                  <div className="flex items-center gap-1.5 text-xs text-red-600 mb-2">
+                    <AlertCircle size={12} /> Findings are required before this complaint can be resolved.
+                  </div>
+                )}
                 <textarea
-                  placeholder="Enter fact-finding notes, commissioner comments, and initial decision recommendation..."
-                  value={resolution}
-                  onChange={(e) => setResolution(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 mb-2"
+                  placeholder="Explain the decision — if the complaint is true, state the actions taken; if false, state the reason (e.g., No Evidence)..."
+                  value={findingsDraft}
+                  onChange={(e) => {
+                    setFindingsDraft(e.target.value);
+                    setFindingsNeeded(null);
+                  }}
+                  className={`w-full px-3 py-2 border rounded-lg text-sm bg-gray-50 mb-2 focus:outline-none ${
+                    findingsNeeded === complaint.id
+                      ? "border-red-400 focus:ring-2 focus:ring-red-100"
+                      : "border-gray-200"
+                  }`}
                   rows={3}
                 />
-                <div className="flex gap-2">
-                  <button className="px-3 py-1.5 text-white rounded-lg text-xs font-medium hover:opacity-90" style={{ backgroundColor: "#5C0102" }}>
-                    Save Notes
-                  </button>
-                  <button className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 flex items-center gap-1">
-                    <Send size={11} /> Notify Commissioners
-                  </button>
-                </div>
               </motion.div>
             )}
           </motion.div>
@@ -295,8 +279,7 @@ export default function AdminComplaints() {
           </div>
         )}
       </div>
-      {acceptConfirm.dialog}
-      {sendToChiefConfirm.dialog}
+      {resolveConfirm.dialog}
     </div>
   );
 }

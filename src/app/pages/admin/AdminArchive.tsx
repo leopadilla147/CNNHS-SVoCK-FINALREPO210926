@@ -1,38 +1,30 @@
 import { motion, AnimatePresence } from "motion/react";
 import { Link } from "react-router";
-import { useApp, Candidate, Complaint } from "../../context/AppContext";
+import { useApp, Candidate } from "../../context/AppContext";
 import { Archive, FileText, Download, Search, Eye, Clock, CheckCircle, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 // One row of the archive list.  It carries the SOURCE record (not just its
 // title) so the preview modal can render the actual documents — the display
 // fields below are what the list itself needs.
-type ArchivedDoc =
-  | {
-      kind: "candidacy";
-      id: string;
-      title: string;
-      type: "Candidacy Document";
-      date: string;
-      student: string;
-      candidate: Candidate;
-    }
-  | {
-      kind: "complaint";
-      id: string;
-      title: string;
-      type: "Complaint Record";
-      date: string;
-      student: string;
-      complaint: Complaint;
-    };
+//
+// 092: this page is now candidacy documents only — complaint records moved
+// to the dedicated Complaints Archive (/admin/complaints-archive).
+interface ArchivedDoc {
+  id: string;
+  title: string;
+  type: "Candidacy Document";
+  date: string;
+  student: string;
+  candidate: Candidate;
+}
 
 export default function AdminArchive() {
   // Candidacy documents from every election: the live period's rows plus the
   // archived ones.  Everywhere else in the app `candidates` is scoped to the
   // live period only; this page is the deliberate exception, since an archive
   // that only holds the current election is not an archive.
-  const { candidates, archivedCandidates, complaints } = useApp();
+  const { candidates, archivedCandidates } = useApp();
   const [search, setSearch] = useState("");
   const [preview, setPreview] = useState<ArchivedDoc | null>(null);
 
@@ -44,24 +36,12 @@ export default function AdminArchive() {
     ...[...candidates, ...archivedCandidates]
       .filter((c) => c.documents.applicationForm)
       .map<ArchivedDoc>((c) => ({
-        kind: "candidacy",
         id: c.id,
         title: `Application - ${c.givenName} ${c.surname}`,
         type: "Candidacy Document",
         date: c.submittedAt,
         student: `${c.givenName} ${c.surname}`,
         candidate: c,
-      })),
-    ...complaints
-      .filter((c) => c.status === "accepted" || c.status === "rejected")
-      .map<ArchivedDoc>((c) => ({
-        kind: "complaint",
-        id: `complaint-${c.id}`,
-        title: c.subject,
-        type: "Complaint Record",
-        date: c.resolvedAt || c.submittedAt,
-        student: c.studentName,
-        complaint: c,
       })),
   ].filter(
     (d) =>
@@ -82,8 +62,8 @@ export default function AdminArchive() {
   return (
     <div className="p-6 md:p-8 max-w-7xl mx-auto">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
-        <h1 className="text-gray-900 mb-1">Archived Documents</h1>
-        <p className="text-gray-500 text-sm">Archived candidacy documents and resolved complaint records.</p>
+        <h1 className="text-gray-900 mb-1">Candidates Archived Document</h1>
+        <p className="text-gray-500 text-sm">Archived candidacy documents from every election.</p>
       </motion.div>
 
       {/* Pending notification — archived records can't be reviewed, so point
@@ -201,11 +181,7 @@ export default function AdminArchive() {
               </div>
 
               <div className="p-5 space-y-5 text-sm">
-                {preview.kind === "candidacy" ? (
-                  <CandidacyPreview candidate={preview.candidate} />
-                ) : (
-                  <ComplaintPreview complaint={preview.complaint} />
-                )}
+                <CandidacyPreview candidate={preview.candidate} />
               </div>
             </motion.div>
           </motion.div>
@@ -354,54 +330,6 @@ function CandidacyPreview({ candidate }: { candidate: Candidate }) {
               </div>
             )}
           </div>
-        </div>
-      )}
-    </>
-  );
-}
-
-function ComplaintPreview({ complaint }: { complaint: Complaint }) {
-  const statusColor =
-    complaint.status === "accepted"
-      ? "bg-green-100 text-green-700"
-      : complaint.status === "rejected"
-        ? "bg-red-100 text-red-700"
-        : "bg-amber-100 text-amber-700";
-
-  return (
-    <>
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-base font-semibold text-gray-900">{complaint.subject}</div>
-          <div className="text-xs text-gray-500">Filed by {complaint.studentName}</div>
-        </div>
-        <span className={`text-xs px-2.5 py-1 rounded-full font-medium capitalize ${statusColor}`}>
-          {complaint.status}
-        </span>
-      </div>
-
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-        {[
-          ["Filed", complaint.submittedAt],
-          ...(complaint.incidentDate ? [["Incident Date", complaint.incidentDate]] : []),
-          ...(complaint.resolvedAt ? [["Resolved", complaint.resolvedAt]] : []),
-        ].map(([label, val]) => (
-          <div key={label} className="bg-gray-50 rounded-lg p-3">
-            <div className="text-xs text-gray-400 mb-0.5">{label}</div>
-            <div className="text-gray-800 font-medium text-xs break-all">{val}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="bg-gray-50 rounded-lg p-3">
-        <div className="text-xs text-gray-400 mb-1">Description</div>
-        <p className="text-gray-800 whitespace-pre-wrap text-sm">{complaint.description}</p>
-      </div>
-
-      {complaint.rejectionReason && (
-        <div className="bg-red-50 border border-red-100 rounded-lg p-3">
-          <div className="text-xs font-medium text-red-700 mb-1 uppercase tracking-wide">Resolution Reason</div>
-          <p className="text-red-800 text-sm">{complaint.rejectionReason}</p>
         </div>
       )}
     </>

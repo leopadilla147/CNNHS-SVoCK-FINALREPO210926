@@ -60,14 +60,14 @@ export function groupTally(tally: ProclamationTallyRow[]): PositionTally[] {
 }
 
 /**
- * A per-tie draft: only manual selection is allowed.  081 — the pick must
- * record how the tie was resolved (Coin Toss, Draw Lots, or a custom method).
+ * A per-tie draft: only the board's chosen winner lives here.  085b — the
+ * resolution METHOD is one shared decision for the whole election (recorded
+ * below the complaint note), so a tie is resolved once its winner is picked.
  */
-type DraftResolution = { method: "manual"; candidateId?: string; tieBreak?: string };
+type DraftResolution = { method: "manual"; candidateId?: string };
 
 function isResolved(resolution: DraftResolution | undefined): boolean {
-  if (!resolution) return false;
-  return !!resolution.candidateId && !!resolution.tieBreak?.trim();
+  return !!resolution?.candidateId;
 }
 
 function tallyVoteLabel(votes: number): string {
@@ -99,8 +99,10 @@ interface ProclamationDialogProps {
 /**
  * 069 — the proclaim-winners review.  Shows the tally for every position
  * with the highest vote on top, flags ties, and asks the Electoral Board
- * to pick the winner of each tied position — recording how the tie was
- * resolved (081).  When a complaint is still filed, the board decides the
+ * to pick the winner of each tied position.  085b — ONE resolution method
+ * for the whole election is recorded below the complaint note and applies
+ * to every tie, instead of being re-entered inside each per-candidate
+ * confirm.  When a complaint is still filed, the board decides the
  * winners and records a note on the complaint.
  */
 export function ProclamationDialog({
@@ -116,10 +118,11 @@ export function ProclamationDialog({
   const positions = useMemo(() => groupTally(tally), [tally]);
   const [resolutions, setResolutions] = useState<Record<string, DraftResolution>>({});
   const [pendingPick, setPendingPick] = useState<{ position: string; candidate: ProclamationTallyRow } | null>(null);
-  // 081 — the tie-break method captured inside the per-pick confirm, and the
-  // complaint note required when a complaint is on record.
-  const [pickMethod, setPickMethod] = useState("");
-  const [pickOther, setPickOther] = useState("");
+  // 081 — the complaint note required when a complaint is on record.  085b —
+  // ONE tie-break method for the whole election, recorded below the complaint
+  // note instead of inside every per-candidate confirm.
+  const [tieMethod, setTieMethod] = useState("");
+  const [tieOther, setTieOther] = useState("");
   const [complaintNote, setComplaintNote] = useState("");
 
   // Each fresh open starts from a clean slate — a stale resolution from a
@@ -128,8 +131,8 @@ export function ProclamationDialog({
     if (open) {
       setResolutions({});
       setPendingPick(null);
-      setPickMethod("");
-      setPickOther("");
+      setTieMethod("");
+      setTieOther("");
       setComplaintNote("");
     }
   }, [open]);
@@ -140,32 +143,30 @@ export function ProclamationDialog({
   const unresolvedTies = tiePositions.filter((p) => !isResolved(resolutions[p.position]));
   const complaintsPending = complaintSubjects.length > 0;
   const decisionReady = !complaintsPending || complaintNote.trim() !== "";
+  // 085b — one method covers every tie; "Others" needs its text.
+  const tieMethodReady =
+    tiePositions.length === 0 ||
+    (tieMethod !== "" && (tieMethod !== "others" || tieOther.trim() !== ""));
+  const sharedTieBreak =
+    tieMethod === "coin_toss" ? "Coin Toss"
+    : tieMethod === "draw_lots" ? "Draw Lots"
+    : tieOther.trim();
   const canProclaim =
-    !loading && !confirming && positions.length > 0 && unresolvedTies.length === 0 && decisionReady;
+    !loading && !confirming && positions.length > 0 && unresolvedTies.length === 0 && decisionReady && tieMethodReady;
 
   const setResolution = (position: string, resolution: DraftResolution) => {
     setResolutions((prev) => ({ ...prev, [position]: resolution }));
   };
 
   const openPick = (position: string, candidate: ProclamationTallyRow) => {
-    setPickMethod("");
-    setPickOther("");
     setPendingPick({ position, candidate });
   };
 
-  const pickValid =
-    pickMethod !== "" && (pickMethod !== "others" || pickOther.trim() !== "");
-  const pickTieBreak =
-    pickMethod === "coin_toss" ? "Coin Toss"
-    : pickMethod === "draw_lots" ? "Draw Lots"
-    : pickOther.trim();
-
   const confirmPick = () => {
-    if (!pendingPick || !pickValid) return;
+    if (!pendingPick) return;
     setResolution(pendingPick.position, {
       method: "manual",
       candidateId: pendingPick.candidate.candidateId,
-      tieBreak: pickTieBreak,
     });
     setPendingPick(null);
   };
@@ -179,7 +180,8 @@ export function ProclamationDialog({
         payload[p.position] = {
           method: "manual",
           candidateId: resolution.candidateId,
-          tieBreak: resolution.tieBreak,
+          // 085b — the one shared decision, written onto every tie.
+          tieBreak: sharedTieBreak,
         };
       }
     }
@@ -264,16 +266,59 @@ export function ProclamationDialog({
                 </div>
               )}
 
+              {/* 085b — ONE tie-break decision for the whole election,
+                  directly below the complaint note (or first, when there
+                  is no complaint).  The per-candidate confirms only pick
+                  the winner; this method is written onto every tie. */}
               {tiePositions.length > 0 && (
-                <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-                  <AlertTriangle size={14} className="shrink-0" />
-                  <span>
-                    {tiePositions.length} position{tiePositions.length === 1 ? "" : "s"} end
-                    {tiePositions.length === 1 ? "s" : ""} in a tie. Choose how each is resolved
-                    {unresolvedTies.length > 0
-                      ? ` (${unresolvedTies.length} still unresolved).`
-                      : " — all resolved."}
-                  </span>
+                <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-3">
+                  <div className="flex items-start gap-2 text-xs text-amber-800">
+                    <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                    <div>
+                      <div className="font-bold uppercase tracking-wider text-[11px]">
+                        {tiePositions.length} {tiePositions.length === 1 ? "position ends" : "positions end"} in a tie — one decision for all
+                      </div>
+                      <p className="mt-1 text-[11px] text-amber-700">
+                        Pick the winner of each tied position below{complaintsPending ? ", then record here how the tie was resolved" : ""}. The Board&rsquo;s chosen method applies to every tie.
+                      </p>
+                    </div>
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="tie-break"
+                      className="block text-xs font-medium text-gray-700 mb-1"
+                    >
+                      How the tie{tiePositions.length === 1 ? " was" : "s were"} resolved
+                    </label>
+                    <select
+                      id="tie-break"
+                      value={tieMethod}
+                      onChange={(e) => setTieMethod(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-[#5C0102]/20 focus:border-[#5C0102]/40"
+                    >
+                      <option value="">Select how it was resolved&hellip;</option>
+                      <option value="coin_toss">Coin Toss</option>
+                      <option value="draw_lots">Draw Lots</option>
+                      <option value="others">Others (specify)</option>
+                    </select>
+                  </div>
+                  {tieMethod === "others" && (
+                    <div>
+                      <label
+                        htmlFor="tie-break-other"
+                        className="block text-xs font-medium text-gray-700 mb-1"
+                      >
+                        Specify how the tie{tiePositions.length === 1 ? " was" : "s were"} resolved
+                      </label>
+                      <input
+                        id="tie-break-other"
+                        value={tieOther}
+                        onChange={(e) => setTieOther(e.target.value)}
+                        placeholder="e.g. recount, board vote."
+                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-[#5C0102]/20 focus:border-[#5C0102]/40"
+                      />
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -357,7 +402,7 @@ export function ProclamationDialog({
                     {p.isTie && (
                       <div className="border-t border-amber-100 bg-amber-50/60 p-3 space-y-2">
                         <div className="text-[11px] font-bold uppercase tracking-wider text-amber-800 flex items-center gap-1.5">
-                          <AlertTriangle size={13} /> How should this tie be broken?
+                          <AlertTriangle size={13} /> Tie — the Electoral Board chooses
                         </div>
                         <div className="flex items-start gap-2 text-xs text-gray-700">
                           <div className="w-4 h-4 mt-0.5 flex items-center justify-center">
@@ -365,17 +410,17 @@ export function ProclamationDialog({
                           </div>
                           <span>
                             <span className="font-medium text-gray-900 flex items-center gap-1">
-                              Electoral Board chooses
+                              Pick a highlighted candidate above
                             </span>
                             <span className="block text-[11px] text-gray-500">
-                              Pick a highlighted candidate above, then record how the tie was resolved.
+                              The one resolution method recorded above covers every tie in this election.
                             </span>
                           </span>
                         </div>
 
                         {!isResolved(resolution) && (
                           <div className="text-[11px] text-amber-700">
-                            Select the candidate and how the tie was resolved.
+                            Select the candidate to proclaim as the winner.
                           </div>
                         )}
                       </div>
@@ -400,10 +445,12 @@ export function ProclamationDialog({
             disabled={!canProclaim}
             title={
               unresolvedTies.length > 0
-                ? "Resolve every tie before proclaiming."
-                : !decisionReady
-                  ? "Record the Board's decision reason and the complaint note first."
-                  : undefined
+                ? "Proclaim a winner for every tied position first."
+                : !tieMethodReady
+                  ? "Record how the tie was resolved first."
+                  : !decisionReady
+                    ? "Record the Board's decision reason and the complaint note first."
+                    : undefined
             }
             className="px-5 py-2.5 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:opacity-90 disabled:opacity-50"
             style={{ backgroundColor: "#5C0102" }}
@@ -420,48 +467,14 @@ export function ProclamationDialog({
             <AlertDialogTitle>Proclaim this candidate?</AlertDialogTitle>
             <AlertDialogDescription>
               {pendingPick
-                ? `The Electoral Board will proclaim ${pendingPick.candidate.candidateName} as ${pendingPick.position}. This choice is final once winners are proclaimed.`
+                ? `The Electoral Board will proclaim ${pendingPick.candidate.candidateName} as ${pendingPick.position}. This choice is final once winners are proclaimed. The shared tie resolution method is recorded in the main dialog.`
                 : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="space-y-3">
-            <div>
-              <label htmlFor="tie-break" className="block text-xs font-medium text-gray-700 mb-1">
-                How the tie was resolved
-              </label>
-              <select
-                id="tie-break"
-                value={pickMethod}
-                onChange={(e) => setPickMethod(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-[#5C0102]/20 focus:border-[#5C0102]/40"
-              >
-                <option value="">Select how it was resolved&hellip;</option>
-                <option value="coin_toss">Coin Toss</option>
-                <option value="draw_lots">Draw Lots</option>
-                <option value="others">Others (specify)</option>
-              </select>
-            </div>
-            {pickMethod === "others" && (
-              <div>
-                <label htmlFor="tie-break-other" className="block text-xs font-medium text-gray-700 mb-1">
-                  Specify how the tie was resolved
-                </label>
-                <input
-                  id="tie-break-other"
-                  value={pickOther}
-                  onChange={(e) => setPickOther(e.target.value)}
-                  placeholder="e.g. recount, board vote."
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-[#5C0102]/20 focus:border-[#5C0102]/40"
-                />
-              </div>
-            )}
-          </div>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => setPendingPick(null)}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={confirmPick}
-              disabled={!pickValid}
-              title={!pickValid ? "Choose how the tie was resolved first." : undefined}
               className="bg-red-600 hover:bg-red-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Confirm Winner

@@ -65,15 +65,18 @@ describe("buildElectionPeriodSyncPayload", () => {
     expect("rules_discussion_at" in payload).toBe(false);
   });
 
-  it("writes the 082 Campaign window", () => {
+  it("no longer writes the campaign window — 093 gave it its own guarded RPC", () => {
+    // save_campaign_window_rpc (093) guards the stage and the commissioner
+    // role, so the plain editor (Stage 4's Save Schedule) must not be able to
+    // rewrite the campaign window behind its back.
     const payload = buildElectionPeriodSyncPayload(
       basePeriod({
         campaignStartDate: "2026-09-20T06:00:00.000Z",
         campaignEndDate: "2026-10-11T17:00:00.000Z",
       }),
     );
-    expect(payload.campaign_start_at).toBe("2026-09-20T06:00:00.000Z");
-    expect(payload.campaign_end_at).toBe("2026-10-11T17:00:00.000Z");
+    expect("campaign_start_at" in payload).toBe(false);
+    expect("campaign_end_at" in payload).toBe(false);
   });
 
   it("defaults election_modality to 'digital' when unset (082 column default)", () => {

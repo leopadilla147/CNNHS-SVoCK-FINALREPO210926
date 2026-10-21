@@ -1,19 +1,27 @@
 import { motion } from "motion/react";
 import { Link } from "react-router";
 import { useApp } from "../../../context/AppContext";
-import { AlertCircle, HelpCircle, Activity, Clock, ArrowRight, Calendar } from "lucide-react";
+import { complaintsForElection } from "../../../lib/complaints";
+import { AlertCircle, CheckCircle, HelpCircle, Activity, Clock, ArrowRight } from "lucide-react";
 import ElectionStageBanner from "../../../components/ElectionStageBanner";
 
 export default function GrievanceDashboard() {
-  const { complaints, currentUser } = useApp();
+  const { complaints, currentUser, electionPeriod } = useApp();
 
-  const filedComplaints = complaints.filter((c) => c.status === "filed").length;
-  const acceptedComplaints = complaints.filter((c) => c.status === "accepted").length;
+  // 089: complaints stay with the election they were filed under — the
+  // dashboard counts only the current election's rows.
+  const electionComplaints = complaintsForElection(complaints, electionPeriod.id);
+
+  const filedComplaints = electionComplaints.filter((c) => c.status === "filed").length;
+  const unresolved = electionComplaints
+    .filter((c) => c.status === "filed")
+    .sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1));
+  const acceptedComplaints = electionComplaints.filter((c) => c.status === "accepted").length;
 
   const stats = [
-    { label: "Filed Complaints", value: filedComplaints, icon: <AlertCircle size={20} />, color: "#EF4444", link: "/admin/complaints" },
-    { label: "Accepted", value: acceptedComplaints, icon: <Activity size={20} />, color: "#22C55E", link: "/admin/complaints" },
-    { label: "Total Complaints", value: complaints.length, icon: <HelpCircle size={20} />, color: "#5C0102", link: "/admin/complaints" },
+    { label: "Total Complaints", value: electionComplaints.length, icon: <HelpCircle size={20} />, color: "#5C0102", link: "/admin/complaints" },
+    { label: "Filed Complaints", value: filedComplaints, icon: <AlertCircle size={20} />, color: "#EF4444", link: "/admin/complaints?filter=filed" },
+    { label: "Resolved", value: acceptedComplaints, icon: <Activity size={20} />, color: "#22C55E", link: "/admin/complaints?filter=accepted" },
   ];
 
   return (
@@ -27,15 +35,7 @@ export default function GrievanceDashboard() {
       {/* Election Stage announcement */}
       <ElectionStageBanner className="mb-6" />
 
-      {filedComplaints > 0 && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6">
-          <div className="flex items-center gap-2 text-amber-800 text-sm font-medium">
-            <Clock size={16} /> Pending actions: {filedComplaints} complaint(s)
-          </div>
-        </motion.div>
-      )}
-
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
         {stats.map((stat, i) => {
           const card = (
             <motion.div
@@ -58,21 +58,43 @@ export default function GrievanceDashboard() {
         })}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <Link to="/admin/hearings"
-          className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 hover:shadow-md transition-shadow flex items-center justify-between group">
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl flex items-center justify-center text-white" style={{ backgroundColor: "#5C0102" }}>
-              <Calendar size={20} />
-            </div>
-            <div>
-              <div className="text-sm font-medium text-gray-900">Schedule Hearings</div>
-              <div className="text-xs text-gray-500">Set hearing dates for pending complaints</div>
-            </div>
+      {/* Unresolved complaints — the Commissioner's working queue.  Rows and
+          the header link deep-link into the Complaints tab Filed filter. */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 mb-8">
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-2">
+            <Clock size={16} className="text-amber-500" />
+            <h2 className="text-sm font-semibold text-gray-900">Unresolved Complaints</h2>
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${unresolved.length > 0 ? "bg-amber-100 text-amber-700" : "bg-green-100 text-green-700"}`}>
+              {unresolved.length}
+            </span>
           </div>
-          <ArrowRight size={18} className="text-gray-300 group-hover:text-gray-500 transition-colors" />
-        </Link>
+          <Link to="/admin/complaints?filter=filed" className="text-xs font-medium hover:underline" style={{ color: "#5C0102" }}>
+            View all
+          </Link>
+        </div>
+        {unresolved.length > 0 ? (
+          <div className="space-y-2">
+            {unresolved.map((complaint) => (
+              <Link
+                key={complaint.id}
+                to="/admin/complaints?filter=filed"
+                className="flex items-center justify-between gap-3 p-3 rounded-lg border border-gray-100 hover:bg-gray-50 transition-colors"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-gray-900 truncate">{complaint.subject}</div>
+                  <div className="text-xs text-gray-500">From {complaint.studentName} · Filed {complaint.submittedAt}</div>
+                </div>
+                <ArrowRight size={16} className="text-gray-300 flex-shrink-0" />
+              </Link>
+            ))}
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 text-sm text-gray-400 py-2">
+            <CheckCircle size={16} className="text-green-500" /> No unresolved complaints — everything is handled.
+          </div>
+        )}
       </div>
     </div>
   );
-} 
+}

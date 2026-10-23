@@ -116,6 +116,41 @@ describe("PastElectionDetailPage", () => {
     expect(screen.getByText("Results published and winners proclaimed.")).toBeTruthy();
   });
 
+  it("shows the election's complaint record with click-to-reveal findings", async () => {
+    mockGetPastElectionResults.mockResolvedValue({
+      ...results(),
+      election: {
+        ...results().election,
+        complaintNote: "Weighed against the turnout record.",
+        decisionReason: "The grievance did not change the outcome.",
+        complaints: [
+          {
+            id: "c1",
+            subject: "Vote buying",
+            status: "accepted",
+            decision: "substantiated",
+            findings: "Ballot receipts confirmed a proxy vote.",
+          },
+        ],
+      },
+    });
+
+    renderPage();
+
+    // 099 — the archived election's complaint record travels with the tally,
+    // but the findings are not part of the public record.
+    expect(
+      await screen.findByText(/Substantiated grievances? on record \(1\)/),
+    ).toBeTruthy();
+    expect(screen.queryByText("Ballot receipts confirmed a proxy vote.")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Vote buying/ })).toBeNull();
+    expect(
+      screen.getByText(
+        /Complaint Resolution and Justification: The grievance did not change the outcome\./,
+      ),
+    ).toBeTruthy();
+  });
+
   it("marks a highest-vote candidate when winners were not proclaimed", async () => {
     const unproclaimed = results();
     unproclaimed.election.proclaimed = false;

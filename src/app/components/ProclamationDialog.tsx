@@ -5,6 +5,7 @@ import {
   Loader2,
   ShieldAlert,
   Trophy,
+  Users,
   X,
 } from "lucide-react";
 import {
@@ -19,6 +20,9 @@ import {
 } from "./ui/alert-dialog";
 import type { ProclamationTallyRow, TieResolution } from "../lib/supabaseData";
 import { FULL_POSITION_ORDER as POSITION_ORDER } from "../lib/partyScope";
+import { FindingsDisclosure } from "./FindingsDisclosure";
+import { ProclamationSummary } from "./ProclamationSummary";
+import type { SubstantiatedGrievance } from "./ProclamationSummary";
 
 const POSITION_INDEX = new Map<string, number>(
   POSITION_ORDER.map((position, index) => [position, index]),
@@ -32,6 +36,13 @@ export interface PositionTally {
   /** Every candidate sharing the top count (> 1 means a tie). */
   tied: ProclamationTallyRow[];
   isTie: boolean;
+}
+
+/** The candidate's profile details joined onto a tally row by id. */
+export interface CandidateProfile {
+  /** The candidate's submitted profile photo URL, when they have one. */
+  picture?: string;
+  gradeLevel?: string;
 }
 
 /** Group the flat tally rows into positions, ranked highest-vote-first. */
@@ -77,6 +88,10 @@ function tallyVoteLabel(votes: number): string {
 /** What the board records about the announcement itself (081). */
 export interface ProclamationDecision {
   complaintNote: string;
+  /** 097 — the one-time explanation required when a substantiated grievance is on record. */
+  complaintReason: string;
+  /** 085b — the ONE shared tie resolution method, written onto every tie. */
+  tieBreak: string;
 }
 
 interface ProclamationDialogProps {
@@ -87,8 +102,14 @@ interface ProclamationDialogProps {
   confirming: boolean;
   error: string | null;
   tally: ProclamationTallyRow[];
+  /** Candidate profiles (photo, grade level) keyed by candidateId — rows
+   *  without one fall back to a generic avatar. */
+  profiles?: Record<string, CandidateProfile>;
   /** Subjects of the complaints still filed against this election (081). */
   complaintSubjects: string[];
+  /** 097 — the election's SUBSTANTIATED grievances (already resolved), each
+   *  with its read-only findings shown beside the subject. */
+  substantiatedGrievances: SubstantiatedGrievance[];
   onCancel: () => void;
   onConfirm: (
     resolutions: Record<string, TieResolution>,
@@ -111,7 +132,9 @@ export function ProclamationDialog({
   confirming,
   error,
   tally,
+  profiles = {},
   complaintSubjects,
+  substantiatedGrievances,
   onCancel,
   onConfirm,
 }: ProclamationDialogProps) {
@@ -124,6 +147,8 @@ export function ProclamationDialog({
   const [tieMethod, setTieMethod] = useState("");
   const [tieOther, setTieOther] = useState("");
   const [complaintNote, setComplaintNote] = useState("");
+  // 097 — required one-time explanation when a substantiated grievance exists.
+  const [complaintReason, setComplaintReason] = useState("");
 
   // Each fresh open starts from a clean slate — a stale resolution from a
   // previous attempt must never leak into a new proclamation.
@@ -134,6 +159,7 @@ export function ProclamationDialog({
       setTieMethod("");
       setTieOther("");
       setComplaintNote("");
+      setComplaintReason("");
     }
   }, [open]);
 
@@ -143,16 +169,29 @@ export function ProclamationDialog({
   const unresolvedTies = tiePositions.filter((p) => !isResolved(resolutions[p.position]));
   const complaintsPending = complaintSubjects.length > 0;
   const decisionReady = !complaintsPending || complaintNote.trim() !== "";
+  // 097 — a substantiated grievance requires the Board's one-time explanation.
+  const substantiatedPending = substantiatedGrievances.length > 0;
+  const reasonReady = !substantiatedPending || complaintReason.trim() !== "";
   // 085b — one method covers every tie; "Others" needs its text.
   const tieMethodReady =
     tiePositions.length === 0 ||
     (tieMethod !== "" && (tieMethod !== "others" || tieOther.trim() !== ""));
+  // The board cannot pick a winner of a tied position until the Complaint
+  // Reason (097) and the shared tie resolution method are both recorded —
+  // the choice is only final once the reasoning behind it is on record.
+  const picksLocked = !reasonReady || !tieMethodReady;
+  const lockedBecause = [
+    !reasonReady ? "the Complaint Reason" : null,
+    !tieMethodReady ? "how the tie" + (tiePositions.length === 1 ? " was" : "s were") + " resolved" : null,
+  ]
+    .filter(Boolean)
+    .join(" and ");
   const sharedTieBreak =
     tieMethod === "coin_toss" ? "Coin Toss"
     : tieMethod === "draw_lots" ? "Draw Lots"
     : tieOther.trim();
   const canProclaim =
-    !loading && !confirming && positions.length > 0 && unresolvedTies.length === 0 && decisionReady && tieMethodReady;
+    !loading && !confirming && positions.length > 0 && unresolvedTies.length === 0 && decisionReady && reasonReady && tieMethodReady;
 
   const setResolution = (position: string, resolution: DraftResolution) => {
     setResolutions((prev) => ({ ...prev, [position]: resolution }));
@@ -185,7 +224,11 @@ export function ProclamationDialog({
         };
       }
     }
-    onConfirm(payload, { complaintNote: complaintNote.trim() });
+    onConfirm(payload, {
+      complaintNote: complaintNote.trim(),
+      complaintReason: complaintReason.trim(),
+      tieBreak: sharedTieBreak,
+    });
   };
 
   return (
@@ -266,10 +309,50 @@ export function ProclamationDialog({
                 </div>
               )}
 
+              {/* 097 — a substantiated grievance taints the election, so the
+                  Board must record a Complaint Reason (one-time explanation)
+                  before proclaiming.  Sits ABOVE the tie-break decision.
+                  Each grievance also shows its read-only Findings. */}
+              {substantiatedPending && (
+                <div className="rounded-xl border border-red-300 bg-red-50 p-4 space-y-3">
+                  <div className="flex items-start gap-2 text-xs text-red-800">
+                    <ShieldAlert size={14} className="mt-0.5 shrink-0" />
+                    <div>
+                      <div className="font-bold uppercase tracking-wider text-[11px]">
+                        {substantiatedGrievances.length} substantiated {substantiatedGrievances.length === 1 ? "grievance" : "grievances"} — a Complaint Reason is required
+                      </div>
+                      <ul className="mt-1 space-y-1.5">
+                        {substantiatedGrievances.map((g) => (
+                          <FindingsDisclosure
+                            key={g.id}
+                            id={`proclaim-findings-${g.id}`}
+                            subject={g.subject}
+                            findings={g.findings}
+                          />
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                  <div>
+                    <label htmlFor="proclaim-complaint-reason" className="block text-xs font-medium text-gray-700 mb-1">
+                      Complaint Reason (one-time explanation)
+                    </label>
+                    <textarea
+                      id="proclaim-complaint-reason"
+                      value={complaintReason}
+                      onChange={(e) => setComplaintReason(e.target.value)}
+                      rows={2}
+                      placeholder="Explain how the substantiated grievance affected this proclamation."
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-[#5C0102]/20 focus:border-[#5C0102]/40"
+                    />
+                  </div>
+                </div>
+              )}
+
               {/* 085b — ONE tie-break decision for the whole election,
-                  directly below the complaint note (or first, when there
-                  is no complaint).  The per-candidate confirms only pick
-                  the winner; this method is written onto every tie. */}
+                  directly below the complaint reason / complaint note (or
+                  first, when there is neither).  The per-candidate confirms
+                  only pick the winner; this method is written onto every tie. */}
               {tiePositions.length > 0 && (
                 <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-3">
                   <div className="flex items-start gap-2 text-xs text-amber-800">
@@ -347,36 +430,85 @@ export function ProclamationDialog({
                         const manualPick = resolution?.method === "manual" && resolution.candidateId === c.candidateId;
                         // 081 — the tally rows ARE the choice: for a tied
                         // position every top-count candidate is a pick target,
-                        // so no separate tie list is rendered below.
-                        const selectable = p.isTie && isTop;
+                        // so no separate tie list is rendered below.  The
+                        // board can only pick once the Complaint Reason (097)
+                        // and the shared tie method are both recorded.
+                        const selectable = p.isTie && isTop && !picksLocked;
+                        // Greyed out while the Complaint Reason (097) or the
+                        // shared tie method is still missing — the choice
+                        // exists but cannot be made yet.
+                        const pickLockedRow = p.isTie && isTop && picksLocked;
+                        // The trophy marks ONLY a winner: the clean-win leader,
+                        // or the tied candidate the board actually chose.  The
+                        // whole winner row wears the proclamation colour.
+                        const showTrophy = manualPick || (!p.isTie && isTop);
+                        const profile = profiles[c.candidateId];
                         const rowClass = `relative overflow-hidden rounded-xl border px-3 py-2 flex items-center gap-3 w-full text-left ${
-                          manualPick
-                            ? "border-[#5C0102] bg-white"
-                            : isLeader
-                              ? `bg-amber-50/40 border-amber-200${selectable ? " hover:border-[#5C0102]/40 cursor-pointer" : ""}`
-                              : "bg-white border-transparent"
+                          showTrophy
+                            ? "border-[#5C0102] bg-[#5C0102] text-white shadow-sm"
+                            : pickLockedRow
+                              ? "bg-gray-100 border-gray-200 opacity-60 cursor-not-allowed"
+                              : isLeader
+                                ? `bg-amber-50/40 border-amber-200${selectable ? " hover:border-[#5C0102]/40 cursor-pointer" : ""}`
+                                : "bg-white border-transparent"
                         }`;
                         const row = (
                           <>
                             <div
-                              className={`absolute left-0 top-0 bottom-0 opacity-[0.08] ${isLeader ? "bg-amber-500" : "bg-[#5C0102]"}`}
+                              className={`absolute left-0 top-0 bottom-0 ${
+                                showTrophy
+                                  ? "bg-white opacity-[0.14]"
+                                  : `opacity-[0.08] ${!isLeader ? "bg-[#5C0102]" : "bg-amber-500"}`
+                              }`}
                               style={{ width: `${percentage}%` }}
                             />
                             <div className="relative w-5 shrink-0 flex items-center justify-center">
-                              {isLeader && <Trophy size={15} className="text-amber-500" />}
+                              {showTrophy && (
+                                <Trophy
+                                  size={15}
+                                  className="text-amber-300 drop-shadow-sm"
+                                />
+                              )}
+                            </div>
+                            {/* The candidate's profile photo, or the generic
+                                avatar when none was submitted (matches the
+                                Official Results page). */}
+                            <div className="relative shrink-0">
+                              {profile?.picture ? (
+                                <img
+                                  src={profile.picture}
+                                  alt={c.candidateName}
+                                  className="w-9 h-9 rounded-full object-cover border-2 flex-shrink-0"
+                                  style={{ borderColor: showTrophy ? "#FFFFFF" : "#5C0102" }}
+                                />
+                              ) : (
+                                <div
+                                  className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0 border-2"
+                                  style={{ borderColor: showTrophy ? "#FFFFFF" : "#5C0102" }}
+                                >
+                                  <Users size={15} className="text-gray-400" />
+                                </div>
+                              )}
                             </div>
                             <div className="relative flex-1 min-w-0">
-                              <div className="text-sm text-gray-900 truncate flex items-center gap-2">
+                              <div
+                                className={`text-sm truncate flex items-center gap-2 ${
+                                  showTrophy ? "text-white font-semibold" : "text-gray-900"
+                                }`}
+                              >
                                 {c.candidateName}
                                 {manualPick && (
-                                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#5C0102]">
+                                  <span className="text-[10px] font-bold uppercase tracking-wider bg-white text-[#5C0102] rounded-full px-1.5 py-0.5 shrink-0">
                                     Chosen
                                   </span>
                                 )}
                               </div>
-                              {c.partyName && <div className="text-[11px] text-gray-500 truncate">{c.partyName}</div>}
+                              <div className={`text-[11px] truncate ${showTrophy ? "text-white/70" : "text-gray-500"}`}>
+                                {c.partyName || "Independent"}
+                                {profile?.gradeLevel ? ` · ${profile.gradeLevel}` : ""}
+                              </div>
                             </div>
-                            <div className="relative text-xs font-semibold text-gray-600 shrink-0">
+                            <div className={`relative text-xs font-semibold shrink-0 ${showTrophy ? "text-white" : "text-gray-600"}`}>
                               {tallyVoteLabel(c.votes)}
                             </div>
                           </>
@@ -392,7 +524,15 @@ export function ProclamationDialog({
                             {row}
                           </button>
                         ) : (
-                          <div key={c.candidateId} className={rowClass}>
+                          <div
+                            key={c.candidateId}
+                            className={rowClass}
+                            title={
+                              pickLockedRow
+                                ? `Record ${lockedBecause} above before choosing a winner.`
+                                : undefined
+                            }
+                          >
                             {row}
                           </div>
                         );
@@ -420,7 +560,9 @@ export function ProclamationDialog({
 
                         {!isResolved(resolution) && (
                           <div className="text-[11px] text-amber-700">
-                            Select the candidate to proclaim as the winner.
+                            {picksLocked
+                              ? `Record ${lockedBecause} above before choosing a winner.`
+                              : "Select the candidate to proclaim as the winner."}
                           </div>
                         )}
                       </div>
@@ -429,6 +571,20 @@ export function ProclamationDialog({
                 );
               })}
             </div>
+          )}
+
+          {/* The board's whole proclamation at a glance, at the very bottom
+              of the review — the same summary shown in the final confirm. */}
+          {positions.length > 0 && (
+            <ProclamationSummary
+              positions={positions}
+              resolutions={resolutions}
+              tieBreakLabel={sharedTieBreak}
+              complaintNote={complaintNote}
+              complaintReason={complaintReason}
+              complaintSubjects={complaintSubjects}
+              substantiated={substantiatedGrievances}
+            />
           )}
         </div>
 
@@ -448,9 +604,11 @@ export function ProclamationDialog({
                 ? "Proclaim a winner for every tied position first."
                 : !tieMethodReady
                   ? "Record how the tie was resolved first."
-                  : !decisionReady
-                    ? "Record the Board's decision reason and the complaint note first."
-                    : undefined
+                  : !reasonReady
+                    ? "Record the Complaint Reason first."
+                    : !decisionReady
+                      ? "Record the Board's decision reason and the complaint note first."
+                      : undefined
             }
             className="px-5 py-2.5 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:opacity-90 disabled:opacity-50"
             style={{ backgroundColor: "#5C0102" }}

@@ -13,6 +13,7 @@ import {
   getCurrentElectionId,
   reloadElectionPeriod,
   openElectionRpc,
+  forceOpenVotingRpc,
   closeElectionRpc,
   reopenVotingRpc,
   endVotingStageRpc,
@@ -23,7 +24,6 @@ import {
   saveMeetingScheduleRpc,
   endCandidacyPeriodRpc,
   startFingerprintRegistrationRpc,
-  closeFingerprintRegistrationRpc,
   stopCampaignRpc,
   saveCampaignWindowRpc,
   countActiveComplaintsRpc,
@@ -32,9 +32,13 @@ import {
 import type { ProclaimedWinner, ProclamationTallyRow, TieResolution } from "../../lib/supabaseData";
 import { isSupabaseConfigured } from "../../lib/supabase";
 import { FULL_POSITION_ORDER } from "../../lib/partyScope";
-import { complaintsForElection } from "../../lib/complaints";
+import { complaintsForElection, substantiatedComplaints, complaintDecisionLabel } from "../../lib/complaints";
 import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
-import { ProclamationDialog } from "../../components/ProclamationDialog";
+import { ProclamationDialog, groupTally } from "../../components/ProclamationDialog";
+import type { ProclamationDecision, CandidateProfile } from "../../components/ProclamationDialog";
+import { FindingsDisclosure } from "../../components/FindingsDisclosure";
+import { ProclamationSummary } from "../../components/ProclamationSummary";
+import type { SubstantiatedGrievance } from "../../components/ProclamationSummary";
 
 type Stage = "application" | "campaign" | "fingerprint_registration" | "voting" | "results";
 
@@ -88,6 +92,25 @@ export function resolveStage(electionPeriod: ElectionPeriod): Stage {
   return "application";
 }
 
+/**
+ * The stage the tab opens on.
+ *
+ * 094 — opening the enrolment window hands the board on to the voting
+ * schedule (the start handler moves the view itself). A reload must land in
+ * the same place: while Enrolment is the active stage but its window is
+ * already open, the board's next job is the Voting schedule, not the stage
+ * it has finished scheduling. The stage itself does NOT advance — enrolment
+ * stays live until the voting start date arrives or Early Voting Activation
+ * runs.
+ */
+export function initialViewStage(electionPeriod: ElectionPeriod): Stage {
+  const stage = resolveStage(electionPeriod);
+  if (stage === "fingerprint_registration" && electionPeriod.fingerprintRegistrationStartAt) {
+    return "voting";
+  }
+  return stage;
+}
+
 function isStageComplete(stage: Stage, electionPeriod: ElectionPeriod, currentStage: Stage): boolean {
   switch (stage) {
     case "application":
@@ -98,9 +121,15 @@ function isStageComplete(stage: Stage, electionPeriod: ElectionPeriod, currentSt
     case "campaign":
       return !!electionPeriod.rulesDiscussionAt && currentStage !== "campaign" && currentStage !== "application";
     case "fingerprint_registration":
-      // Done once the election has moved on to voting (or past it). Starting
-      // the vote is what closes the enrolment window.
-      return currentStage === "voting" || currentStage === "results";
+      // The board's Stage 3 work is done once the enrolment window is opened,
+      // so the step takes its check mark then (the vote view follows it).
+      // The window itself is NOT closed by this: enrolment stays live until
+      // the voting start date arrives or Early Voting Activation runs — which
+      // is what actually moves the election on to voting. The currentStage
+      // clauses keep the step checked for a period that reached voting (or
+      // past it) without a recorded window.
+      return !!electionPeriod.fingerprintRegistrationStartAt
+        || currentStage === "voting" || currentStage === "results";
     case "voting":
       return currentStage === "results";
     case "results":
@@ -293,6 +322,14 @@ export default function AdminElectionSetup() {
   // Fingerprint Registration window, also date-only since 082.
   const [fpStart, setFpStart] = useState("");
   const [fpEnd, setFpEnd] = useState("");
+  // 094 — the saved enrolment window is a locked record too: both pickers go
+  // disabled and only the Commissioner of Electoral Board gets the "Edit"
+  // button that re-enables them.  This flag is that unlock.
+  const [fpEditing, setFpEditing] = useState(false);
+  // 094 — same for the voting schedule: once a schedule exists its dates,
+  // venue and modality are locked (the Save button becomes "Save Changes")
+  // and only the Commissioner of Electoral Board can unlock them.
+  const [votingEditing, setVotingEditing] = useState(false);
   // 082 — venue dropdown; the composed string lands in the `venue` column.
   const [venueChoice, setVenueChoice] = useState<VenueChoice>("covered_court");
   const [venueDetail, setVenueDetail] = useState("");
@@ -306,10 +343,11 @@ export default function AdminElectionSetup() {
   const [voteGate, setVoteGate] = useState<null | "reopen" | "end">(null);
   const [gatePassword, setGatePassword] = useState("");
   const [gateError, setGateError] = useState<string | null>(null);
+  const [votingScheduleSaved, setVotingScheduleSaved] = useState(false);
   // Single-stage view: only the viewed stage's card renders. The stepper and
   // the prev/next row navigate between stages; the view follows the
   // election's active stage whenever it moves.
-  const [viewStage, setViewStage] = useState<Stage>(() => resolveStage(electionPeriod));
+  const [viewStage, setViewStage] = useState<Stage>(() => initialViewStage(electionPeriod));
 
   const currentStage = resolveStage(electionPeriod);
   const hasPeriod = isUuid(electionPeriod.id || "") || !!electionId;
@@ -319,17 +357,27 @@ export default function AdminElectionSetup() {
   // the election backwards to application/campaign.
   const pastCampaign = currentStage === "voting" || currentStage === "results";
 
-  // When the election's active stage moves, the view follows it.
+  // When the election's active stage moves, the view follows it — and on a
+  // reload it opens on the stage that still has work (see initialViewStage).
   useEffect(() => {
-    setViewStage(currentStage);
+    setViewStage(initialViewStage(electionPeriod));
   }, [currentStage]);
 
   // 093 — the Campaign window unlocks only while the campaign stage is
   // current.  Once the stage moves on (End Campaign Early, Open Voting) the
   // window is final, so the editor closes itself.
+  // 094 — same for the enrolment window: it can only be edited while the
+  // Fingerprint Registration stage is current.
   useEffect(() => {
     if (currentStage !== "campaign") setCampaignEditing(false);
+    if (currentStage !== "fingerprint_registration") setFpEditing(false);
   }, [currentStage]);
+
+  // 094 — the voting schedule can only be edited while the vote has not
+  // started: once it is running (or results are out) the saved row is final.
+  useEffect(() => {
+    if (electionPeriod.isActive || currentStage === "results") setVotingEditing(false);
+  }, [electionPeriod.isActive, currentStage]);
 
   // Results unlock only after the vote was actually opened (stage voting /
   // results) and then closed: saving the schedule alone leaves the period at
@@ -349,7 +397,7 @@ export default function AdminElectionSetup() {
 
   // 082 follow-up — there is no separate Save button in Stage 4: Open Voting
   // commits the schedule (dates, modality, venue) and then opens the election.
-  const openConfirm = useConfirm({ title: "Open Voting?", description: "This saves the voting schedule (dates, modality and venue), starts the Voting Period, ends the Campaign Period and closes Fingerprint Registration, and enables kiosk voting.", confirmText: "Open Voting" });
+  const openConfirm = useConfirm({ title: "Open Voting?", description: "This saves the voting schedule (dates, modality and venue), starts the Voting Period, and enables kiosk voting.", confirmText: "Open Voting" });
   const closeConfirm = useConfirm({ title: "Close Voting?", description: "This pauses the voting period. Students will no longer be able to cast votes. Reopen Voting or End Voting Stage (Electoral Board password) afterwards.", confirmText: "Close Voting", destructive: true });
   const startCandidacyConfirm = useConfirm({ title: "Start the Candidate Application Period?", description: "Students will be able to apply for candidacy. Applications are sent to the Screening and Validation Commissioner.", confirmText: "Start Application Period" });
   // 082 — the meeting is saved from Stage 1 and no longer ends candidacy;
@@ -361,8 +409,7 @@ export default function AdminElectionSetup() {
   // running, this moves its start and end dates.
   const updateCampaignConfirm = useConfirm({ title: "Update the Campaign Period?", description: "This moves the Campaign Period start and end dates. The window locks again as soon as it is saved.", confirmText: "Update Window" });
   const stopCampaignConfirm = useConfirm({ title: "End the Campaign Period Early?", description: "This ends the Campaign Period early. The election moves to Fingerprint Registration; the enrolment window stays unscheduled until you start it.", confirmText: "End Campaign Early", destructive: true });
-  const fpConfirm = useConfirm({ title: "Start Fingerprint Registration?", description: "Voters may enrol their fingerprint at the biometric kiosks for the window you set. Starting the Voting Period closes this window automatically.", confirmText: "Start Registration" });
-  const fpCloseConfirm = useConfirm({ title: "End Fingerprint Registration Early?", description: "The enrolment window ends early. Voters will no longer be able to register a fingerprint for this election.", confirmText: "End Registration Early", destructive: true });
+  const fpConfirm = useConfirm({ title: "Start Fingerprint Registration?", description: "Voters may enrol their fingerprint at the biometric kiosks for the window you set.", confirmText: "Start Registration" });
   // 081 — one confirm covers the merged publish + proclaim action.
   const proclaimConfirm = useConfirm({ title: "Publish Results & Proclaim Winners?", description: "Results become publicly visible on the Official Results page and the winners are officially proclaimed per position. This action is irreversible.", confirmText: "Publish & Proclaim", destructive: true });
 
@@ -393,6 +440,28 @@ export default function AdminElectionSetup() {
   const filedComplaintSubjects = electionComplaints
     .filter((c) => c.status === "filed")
     .map((c) => c.subject);
+
+  // 097 — already-resolved complaints, classified by the Grievance
+  // Commissioner.  A substantiated grievance forces a Complaint Reason in
+  // the proclamation dialog; the rest are only noted in Stage 5.  Each
+  // substantiated grievance also shows its read-only Findings.
+  const resolvedComplaints = electionComplaints.filter((c) => c.status === "accepted");
+  const substantiatedGrievances: SubstantiatedGrievance[] = substantiatedComplaints(electionComplaints)
+    .map((c) => ({ id: c.id, subject: c.subject, findings: c.findings ?? null }));
+  // Substantiated grievances have their own red section below — this list
+  // only notes the classifications that do not block proclamation.
+  const otherResolvedComplaints = resolvedComplaints.filter((c) => c.decision !== "substantiated");
+
+  // The proclamation tally carries only names — join each candidate's
+  // profile details (photo, grade level) by id so the review dialog shows
+  // the full candidate row, matching the Official Results page.
+  const candidateProfiles = useMemo(() => {
+    const map: Record<string, CandidateProfile> = {};
+    for (const c of candidates) {
+      map[c.id] = { picture: c.picture, gradeLevel: c.gradeLevel };
+    }
+    return map;
+  }, [candidates]);
 
   const clearErrors = useCallback(() => {
     setStageErrors({});
@@ -482,6 +551,43 @@ export default function AdminElectionSetup() {
     setFpStart(toLocalInput(electionPeriod.fingerprintRegistrationStartAt).slice(0, 10));
     setFpEnd(toLocalInput(electionPeriod.fingerprintRegistrationEndAt).slice(0, 10));
   }, [electionPeriod.fingerprintRegistrationStartAt, electionPeriod.fingerprintRegistrationEndAt]);
+
+  useEffect(() => {
+    if (electionPeriod.startDate) {
+      setVotingScheduleSaved(true);
+    } else {
+      setVotingScheduleSaved(false);
+    }
+  }, [electionPeriod.startDate]);
+
+  useEffect(() => {
+    if (!electionPeriod.startDate) return;
+    const check = async () => {
+      try {
+        const start = new Date(`${electionPeriod.startDate}T${electionPeriod.startTime || '06:00'}:00`);
+        if (isNaN(start.getTime())) return;
+        if (new Date() >= start) {
+          // 094 — the saved voting start is what ends enrolment: a scheduled
+          // close date is only a plan, so it must not keep the window "live"
+          // past the start of the vote.
+          if (electionPeriod.fingerprintRegistrationStartAt && !electionPeriod.isActive) {
+            // A saved start date is the gate (the early return above), so read
+            // no other state here: `votingScheduleSaved` is set by an effect
+            // one render later, and this effect captures it as false forever.
+            if (isSupabaseConfigured && (electionPeriod.id || electionId) && votingSequenced) {
+              try {
+                await forceOpenVotingRpc(electionPeriod.id || electionId!);
+                await refreshPeriod();
+              } catch {}
+            }
+          }
+        }
+      } catch {}
+    };
+    check();
+    const t = setInterval(check, 60000);
+    return () => clearInterval(t);
+  }, [electionPeriod.startDate, electionPeriod.startTime, electionPeriod.fingerprintRegistrationStartAt, electionPeriod.fingerprintRegistrationEndAt, electionPeriod.isActive]);
 
   // 082 — mirror the saved Campaign window into the Stage 2 date pickers.
   useEffect(() => {
@@ -793,6 +899,12 @@ export default function AdminElectionSetup() {
 
   const handleStartFingerprintRegistration = async () => {
     clearErrors();
+    // 094 — a locked window cannot be written: the pickers are disabled, so
+    // the only way here is a stale click.  Say so instead of saving.
+    if (fpWindowLocked) {
+      showError("Click Edit to change the registration window.", "fingerprint_registration");
+      return;
+    }
     // The button stays clickable, so empty pickers surface here: the banner
     // names them and the inputs are outlined red.
     const missingFp = missingWindow(fpStart, fpEnd, "fpStart", "fpEnd", "registration");
@@ -820,10 +932,7 @@ export default function AdminElectionSetup() {
     }
     // Stage 3 is announced to every voter ONCE, when the board opens it.
     // "Update Registration Window" clicks land here too and must not
-    // re-notify the whole student body. Under strict sequencing the stage is
-    // already fingerprint_registration when the window is first recorded
-    // (after the campaign ended), so "first open" keys off the window not
-    // existing yet, not the stage.
+    // re-notify the whole student body.
     const firstOpen = !electionPeriod.fingerprintRegistrationStartAt;
     const ok = await fpConfirm.confirm();
     if (!ok) return;
@@ -871,7 +980,11 @@ export default function AdminElectionSetup() {
           type: "info",
         });
       }
+      // The window is committed — lock it again (the mirror effect restores
+      // the saved dates into the pickers).
+      setFpEditing(false);
       showSuccess("Fingerprint Registration is now open.");
+      setViewStage("voting");
     } catch (err: any) {
       showError(err.message || "Failed to start Fingerprint Registration.", "fingerprint_registration");
     } finally {
@@ -879,44 +992,105 @@ export default function AdminElectionSetup() {
     }
   };
 
-  const handleCloseFingerprintRegistration = async () => {
+  /** 094 — leave edit mode without saving: the pickers snap back to the saved
+   *  window and lock again. */
+  const handleCancelFpEdit = () => {
     clearErrors();
-    // A stage cannot end without starting: the enrolment window must exist.
-    if (!electionPeriod.fingerprintRegistrationStartAt) {
-      showError("Start the Fingerprint Registration window before ending it.", "fingerprint_registration");
+    setFpStart(toLocalInput(electionPeriod.fingerprintRegistrationStartAt).slice(0, 10));
+    setFpEnd(toLocalInput(electionPeriod.fingerprintRegistrationEndAt).slice(0, 10));
+    setFpEditing(false);
+  };
+
+  const handleSaveVotingSchedule = async () => {
+    clearErrors();
+    // 094 — a locked schedule cannot be written: the fields are disabled, so
+    // the only way here is a stale click. Say so instead of saving.
+    if (votingScheduleLocked) {
+      showError("Click Edit to change the voting schedule.", "voting");
       return;
     }
-    const ok = await fpCloseConfirm.confirm();
-    if (!ok) return;
+    if (!hasMeeting) {
+      showError("Schedule the campaign meeting before saving voting schedule.", "voting");
+      return;
+    }
+    if (!votingSequenced) {
+      showError("End the Campaign Period and start Fingerprint Registration before saving voting schedule.", "voting");
+      return;
+    }
+    const missingVoting = missingWindow(form.startDate, form.endDate, "votingStart", "votingEnd", "voting");
+    if (missingVoting) {
+      showFieldError("voting", missingVoting.message, missingVoting.fields);
+      return;
+    }
+    if (form.endDate < form.startDate) {
+      showFieldError("voting", "End date must be after start date.", ["votingEnd"]);
+      return;
+    }
+    if (form.startDate !== electionPeriod.startDate && form.startDate < tomorrowDateStr()) {
+      showFieldError("voting", "The voting start date must be tomorrow or later.", ["votingStart"]);
+      return;
+    }
+    if (venueChoice === "classroom" && !venueDetail.trim()) {
+      showError("Enter the classroom number or name.", "voting");
+      return;
+    }
+    if (venueChoice === "others" && !venueDetail.trim()) {
+      showError("Specify the venue.", "voting");
+      return;
+    }
+    if (emptyPositions.length > 0) {
+      showError(
+        `The election cannot start — no approved candidate for: ${emptyPositions.join(", ")}.`,
+        "voting",
+      );
+      return;
+    }
     setLoading(true);
     try {
-      if (isSupabaseConfigured) {
-        const id = electionPeriod.id || electionId;
-        if (!id) throw new Error("There is no election period to close.");
-        await closeFingerprintRegistrationRpc(id);
-        await refreshPeriod();
-      } else {
-        applyElectionPeriod({ ...electionPeriod, fingerprintRegistrationEndAt: new Date().toISOString() });
-      }
+      const venue = composeVenue(venueChoice, venueDetail);
+      const res = await setElectionPeriod({ ...electionPeriod, ...form, venue });
+      if (!res.ok) throw new Error(res.message || "Failed to save the voting schedule.");
+      await refreshPeriod();
+      setVotingScheduleSaved(true);
+      // The schedule is committed — lock it again.
+      setVotingEditing(false);
       addLog({
         user: logUser, role: "Admin",
-        action: "Fingerprint Registration Ended Early",
-        details: "The Fingerprint Registration window was ended early.",
-        type: "warning",
+        action: "Voting Schedule Saved",
+        details: `Voting schedule saved: ${form.startDate} ${form.startTime} - ${form.endDate} ${form.endTime}, Modality: ${form.electionModality}, Venue: ${venue}.`,
+        type: "success",
       });
-      showSuccess("Fingerprint Registration has ended.");
+      showSuccess("Voting schedule saved.");
     } catch (err: any) {
-      showError(err.message || "Failed to end Fingerprint Registration.", "fingerprint_registration");
+      showError(err.message || "Failed to save voting schedule.", "voting");
     } finally {
       setLoading(false);
     }
+  };
+
+  /** 094 — leave edit mode without saving: the fields snap back to the saved
+   *  row and lock again. `form` has no mirror effect of its own, so the dates,
+   *  modality and venue are restored from the period explicitly. */
+  const handleCancelVotingEdit = () => {
+    clearErrors();
+    const savedVenue = parseVenue(electionPeriod.venue);
+    setForm({
+      startDate: electionPeriod.startDate || tomorrowDateStr(),
+      startTime: FIXED_VOTING_START,
+      endDate: electionPeriod.endDate || electionPeriod.startDate || tomorrowDateStr(),
+      endTime: FIXED_VOTING_END,
+      electionModality: electionPeriod.electionModality || "digital",
+    });
+    setVenueChoice(savedVenue.choice);
+    setVenueDetail(savedVenue.detail);
+    setVotingEditing(false);
   };
 
   /** 082 follow-up — there is no separate Save button: Open Voting commits
    *  the schedule (dates, modality, venue) and then opens the election, so
    *  the row the kiosk and the public pages read is always what was on
    *  screen. */
-  const handleOpenElection = async () => {
+  const handleOpenElection = async (force: boolean = false) => {
     clearErrors();
     // The button is open only while the vote is actually startable (the
     // disabled state covers the meeting / roster gates); the guards below
@@ -929,6 +1103,10 @@ export default function AdminElectionSetup() {
     // being re-opened after an early close) with a started enrolment window.
     if (!votingSequenced) {
       showError("End the Campaign Period and start Fingerprint Registration before opening voting.", "voting");
+      return;
+    }
+    if (!votingScheduleSaved && !electionPeriod.startDate) {
+      showError("Save the voting schedule first.", "voting");
       return;
     }
     const missingVoting = missingWindow(form.startDate, form.endDate, "votingStart", "votingEnd", "voting");
@@ -979,14 +1157,18 @@ export default function AdminElectionSetup() {
       if (isSupabaseConfigured) {
         const id = electionPeriod.id || electionId;
         if (!id) throw new Error("There is no election period to open.");
-        await openElectionRpc(id);
+        if (force) {
+          await forceOpenVotingRpc(id);
+        } else {
+          await openElectionRpc(id);
+        }
         await refreshPeriod();
       } else {
         applyElectionPeriod({ ...electionPeriod, ...form, venue, candidacyOpen: false, isActive: true, lifecycleStage: "voting" });
       }
       addLog({
         user: logUser, role: "Admin",
-        action: "Election Opened",
+        action: force ? "Early Voting Activated" : "Election Opened",
         details: `Voting period: ${form.startDate} ${form.startTime} - ${form.endDate} ${form.endTime}, Modality: ${form.electionModality}, Venue: ${venue}. The voting period has been opened.`,
         type: "success",
       });
@@ -1124,13 +1306,26 @@ export default function AdminElectionSetup() {
   // 081 — the dialog has collected a resolution (with how the tie was
   // resolved) for every tie, plus the complaint note when a complaint is on
   // record.  Publish first, then proclaim; both RPCs are safe to retry after
-  // a partial failure.
+  // a partial failure.  The final confirm carries the same proclamation
+  // summary shown at the bottom of the review dialog.
   const commitProclaim = async (
     resolutions: Record<string, TieResolution>,
-    decision: { complaintNote: string },
+    decision: ProclamationDecision,
   ) => {
     setTallyError(null);
-    const ok = await proclaimConfirm.confirm();
+    const ok = await proclaimConfirm.confirm({
+      content: (
+        <ProclamationSummary
+          positions={groupTally(tally)}
+          resolutions={resolutions}
+          tieBreakLabel={decision.tieBreak}
+          complaintNote={decision.complaintNote}
+          complaintReason={decision.complaintReason}
+          complaintSubjects={filedComplaintSubjects}
+          substantiated={substantiatedGrievances}
+        />
+      ),
+    });
     if (!ok) return;
     setProclaiming(true);
     try {
@@ -1141,6 +1336,7 @@ export default function AdminElectionSetup() {
       }
       const winners = await proclaimWinnersRpc(id, resolutions, {
         complaintNote: decision.complaintNote || undefined,
+        decisionReason: decision.complaintReason || undefined,
       });
       await refreshPeriod();
       setProclaimedWinners(winners);
@@ -1149,6 +1345,8 @@ export default function AdminElectionSetup() {
         user: logUser, role: "Admin",
         action: "Results Published & Winners Proclaimed",
         details: `Results published and winners proclaimed for ${winners.length} positions.`
+          + (decision.tieBreak ? ` Tie resolution: ${decision.tieBreak}.` : "")
+          + (decision.complaintReason ? ` Complaint reason: ${decision.complaintReason}.` : "")
           + (decision.complaintNote ? ` Complaint note: ${decision.complaintNote}.` : ""),
         type: "success",
       });
@@ -1222,7 +1420,13 @@ export default function AdminElectionSetup() {
   // 082 follow-up — with no Save button in Stage 4, the inputs lock once the
   // schedule is committed (vote running or results out); editing them
   // afterwards would silently change nothing.
-  const scheduleLocked = electionPeriod.isActive || currentStage === "results";
+  // 094 — a saved voting schedule is a locked record: its dates, venue and
+  // modality go disabled and Save becomes "Save Changes" until the
+  // Commissioner of Electoral Board unlocks it with the edit icon. The vote
+  // running (or results being out) locks the row for good.
+  const votingScheduleLocked = votingScheduleSaved && !votingEditing;
+  const scheduleLocked =
+    electionPeriod.isActive || currentStage === "results" || votingScheduleLocked;
   const hasMeeting = !!electionPeriod.rulesDiscussionAt;
   // The Campaign window is committed by "Start Campaign"; once saved, the
   // button becomes "Update Campaign Window".
@@ -1239,12 +1443,30 @@ export default function AdminElectionSetup() {
   // voting closes, the election moves to the Results stage: there is no
   // re-opening the vote.
   const hasFpWindow = !!electionPeriod.fingerprintRegistrationStartAt;
+  // 094 — the saved enrolment window is a locked record: the pickers go
+  // disabled and the "Update Registration Window" button goes dead until the
+  // Commissioner of Electoral Board unlocks it with the edit icon.
+  const fpWindowLocked = hasFpWindow && !fpEditing;
   const votingReachable = currentStage === "fingerprint_registration";
   const votingSequenced = votingReachable && hasFpWindow;
   // The vote exists as an openable action only before it concludes: Close
   // Voting moves the election to the Results stage, after which the Stage 4
   // card is read-only and the publish flow takes over.
   const votingOpenable = !electionPeriod.isActive && !electionPeriod.resultsPublished && !pastCampaign;
+  // 095 — the open action is "Early Voting Activation" until the SAVED voting
+  // start instant arrives; from the due time on it is the scheduled "Open
+  // Voting". The label and the RPC follow the same flag: activating early is
+  // what ends the enrolment window (force_open_voting_rpc), and 095 clamps a
+  // scheduled close date to now() so the window really does finish. Without
+  // that, a timing-based "Early Voting Activation" would still call
+  // open_election_rpc, which leaves enrolment live.
+  const earlyVotingActivation = (() => {
+    if (!electionPeriod.startDate) return false;
+    const start = new Date(
+      `${electionPeriod.startDate}T${electionPeriod.startTime || FIXED_VOTING_START}:00`,
+    );
+    return !Number.isNaN(start.getTime()) && Date.now() < start.getTime();
+  })();
   // Position of the viewed stage in the STAGES order — drives the prev/next row.
   const viewIndex = STAGES.findIndex((s) => s.id === viewStage);
 
@@ -1689,9 +1911,13 @@ export default function AdminElectionSetup() {
               <Play size={12} /> Registration Open
             </span>
           )}
-          {electionPeriod.fingerprintRegistrationEndAt && (
-            <span className="text-xs flex items-center gap-1 text-gray-400 font-medium">
-              <Square size={12} /> Registration Closed
+          {/* 094 — a saved enrolment window (both dates) is only SCHEDULED:
+              it does not close until the voting start date arrives or Early
+              Voting Activation runs. The old "Registration Closed" wording
+              read the scheduled end stamp as a closure. */}
+          {electionPeriod.fingerprintRegistrationStartAt && electionPeriod.fingerprintRegistrationEndAt && (
+            <span className="text-xs flex items-center gap-1 text-green-600 font-medium">
+              <CheckCircle2 size={12} /> Registration Scheduled
             </span>
           )}
         </div>
@@ -1717,8 +1943,8 @@ export default function AdminElectionSetup() {
           <div className="space-y-4">
             <div className="text-sm text-gray-500">
               Voters visit the IoT biometric kiosks during this window to enrol their fingerprint.
-              It sits between the campaign and the vote: starting the Voting Period closes it
-              automatically, so the two can never overlap.
+              Saving both dates only schedules the window — enrolment stays open until the voting
+              start date arrives or Early Voting Activation is clicked, which is what ends it.
             </div>
 
             {electionPeriod.fingerprintRegistrationStartAt && (
@@ -1742,48 +1968,71 @@ export default function AdminElectionSetup() {
                   type="date"
                   min={tomorrowDateStr()}
                   value={fpStart}
+                  disabled={fpWindowLocked}
                   onChange={(e) => { setFpStart(e.target.value); clearFieldError("fpStart"); }}
-                  className={pickerClassName(fieldErrors.fpStart)}
+                  className={pickerClassName(fieldErrors.fpStart, `${PICKER_BASE_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`)}
                 />
               </div>
               <div>
                 <label htmlFor="fp-end" className="block text-xs text-gray-600 mb-1">Registration Closes</label>
-                <input
-                  id="fp-end"
-                  type="date"
-                  min={tomorrowDateStr()}
-                  value={fpEnd}
-                  onChange={(e) => { setFpEnd(e.target.value); clearFieldError("fpEnd"); }}
-                  className={pickerClassName(fieldErrors.fpEnd)}
-                />
+                <div className="flex items-center gap-2">
+                  <input
+                    id="fp-end"
+                    type="date"
+                    min={tomorrowDateStr()}
+                    value={fpEnd}
+                    disabled={fpWindowLocked}
+                    onChange={(e) => { setFpEnd(e.target.value); clearFieldError("fpEnd"); }}
+                    className={pickerClassName(fieldErrors.fpEnd, `${PICKER_BASE_CLASS} flex-1 min-w-0 disabled:opacity-50 disabled:cursor-not-allowed`)}
+                  />
+                  {/* 094 — the lock toggle lives beside the closing date: a
+                      pencil unlocks the window, an X puts the saved dates
+                      back.  Only the Commissioner of Electoral Board is
+                      offered it. */}
+                  {hasFpWindow && isElectoralBoard && (
+                    <button
+                      type="button"
+                      onClick={fpEditing
+                        ? handleCancelFpEdit
+                        : () => { clearErrors(); setFpEditing(true); }}
+                      disabled={loading}
+                      aria-label={fpEditing
+                        ? "Cancel editing the Registration Window"
+                        : "Edit the Registration Window"}
+                      title={fpEditing
+                        ? "Discard the changes and lock the registration window."
+                        : "Unlock the Registration Opens and Registration Closes dates."}
+                      className="shrink-0 h-[38px] w-[38px] flex items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-[#5C0102] disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {fpEditing ? <X size={16} /> : <Pencil size={16} />}
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
-            <p className="text-xs text-gray-400">The window opens 6:00 AM on the opening date and closes 5:00 PM on the closing date, tomorrow or later.</p>
+            <p className="text-xs text-gray-400">
+              The window opens 6:00 AM on the opening date and closes 5:00 PM on the closing date, tomorrow or later.
+              {fpWindowLocked && " It is locked — use the edit icon to move the dates."}
+            </p>
 
             {renderStageError("fingerprint_registration")}
 
             <div className="flex flex-wrap gap-3">
-              {/* Always clickable: empty pickers surface in the banner. */}
+              {/* 094 — the committed window is locked.  The primary action
+                  stays on screen but goes dead while the window is locked;
+                  the edit icon beside the closing date is the way in. */}
               <button
                 onClick={handleStartFingerprintRegistration}
-                disabled={loading}
-                className="px-5 py-2.5 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:opacity-90 disabled:opacity-50"
+                disabled={loading || fpWindowLocked}
+                title={fpWindowLocked
+                  ? "Click the edit icon to change the registration window."
+                  : undefined}
+                className="px-5 py-2.5 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{ backgroundColor: "#5C0102" }}
               >
                 {loading ? <Loader2 size={16} className="animate-spin" /> : <Fingerprint size={16} />}
                 {electionPeriod.fingerprintRegistrationStartAt ? "Update Registration Window" : "Open Fingerprint Registration"}
               </button>
-              {currentStage === "fingerprint_registration" && !electionPeriod.fingerprintRegistrationEndAt && (
-                <button
-                  onClick={handleCloseFingerprintRegistration}
-                  disabled={loading || !hasFpWindow}
-                  title={!hasFpWindow ? "Start the registration window first." : undefined}
-                  className="px-5 py-2.5 bg-amber-100 text-amber-700 border border-amber-200 rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-amber-200 disabled:opacity-50"
-                >
-                  {loading ? <Loader2 size={16} className="animate-spin" /> : <Square size={16} />}
-                  End Fingerprint Registration Early
-                </button>
-              )}
             </div>
           </div>
         )}
@@ -1845,48 +2094,14 @@ export default function AdminElectionSetup() {
                 </div>
               </div>
             </div>
-            <p className="text-xs text-gray-400">Voting hours are fixed (6:00 AM &ndash; 5:00 PM); only the dates can be set.</p>
-            <div>
-              <label htmlFor="venue-choice" className="block text-xs text-gray-600 mb-1">Venue</label>
-              <div className="flex items-center gap-2">
-                <MapPin size={14} className="text-gray-400 shrink-0" />
-                <select
-                  id="venue-choice"
-                  value={venueChoice}
-                  onChange={(e) => setVenueChoice(e.target.value as VenueChoice)}
-                  disabled={scheduleLocked}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <option value="covered_court">CNNHS Covered Court</option>
-                  <option value="classroom">CNNHS Classroom</option>
-                  <option value="others">Others</option>
-                </select>
-              </div>
-              {venueChoice === "classroom" && (
-                <input
-                  aria-label="Classroom number or name"
-                  value={venueDetail}
-                  onChange={(e) => setVenueDetail(e.target.value)}
-                  disabled={scheduleLocked}
-                  placeholder="Classroom number or name"
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 mt-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                />
-              )}
-              {venueChoice === "others" && (
-                <input
-                  aria-label="Specify venue"
-                  value={venueDetail}
-                  onChange={(e) => setVenueDetail(e.target.value)}
-                  disabled={scheduleLocked}
-                  placeholder="Specify the venue"
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 mt-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                />
-              )}
-            </div>
+            <p className="text-xs text-gray-400">
+              Voting hours are fixed (6:00 AM &ndash; 5:00 PM); only the dates can be set.
+              {votingScheduleLocked && " The schedule is locked — use the edit icon to change the dates, venue and modality."}
+            </p>
           </div>
 
           <div className="space-y-4">
-            <h4 className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Election Modalities</h4>
+            <h4 className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Election Configuration</h4>
             <div>
               <label htmlFor="election-modality" className="block text-xs text-gray-600 mb-1">Election Modalities</label>
               <select
@@ -1905,19 +2120,97 @@ export default function AdminElectionSetup() {
           </div>
         </div>
 
+        {/* Venue row — full card width: the venue dropdown takes a third, the
+            classroom / others detail input takes the rest, and the save
+            button ("Save Schedule" / "Save Changes" with the edit icon beside
+            it) sits at the far right. */}
+        <div className="mt-6 pt-4 border-t border-gray-100">
+          <label htmlFor="venue-choice" className="block text-xs text-gray-600 mb-1">Venue</label>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+            <div className="flex items-center gap-2 w-full sm:w-1/3 shrink-0">
+              <MapPin size={14} className="text-gray-400 shrink-0" />
+              <select
+                id="venue-choice"
+                value={venueChoice}
+                onChange={(e) => setVenueChoice(e.target.value as VenueChoice)}
+                disabled={scheduleLocked}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <option value="covered_court">CNNHS Covered Court</option>
+                <option value="classroom">CNNHS Classroom</option>
+                <option value="others">Others</option>
+              </select>
+            </div>
+            <div className="flex-1 min-w-0">
+              {venueChoice === "classroom" && (
+                <input
+                  aria-label="Classroom number or name"
+                  value={venueDetail}
+                  onChange={(e) => setVenueDetail(e.target.value)}
+                  disabled={scheduleLocked}
+                  placeholder="Classroom number or name"
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+              )}
+              {venueChoice === "others" && (
+                <input
+                  aria-label="Specify venue"
+                  value={venueDetail}
+                  onChange={(e) => setVenueDetail(e.target.value)}
+                  disabled={scheduleLocked}
+                  placeholder="Specify the venue"
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+              )}
+            </div>
+            <div className="shrink-0 sm:ml-8 flex items-center gap-3">
+              {/* 094 — the lock toggle for the whole saved schedule (dates,
+                  venue and modality). Only the Commissioner of Electoral
+                  Board is offered it. */}
+              {votingScheduleSaved && isElectoralBoard && !electionPeriod.isActive && currentStage !== "results" && (
+                <button
+                  type="button"
+                  onClick={votingEditing
+                    ? handleCancelVotingEdit
+                    : () => { clearErrors(); setVotingEditing(true); }}
+                  disabled={loading}
+                  aria-label={votingEditing
+                    ? "Cancel editing the Voting Schedule"
+                    : "Edit the Voting Schedule"}
+                  title={votingEditing
+                    ? "Discard the changes and lock the voting schedule."
+                    : "Unlock the voting dates, venue and modality."}
+                  className="h-[38px] w-[38px] flex items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-[#5C0102] disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {votingEditing ? <X size={16} /> : <Pencil size={16} />}
+                </button>
+              )}
+              {!electionPeriod.isActive && !electionPeriod.resultsPublished && votingSequenced && hasMeeting && (currentStage === "fingerprint_registration" || currentStage === "voting") && (
+                <button onClick={handleSaveVotingSchedule}
+                  disabled={loading || emptyPositions.length > 0 || votingScheduleLocked}
+                  title={
+                    emptyPositions.length > 0
+                      ? "Every position needs an approved candidate before saving the schedule."
+                      : votingScheduleLocked
+                        ? "Click the edit icon to change the voting schedule."
+                        : undefined
+                  }
+                  className="whitespace-nowrap px-5 py-2 bg-gray-100 text-gray-700 rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed">
+                  {loading ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                  {votingScheduleSaved ? "Save Changes" : "Save Schedule"}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
         {renderStageError("voting")}
 
-        <div className="flex items-center justify-between mt-6 pt-4 border-t border-gray-100">
-          <div className="text-xs text-gray-400">
-            Voting period: {electionPeriod.startDate || "Not set"} {electionPeriod.startTime} &rarr; {electionPeriod.endDate || "Not set"} {electionPeriod.endTime}
-          </div>
+        <div className="flex items-center justify-end mt-6 pt-4 border-t border-gray-100">
           <div className="flex gap-3">
-            {/* Open only under strict sequencing: Stage 3 must be the active
-                stage (or the vote is being re-opened after an early close)
-                and Fingerprint Registration must have started. Empty date
-                pickers still surface the banner error on click. */}
-            {votingOpenable && (
-              <button onClick={handleOpenElection}
+            {/* Open only under strict sequencing */}
+            {votingOpenable && votingScheduleSaved && (
+              <button onClick={() => handleOpenElection(earlyVotingActivation)}
                 disabled={loading || !hasMeeting || emptyPositions.length > 0 || !votingSequenced}
                 title={
                   emptyPositions.length > 0
@@ -1929,7 +2222,7 @@ export default function AdminElectionSetup() {
                 className="px-5 py-2.5 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:opacity-90 disabled:opacity-50"
                 style={{ backgroundColor: "#5C0102" }}>
                 {loading ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
-                Open Voting
+                {earlyVotingActivation ? "Early Voting Activation" : "Open Voting"}
               </button>
             )}
             {electionPeriod.isActive && (
@@ -1940,7 +2233,9 @@ export default function AdminElectionSetup() {
               </button>
             )}
             {/* 084 — paused vote: the two consequential moves, both behind
-                the Electoral Board password. */}
+                the Electoral Board password. Offered whenever the vote is
+                paused (including after a reload), not only in the session
+                that closed it. */}
             {currentStage === "voting" && !electionPeriod.isActive && !electionPeriod.resultsPublished && (
               <>
                 <button
@@ -1960,7 +2255,7 @@ export default function AdminElectionSetup() {
                 </button>
               </>
             )}
-            {votingOpenable && hasMeeting && votingSequenced && (
+            {electionPeriod.isActive && (
               <div className="flex items-center gap-2 text-xs text-gray-400 ml-2">
                 <Eye size={14} />
                 Or wait until the voting period ends automatically
@@ -1982,7 +2277,7 @@ export default function AdminElectionSetup() {
 
         {hasMeeting && votingSequenced && votingOpenable && (
           <div className="flex items-center gap-2 text-xs text-amber-600 p-3 bg-amber-50 border border-amber-100 rounded-lg mt-4">
-            <AlertCircle size={14} /> Opening voting saves the schedule, ends the Campaign Period and closes Fingerprint Registration.
+            <AlertCircle size={14} /> Opening voting saves the schedule and starts the Voting Period. Fingerprint Registration ends with it if it is still running.
           </div>
         )}
       </div>
@@ -2020,10 +2315,63 @@ export default function AdminElectionSetup() {
                   before results can be published and winners proclaimed.
                 </div>
                 <div className="text-xs mt-0.5">
-                  Resolve {(knownComplaintCount ?? 0) === 1 ? "it" : "them"} in{" "}
-                  <a href="/admin/complaints" className="underline font-medium">Complaints</a> to unlock publishing.
+                  Resolve {(knownComplaintCount ?? 0) === 1 ? "it" : "them"} to unlock publishing.
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* 097 — how each resolved complaint was classified.  Substantiated
+              grievances never appear in this list — they have their own red
+              section below, since only they force a Complaint Reason. */}
+          {otherResolvedComplaints.length > 0 && (
+            <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-700">
+              <div className="flex items-center gap-2 font-medium">
+                <CheckCircle2 size={16} className="shrink-0" />
+                Complaint decisions ({otherResolvedComplaints.length})
+              </div>
+              <ul className="mt-1.5 space-y-0.5">
+                {otherResolvedComplaints.map((c) => (
+                  <li key={c.id} className="text-xs flex items-center gap-1.5 flex-wrap">
+                    <span className="font-medium">{c.subject}</span>
+                    {c.complaintAgainst && (
+                      <span className="text-gray-500">(against {c.complaintAgainst})</span>
+                    )}
+                    <span className="text-gray-400">·</span>
+                    <span>{complaintDecisionLabel(c.decision)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* 097 — the ONLY place a substantiated grievance appears on this
+              stage.  Each Nature of Complaint toggles its findings (text
+              only — no evidence files) at the bottom of the row. */}
+          {substantiatedGrievances.length > 0 && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-800">
+              {!electionPeriod.proclaimed ? (
+                <div className="flex items-start gap-2 text-xs font-medium">
+                  <ShieldAlert size={14} className="mt-0.5 shrink-0" />
+                  <span>A Complaint Reason is required when proclaiming winners due to:</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-xs font-medium">
+                  <ShieldAlert size={14} className="shrink-0" />
+                  <span>Substantiated grievances on record ({substantiatedGrievances.length})</span>
+                </div>
+              )}
+              <ul className="mt-1.5 space-y-1.5">
+                {substantiatedGrievances.map((g) => (
+                  <FindingsDisclosure
+                    key={g.id}
+                    id={`stage5-findings-${g.id}`}
+                    subject={g.subject}
+                    decisionLabel="Substantiated Grievance"
+                    findings={g.findings}
+                  />
+                ))}
+              </ul>
             </div>
           )}
 
@@ -2141,7 +2489,6 @@ export default function AdminElectionSetup() {
       {updateCampaignConfirm.dialog}
       {stopCampaignConfirm.dialog}
       {fpConfirm.dialog}
-      {fpCloseConfirm.dialog}
       {openConfirm.dialog}
       {closeConfirm.dialog}
       {proclaimConfirm.dialog}
@@ -2152,7 +2499,9 @@ export default function AdminElectionSetup() {
         confirming={proclaiming}
         error={tallyError}
         tally={tally}
+        profiles={candidateProfiles}
         complaintSubjects={filedComplaintSubjects}
+        substantiatedGrievances={substantiatedGrievances}
         onCancel={closeProclamation}
         onConfirm={commitProclaim}
       />

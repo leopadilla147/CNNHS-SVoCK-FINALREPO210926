@@ -1,7 +1,8 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AdminLiveResults from "./AdminLiveResults";
-import type { Candidate, ElectionPeriod } from "../../context/AppContext";
+import type { Candidate, Complaint, ElectionPeriod } from "../../context/AppContext";
 
 const PERIOD_ID = "5c1a33e2-8b4d-4c1e-9a7f-1d2e3f4a5b6c";
 
@@ -52,9 +53,10 @@ vi.mock("../../lib/supabaseData", () => ({
 
 let candidates: Candidate[];
 let electionPeriod: ElectionPeriod;
+let complaints: Complaint[];
 
 vi.mock("../../context/AppContext", () => ({
-  useApp: () => ({ candidates, electionPeriod }),
+  useApp: () => ({ candidates, electionPeriod, complaints }),
 }));
 
 function candidate(overrides: Partial<Candidate>): Candidate {
@@ -101,6 +103,7 @@ describe("AdminLiveResults", () => {
     vi.clearAllMocks();
     candidates = [];
     electionPeriod = period();
+    complaints = [];
     mockRpc.mockResolvedValue({ data: [], error: null });
     mockMaybeSingle.mockResolvedValue({ data: { id: PERIOD_ID } });
     mockGetLiveAbstainSummaryRpc.mockResolvedValue([]);
@@ -142,12 +145,52 @@ describe("AdminLiveResults", () => {
 
     expect(await screen.findByText("Proclaimed winner")).toBeInTheDocument();
     expect(screen.getByText("Tie — resolved via Coin Toss")).toBeInTheDocument();
-    expect(screen.getByText("A complaint was on record for this election.")).toBeInTheDocument();
     expect(
       screen.getByText(/Electoral Board note: The complaint was weighed/),
     ).toBeInTheDocument();
     // With the proclamation on record, the live "Leading" badge is replaced.
     expect(screen.queryByText("Leading")).toBeNull();
+  });
+
+  it("shows the election's complaint record with click-to-reveal findings", async () => {
+    electionPeriod = period({ id: PERIOD_ID });
+    complaints = [
+      {
+        id: "c1",
+        subject: "Vote buying",
+        description: "desc",
+        status: "accepted",
+        decision: "substantiated",
+        findings: "Ballot receipts confirmed a proxy vote.",
+        electionPeriodId: PERIOD_ID,
+      },
+      {
+        id: "c2",
+        subject: "Campaigning inside the precinct",
+        description: "desc",
+        status: "filed",
+        electionPeriodId: PERIOD_ID,
+      },
+    ] as Complaint[];
+    mockGetProclamationAnnotations.mockResolvedValue({
+      ties: [],
+      decisionReason: "The grievance did not change the outcome.",
+    });
+    render(<AdminLiveResults />);
+
+    // Substantiated grievance on record — findings hidden until clicked.
+    expect(
+      await screen.findByText(/Substantiated grievances? on record \(1\)/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Ballot receipts confirmed a proxy vote.")).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: /Vote buying/ }));
+    expect(screen.getByText("Ballot receipts confirmed a proxy vote.")).toBeInTheDocument();
+
+    // The still-filed complaint is flagged, and the Board's reason is shown.
+    expect(screen.getByText(/1 complaint is still on file/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Complaint Reason: The grievance did not change the outcome\./),
+    ).toBeInTheDocument();
   });
 
   it("shows the abstain count beside the per-position vote count", async () => {

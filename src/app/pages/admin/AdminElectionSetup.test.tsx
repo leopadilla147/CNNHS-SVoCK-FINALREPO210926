@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import AdminElectionSetup, { resolveStage } from "./AdminElectionSetup";
+import AdminElectionSetup, { initialViewStage, resolveStage } from "./AdminElectionSetup";
 import { emptyElectionPeriod } from "../../context/AppContext";
 import type { Candidate, CommissionerRole, ElectionPeriod } from "../../context/AppContext";
 import { FULL_POSITION_ORDER } from "../../lib/partyScope";
@@ -24,6 +24,7 @@ const {
   mockCountActiveComplaintsRpc,
   mockResetElectionPlanRpc,
   mockOpenElectionRpc,
+  mockForceOpenVotingRpc,
   mockCloseElectionRpc,
   mockReopenVotingRpc,
   mockEndVotingStageRpc,
@@ -46,6 +47,7 @@ const {
   mockCountActiveComplaintsRpc: vi.fn(),
   mockResetElectionPlanRpc: vi.fn(),
   mockOpenElectionRpc: vi.fn(),
+  mockForceOpenVotingRpc: vi.fn(),
   mockCloseElectionRpc: vi.fn(),
   mockReopenVotingRpc: vi.fn(),
   mockEndVotingStageRpc: vi.fn(),
@@ -70,6 +72,7 @@ vi.mock("../../lib/supabaseData", () => ({
   countActiveComplaintsRpc: mockCountActiveComplaintsRpc,
   resetElectionPlanRpc: mockResetElectionPlanRpc,
   openElectionRpc: mockOpenElectionRpc,
+  forceOpenVotingRpc: mockForceOpenVotingRpc,
   closeElectionRpc: mockCloseElectionRpc,
   reopenVotingRpc: mockReopenVotingRpc,
   endVotingStageRpc: mockEndVotingStageRpc,
@@ -85,7 +88,7 @@ vi.mock("../../lib/useConfirm", () => ({
 }));
 
 let electionPeriod: ElectionPeriod;
-let complaints: { status: string; electionPeriodId?: string }[];
+let complaints: { id?: string; status: string; subject?: string; electionPeriodId?: string; decision?: string; findings?: string }[];
 // Voters the Stage 3 announcement is sent to; reset per test like complaints.
 let students: { id: string; status: string }[];
 // The approved-candidate roster — drives the "0 candidates per position"
@@ -190,6 +193,33 @@ describe("resolveStage", () => {
   });
 });
 
+describe("initialViewStage", () => {
+  it("opens on the Voting stage while Enrolment is current but its window is already open", () => {
+    // The board's Stage 3 job is done and the handler moved the view to
+    // Stage 4; a reload must land in the same place, without the stage itself
+    // advancing (enrolment is still live).
+    expect(
+      initialViewStage(period({
+        lifecycleStage: "fingerprint_registration",
+        fingerprintRegistrationStartAt: "2026-10-05T08:00:00.000Z",
+      })),
+    ).toBe("voting");
+  });
+
+  it("stays on Enrolment until the window is actually opened", () => {
+    expect(initialViewStage(period({ lifecycleStage: "fingerprint_registration" }))).toBe(
+      "fingerprint_registration",
+    );
+  });
+
+  it("leaves every other stage alone", () => {
+    expect(initialViewStage(period({ lifecycleStage: "application" }))).toBe("application");
+    expect(initialViewStage(period({ lifecycleStage: "campaign", rulesDiscussionAt: "2026-09-30T09:00:00.000Z" }))).toBe("campaign");
+    expect(initialViewStage(period({ lifecycleStage: "voting", isActive: true }))).toBe("voting");
+    expect(initialViewStage(period({ lifecycleStage: "results", resultsPublished: true }))).toBe("results");
+  });
+});
+
 describe("AdminElectionSetup", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -221,6 +251,7 @@ describe("AdminElectionSetup", () => {
       schoolYear: "2027-2028",
       mode: "cleared",
     });
+    mockForceOpenVotingRpc.mockResolvedValue(undefined);
     mockReopenVotingRpc.mockResolvedValue(undefined);
     mockEndVotingStageRpc.mockResolvedValue(undefined);
   });
@@ -290,18 +321,20 @@ describe("AdminElectionSetup", () => {
     renderPage();
 
     // The vote is not startable while the Application Stage is still current:
-    // the button stays closed and the standing lock note names the reason.
+    // neither the schedule nor the open action is offered, and the standing
+    // lock note names the reason.
     await gotoStage(user, "Voting");
     expect(screen.getByText("Schedule the campaign meeting before opening voting.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Open Voting/ })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /Open Voting/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Save Schedule/ })).toBeNull();
   });
 
-  it("Open Voting saves the schedule before opening the election", async () => {
+  it("Save Schedule commits the voting window, then Open Voting opens the election", async () => {
     const user = userEvent.setup();
-    // 082 follow-up — Stage 4 has no Save button: Open Voting persists the
-    // voting window (dates, modality, venue) BEFORE calling open_election_rpc,
-    // which opens the row as saved. Strict sequencing: the vote opens while
-    // Stage 3 is current with a started enrolment window.
+    // 094 — Stage 4 is a two-step flow: "Save Schedule" persists the voting
+    // window (dates, modality, venue) and only then does "Open Voting" appear.
+    // Strict sequencing: the vote opens while Stage 3 is current with a
+    // started enrolment window.
     electionPeriod = period({
       lifecycleStage: "fingerprint_registration",
       candidacyOpen: false,
@@ -312,8 +345,9 @@ describe("AdminElectionSetup", () => {
     renderPage();
 
     await gotoStage(user, "Voting");
-    await user.click(screen.getByRole("button", { name: /Open Voting/ }));
 
+    // Step 1 — save the schedule. Opening must NOT happen yet.
+    await user.click(screen.getByRole("button", { name: /Save Schedule/ }));
     await waitFor(() => {
       expect(mockSetElectionPeriod).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -323,12 +357,154 @@ describe("AdminElectionSetup", () => {
           venue: "CNNHS Covered Court",
         }),
       );
+    });
+    expect(mockOpenElectionRpc).not.toHaveBeenCalled();
+
+    // Step 2 — the saved schedule unlocks the open action.
+    await user.click(screen.getByRole("button", { name: /Open Voting/ }));
+    await waitFor(() => {
       expect(mockOpenElectionRpc).toHaveBeenCalledWith(PERIOD_ID);
     });
     // The row must be saved before the stage flips.
     expect(mockSetElectionPeriod.mock.invocationCallOrder[0]).toBeLessThan(
       mockOpenElectionRpc.mock.invocationCallOrder[0],
     );
+  });
+
+  it("Early Voting Activation ends enrolment and opens the vote in one move", async () => {
+    const user = userEvent.setup();
+    // 094 — when a schedule is saved while the enrolment window is still open
+    // (started, no end stamp), the action becomes "Early Voting Activation" and
+    // the matching RPC — not open_election_rpc — closes enrolment as it opens.
+    electionPeriod = period({
+      lifecycleStage: "fingerprint_registration",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: localIso(2, "08:00"),
+      startDate: "2026-11-02",
+      startTime: "08:00",
+      endDate: "2026-11-02",
+      endTime: "17:00",
+    });
+    candidates = fullRoster();
+    renderPage();
+
+    await gotoStage(user, "Voting");
+    await user.click(screen.getByRole("button", { name: /Early Voting Activation/ }));
+
+    await waitFor(() => {
+      expect(mockForceOpenVotingRpc).toHaveBeenCalledWith(PERIOD_ID);
+    });
+    expect(mockOpenElectionRpc).not.toHaveBeenCalled();
+  });
+
+  it("still activates early when a close date was scheduled before the start", async () => {
+    const user = userEvent.setup();
+    // 095 — the label follows the CLOCK, not the enrolment stamp: a window
+    // that was scheduled to close later must not turn the action back into
+    // "Open Voting". Activating early is what ends enrolment, so it takes the
+    // force path either way.
+    electionPeriod = period({
+      lifecycleStage: "fingerprint_registration",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: localIso(2, "08:00"),
+      fingerprintRegistrationEndAt: localIso(3, "17:00"),
+      startDate: "2026-11-02",
+      startTime: "08:00",
+      endDate: "2026-11-02",
+      endTime: "17:00",
+    });
+    candidates = fullRoster();
+    renderPage();
+
+    await gotoStage(user, "Voting");
+    await user.click(screen.getByRole("button", { name: /Early Voting Activation/ }));
+
+    await waitFor(() => {
+      expect(mockForceOpenVotingRpc).toHaveBeenCalledWith(PERIOD_ID);
+    });
+    expect(mockOpenElectionRpc).not.toHaveBeenCalled();
+  });
+
+  it("shows Open Voting — not Early Voting Activation — once the saved start has arrived", async () => {
+    const user = userEvent.setup();
+    // The saved voting start is in the past, so this is the scheduled open.
+    electionPeriod = period({
+      lifecycleStage: "fingerprint_registration",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: localIso(-3, "08:00"),
+      startDate: futureDate(-1),
+      startTime: "06:00",
+      endDate: futureDate(-1),
+      endTime: "17:00",
+    });
+    candidates = fullRoster();
+    renderPage();
+
+    await gotoStage(user, "Voting");
+    expect(screen.queryByRole("button", { name: /Early Voting Activation/ })).toBeNull();
+
+    // The due-time auto-open timer fires on mount; clear it so the click's
+    // own RPC choice is what gets asserted.
+    await waitFor(() => {
+      expect(mockForceOpenVotingRpc).toHaveBeenCalledWith(PERIOD_ID);
+    });
+    mockForceOpenVotingRpc.mockClear();
+
+    await user.click(screen.getByRole("button", { name: /Open Voting/ }));
+
+    await waitFor(() => {
+      expect(mockOpenElectionRpc).toHaveBeenCalledWith(PERIOD_ID);
+    });
+    expect(mockForceOpenVotingRpc).not.toHaveBeenCalled();
+  });
+
+  it("auto-ends enrolment when the saved voting start arrives, even with a close date scheduled", async () => {
+    // 094/095 — the saved voting start is what ends enrolment. A scheduled
+    // close date is only a plan, so it must not leave the window (or the vote)
+    // waiting: the Stage 4 card force-opens by itself.
+    electionPeriod = period({
+      lifecycleStage: "fingerprint_registration",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: localIso(-3, "08:00"),
+      fingerprintRegistrationEndAt: localIso(2, "17:00"),
+      startDate: futureDate(-1),
+      startTime: "06:00",
+      endDate: futureDate(-1),
+      endTime: "17:00",
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(mockForceOpenVotingRpc).toHaveBeenCalledWith(PERIOD_ID);
+    });
+    expect(mockOpenElectionRpc).not.toHaveBeenCalled();
+  });
+
+  it("disables Save Schedule while a position stands empty", async () => {
+    const user = userEvent.setup();
+    electionPeriod = period({
+      lifecycleStage: "fingerprint_registration",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: localIso(2, "08:00"),
+    });
+    candidates = fullRoster().filter((c) => c.position !== "Treasurer");
+    renderPage();
+
+    await gotoStage(user, "Voting");
+    const save = screen.getByRole("button", { name: /Save Schedule/ });
+    expect(save).toBeDisabled();
+    expect(save).toHaveAttribute(
+      "title",
+      "Every position needs an approved candidate before saving the schedule.",
+    );
+
+    await user.click(save);
+    expect(mockSetElectionPeriod).not.toHaveBeenCalled();
   });
 
   it("keeps the amber open-now note under a ready voting schedule", async () => {
@@ -347,7 +523,9 @@ describe("AdminElectionSetup", () => {
     renderPage();
 
     await gotoStage(user, "Voting");
-    expect(screen.getByRole("button", { name: /Open Voting/ })).toBeEnabled();
+    // Enrolment is scheduled but still open, so this is the early-activation
+    // variant of the open action.
+    expect(screen.getByRole("button", { name: /Early Voting Activation/ })).toBeEnabled();
     expect(screen.getByText(/Opening voting saves the schedule/)).toBeInTheDocument();
   });
 
@@ -367,10 +545,10 @@ describe("AdminElectionSetup", () => {
     candidates = fullRoster().filter((c) => c.position !== "Treasurer");
     renderPage();
 
-    // The 0-candidate gate is not a persistent block any more: the Open
-    // Voting button is disabled and names the reason in its tooltip.
+    // The 0-candidate gate is not a persistent block any more: the open
+    // action is disabled and names the reason in its tooltip.
     await gotoStage(user, "Voting");
-    const openVoting = screen.getByRole("button", { name: /Open Voting/ });
+    const openVoting = screen.getByRole("button", { name: /Early Voting Activation/ });
     expect(openVoting).toBeDisabled();
     expect(openVoting).toHaveAttribute(
       "title",
@@ -378,7 +556,128 @@ describe("AdminElectionSetup", () => {
     );
   });
 
-  it("flags the cleared voting date pickers when Open Voting is clicked without them", async () => {
+  it("locks the saved Voting schedule and offers Edit to the Electoral Board", async () => {
+    const user = userEvent.setup();
+    // 094 — a saved schedule is a locked record: the dates, venue and modality
+    // all go disabled and Save becomes "Save Changes" — the edit icon is the
+    // way in.
+    electionPeriod = period({
+      lifecycleStage: "fingerprint_registration",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: localIso(2, "08:00"),
+      startDate: "2026-11-02",
+      startTime: "08:00",
+      endDate: "2026-11-02",
+      endTime: "17:00",
+    });
+    candidates = fullRoster();
+    renderPage();
+
+    await gotoStage(user, "Voting");
+    expect(screen.getByLabelText("Start Date")).toBeDisabled();
+    expect(screen.getByLabelText("End Date")).toBeDisabled();
+    expect(screen.getByLabelText("Venue")).toBeDisabled();
+    expect(screen.getByLabelText("Election Modalities")).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Save Changes/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Edit the Voting Schedule" })).toBeInTheDocument();
+  });
+
+  it("hides the Voting schedule edit icon from a commissioner who is not the Electoral Board", async () => {
+    const user = userEvent.setup();
+    commissionerRole = "screening_validation";
+    electionPeriod = period({
+      lifecycleStage: "fingerprint_registration",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: localIso(2, "08:00"),
+      startDate: "2026-11-02",
+      startTime: "08:00",
+      endDate: "2026-11-02",
+      endTime: "17:00",
+    });
+    candidates = fullRoster();
+    renderPage();
+
+    await gotoStage(user, "Voting");
+    expect(screen.queryByRole("button", { name: "Edit the Voting Schedule" })).toBeNull();
+    expect(screen.getByLabelText("Start Date")).toBeDisabled();
+    expect(screen.getByLabelText("Venue")).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Save Changes/ })).toBeDisabled();
+  });
+
+  it("unlocks the Voting schedule on the edit icon and saves the changed venue and modality", async () => {
+    const user = userEvent.setup();
+    electionPeriod = period({
+      lifecycleStage: "fingerprint_registration",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: localIso(2, "08:00"),
+      startDate: "2026-11-02",
+      startTime: "08:00",
+      endDate: "2026-11-02",
+      endTime: "17:00",
+    });
+    candidates = fullRoster();
+    renderPage();
+
+    await gotoStage(user, "Voting");
+    await user.click(screen.getByRole("button", { name: "Edit the Voting Schedule" }));
+
+    // Unlocking re-enables the whole schedule and opens the save button; the
+    // icon becomes a cancel.
+    expect(screen.getByLabelText("Start Date")).toBeEnabled();
+    expect(screen.getByLabelText("Venue")).toBeEnabled();
+    expect(screen.getByLabelText("Election Modalities")).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Save Changes/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel editing the Voting Schedule" })).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("Election Modalities"), "manual");
+    await user.selectOptions(screen.getByLabelText("Venue"), "classroom");
+    await user.type(screen.getByLabelText("Classroom number or name"), "203");
+    await user.click(screen.getByRole("button", { name: /Save Changes/ }));
+
+    await waitFor(() => {
+      expect(mockSetElectionPeriod).toHaveBeenCalledWith(
+        expect.objectContaining({
+          electionModality: "manual",
+          venue: "CNNHS Classroom — 203",
+        }),
+      );
+    });
+  });
+
+  it("discards a Voting schedule edit on the cancel icon and locks the fields again", async () => {
+    const user = userEvent.setup();
+    electionPeriod = period({
+      lifecycleStage: "fingerprint_registration",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: localIso(2, "08:00"),
+      startDate: "2026-11-02",
+      startTime: "08:00",
+      endDate: "2026-11-02",
+      endTime: "17:00",
+      electionModality: "hybrid",
+    });
+    candidates = fullRoster();
+    renderPage();
+
+    await gotoStage(user, "Voting");
+    await user.click(screen.getByRole("button", { name: "Edit the Voting Schedule" }));
+    await user.selectOptions(screen.getByLabelText("Election Modalities"), "manual");
+    await user.selectOptions(screen.getByLabelText("Venue"), "others");
+    await user.click(screen.getByRole("button", { name: "Cancel editing the Voting Schedule" }));
+
+    // The fields snap back to the saved row and lock again.
+    expect(screen.getByLabelText("Election Modalities")).toHaveValue("hybrid");
+    expect(screen.getByLabelText("Election Modalities")).toBeDisabled();
+    expect(screen.getByLabelText("Venue")).toHaveValue("covered_court");
+    expect(screen.getByRole("button", { name: /Save Changes/ })).toBeDisabled();
+    expect(mockSetElectionPeriod).not.toHaveBeenCalled();
+  });
+
+  it("flags the cleared voting date pickers when Save Schedule is clicked without them", async () => {
     const user = userEvent.setup();
     electionPeriod = period({
       lifecycleStage: "fingerprint_registration",
@@ -393,18 +692,20 @@ describe("AdminElectionSetup", () => {
     // The schedule prefills with tomorrow, so clear both pickers first.
     fireEvent.change(screen.getByLabelText("Start Date"), { target: { value: "" } });
     fireEvent.change(screen.getByLabelText("End Date"), { target: { value: "" } });
-    await user.click(screen.getByRole("button", { name: /Open Voting/ }));
+    await user.click(screen.getByRole("button", { name: /Save Schedule/ }));
 
     expect(screen.getByText("Choose the voting start and end date before saving.")).toBeInTheDocument();
     expect(screen.getByLabelText("Start Date")).toHaveClass("border-red-300");
     expect(screen.getByLabelText("End Date")).toHaveClass("border-red-300");
+    expect(mockSetElectionPeriod).not.toHaveBeenCalled();
     expect(mockOpenElectionRpc).not.toHaveBeenCalled();
   });
 
-  it("keeps Open Voting closed while the Campaign Stage is still active", async () => {
+  it("keeps Open Voting hidden while the Campaign Stage is still active", async () => {
     const user = userEvent.setup();
     // Strict sequencing: the vote cannot open a stage that has not been
-    // reached — the Campaign must end and Stage 3 start first.
+    // reached — the Campaign must end and Stage 3 start first. Neither the
+    // schedule nor the open action is offered, and the lock note says why.
     electionPeriod = period({
       lifecycleStage: "campaign",
       candidacyOpen: false,
@@ -414,22 +715,17 @@ describe("AdminElectionSetup", () => {
     renderPage();
 
     await gotoStage(user, "Voting");
-    const openVoting = screen.getByRole("button", { name: /Open Voting/ });
-    expect(openVoting).toBeDisabled();
-    expect(openVoting).toHaveAttribute(
-      "title",
-      "End the Campaign Period and start Fingerprint Registration first.",
-    );
     expect(screen.getByText("End the Campaign Period and start Fingerprint Registration before opening voting.")).toBeInTheDocument();
-
-    await user.click(openVoting);
+    expect(screen.queryByRole("button", { name: /Open Voting/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Save Schedule/ })).toBeNull();
     expect(mockOpenElectionRpc).not.toHaveBeenCalled();
   });
 
-  it("keeps Open Voting closed until Fingerprint Registration has started", async () => {
+  it("keeps Open Voting hidden until Fingerprint Registration has started", async () => {
     const user = userEvent.setup();
     // Stage 3 is active but its window was never recorded — a stage cannot
-    // end without starting, so the vote stays closed.
+    // end without starting, so the vote stays closed and its schedule is not
+    // offered yet either.
     electionPeriod = period({
       lifecycleStage: "fingerprint_registration",
       candidacyOpen: false,
@@ -439,14 +735,9 @@ describe("AdminElectionSetup", () => {
     renderPage();
 
     await gotoStage(user, "Voting");
-    const openVoting = screen.getByRole("button", { name: /Open Voting/ });
-    expect(openVoting).toBeDisabled();
-    expect(openVoting).toHaveAttribute(
-      "title",
-      "End the Campaign Period and start Fingerprint Registration first.",
-    );
-
-    await user.click(openVoting);
+    expect(screen.getByText("End the Campaign Period and start Fingerprint Registration before opening voting.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Open Voting/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Save Schedule/ })).toBeNull();
     expect(mockOpenElectionRpc).not.toHaveBeenCalled();
   });
 
@@ -1067,9 +1358,9 @@ describe("AdminElectionSetup", () => {
     const modality = screen.getByLabelText("Election Modalities");
     expect(modality).toHaveValue("digital");
 
-    // With no Save button, Open Voting is what commits the modality.
+    // Save Schedule is what commits the modality.
     await user.selectOptions(modality, "manual");
-    await user.click(screen.getByRole("button", { name: /Open Voting/ }));
+    await user.click(screen.getByRole("button", { name: /Save Schedule/ }));
 
     await waitFor(() => {
       expect(mockSetElectionPeriod).toHaveBeenCalledWith(
@@ -1092,7 +1383,7 @@ describe("AdminElectionSetup", () => {
     await gotoStage(user, "Voting");
     await user.selectOptions(screen.getByLabelText("Venue"), "classroom");
     await user.type(screen.getByLabelText("Classroom number or name"), "203");
-    await user.click(screen.getByRole("button", { name: /Open Voting/ }));
+    await user.click(screen.getByRole("button", { name: /Save Schedule/ }));
 
     await waitFor(() => {
       expect(mockSetElectionPeriod).toHaveBeenCalledWith(
@@ -1294,6 +1585,11 @@ describe("AdminElectionSetup", () => {
     students = [{ id: "voter-1", status: "approved" }];
     renderPage();
 
+    // 094 — a reload lands on Stage 4 once the window is open, so walk back
+    // to the enrolment card; the saved window is locked, so unlock it with
+    // the edit icon first.
+    await gotoStage(user, "Fingerprint");
+    await user.click(screen.getByRole("button", { name: "Edit the Registration Window" }));
     await user.click(screen.getByRole("button", { name: /Update Registration Window/ }));
 
     await waitFor(() => {
@@ -1302,10 +1598,110 @@ describe("AdminElectionSetup", () => {
     expect(mockInsertNotification).not.toHaveBeenCalled();
   });
 
-  it("disables End Fingerprint Registration Early until the window has started", async () => {
+  it("locks the Registration pickers once the window is saved, and offers Edit to the Electoral Board", async () => {
     const user = userEvent.setup();
-    // "End Campaign Early" can move the election here with no window recorded:
-    // a stage cannot end without starting, so the end button stays closed.
+    electionPeriod = period({
+      lifecycleStage: "fingerprint_registration",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: localIso(2, "08:00"),
+      fingerprintRegistrationEndAt: localIso(3, "17:00"),
+    });
+    renderPage();
+    await gotoStage(user, "Fingerprint");
+
+    // The committed window is a locked record: both pickers are disabled and
+    // the save button is dead — the edit icon is the way in.
+    expect(screen.getByLabelText("Registration Opens")).toBeDisabled();
+    expect(screen.getByLabelText("Registration Closes")).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Update Registration Window/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Edit the Registration Window" })).toBeInTheDocument();
+
+    // The saved window still mirrors back into the (disabled) pickers.
+    expect(screen.getByLabelText("Registration Opens")).toHaveValue(
+      toLocalDate(localIso(2, "08:00")),
+    );
+  });
+
+  it("hides the Registration edit icon from a commissioner who is not the Electoral Board", async () => {
+    const user = userEvent.setup();
+    commissionerRole = "screening_validation";
+    electionPeriod = period({
+      lifecycleStage: "fingerprint_registration",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: localIso(2, "08:00"),
+      fingerprintRegistrationEndAt: localIso(3, "17:00"),
+    });
+    renderPage();
+    await gotoStage(user, "Fingerprint");
+
+    expect(screen.queryByRole("button", { name: "Edit the Registration Window" })).toBeNull();
+    expect(screen.getByLabelText("Registration Opens")).toBeDisabled();
+    expect(screen.getByLabelText("Registration Closes")).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Update Registration Window/ })).toBeDisabled();
+  });
+
+  it("unlocks the Registration pickers on the edit icon and saves the moved window", async () => {
+    const user = userEvent.setup();
+    electionPeriod = period({
+      lifecycleStage: "fingerprint_registration",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: localIso(2, "08:00"),
+      fingerprintRegistrationEndAt: localIso(4, "17:00"),
+    });
+    renderPage();
+    await gotoStage(user, "Fingerprint");
+
+    await user.click(screen.getByRole("button", { name: "Edit the Registration Window" }));
+
+    expect(screen.getByLabelText("Registration Opens")).toBeEnabled();
+    expect(screen.getByLabelText("Registration Closes")).toBeEnabled();
+    // Unlocking opens the save button; the icon becomes a cancel.
+    expect(screen.getByRole("button", { name: /Update Registration Window/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel editing the Registration Window" })).toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText("Registration Opens"));
+    await user.type(screen.getByLabelText("Registration Opens"), futureDate(3));
+    await user.click(screen.getByRole("button", { name: /Update Registration Window/ }));
+
+    await waitFor(() => {
+      expect(mockStartFingerprintRegistrationRpc).toHaveBeenCalledWith(
+        PERIOD_ID,
+        expect.any(String),
+        expect.any(String),
+      );
+    });
+  });
+
+  it("discards a Registration window edit on the cancel icon and locks the pickers again", async () => {
+    const user = userEvent.setup();
+    electionPeriod = period({
+      lifecycleStage: "fingerprint_registration",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: localIso(2, "08:00"),
+      fingerprintRegistrationEndAt: localIso(4, "17:00"),
+    });
+    renderPage();
+
+    const savedStart = toLocalDate(localIso(2, "08:00"));
+    await gotoStage(user, "Fingerprint");
+    await user.click(screen.getByRole("button", { name: "Edit the Registration Window" }));
+    await user.clear(screen.getByLabelText("Registration Opens"));
+    await user.type(screen.getByLabelText("Registration Opens"), futureDate(3));
+    await user.click(screen.getByRole("button", { name: "Cancel editing the Registration Window" }));
+
+    // The picker snaps back to the saved window and locks again.
+    expect(screen.getByLabelText("Registration Opens")).toHaveValue(savedStart);
+    expect(screen.getByLabelText("Registration Opens")).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Update Registration Window/ })).toBeDisabled();
+    expect(mockStartFingerprintRegistrationRpc).not.toHaveBeenCalled();
+  });
+
+  it("removes End Fingerprint Registration Early button", async () => {
+    const user = userEvent.setup();
     electionPeriod = period({
       lifecycleStage: "fingerprint_registration",
       candidacyOpen: false,
@@ -1313,12 +1709,55 @@ describe("AdminElectionSetup", () => {
     });
     renderPage();
 
-    const end = screen.getByRole("button", { name: /End Fingerprint Registration Early/ });
-    expect(end).toBeDisabled();
-    expect(end).toHaveAttribute("title", "Start the registration window first.");
+    expect(screen.queryByRole("button", { name: /End Fingerprint Registration Early/ })).not.toBeInTheDocument();
+  });
 
-    await user.click(end);
-    expect(mockCloseFingerprintRegistrationRpc).not.toHaveBeenCalled();
+  it("checks the Fingerprint step once the window is opened, without closing enrolment", async () => {
+    const user = userEvent.setup();
+    // 094 — opening the window is the board's Stage 3 work, so the stepper
+    // takes its check mark then. The window itself is only SCHEDULED: enrolment
+    // is not closed, which happens when the voting start date arrives or Early
+    // Voting Activation runs.
+    electionPeriod = period({
+      lifecycleStage: "fingerprint_registration",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: localIso(2, "08:00"),
+      fingerprintRegistrationEndAt: localIso(3, "17:00"),
+    });
+    renderPage();
+    await gotoStage(user, "Fingerprint");
+
+    // The stepper marks Stage 3 done as soon as the window is recorded.
+    const fpStep = screen.getByRole("button", { name: "View Fingerprint stage" });
+    expect(fpStep.querySelector(".lucide-circle-check")).not.toBeNull();
+
+    // The check mark does not mean the window is closed: the card still reads
+    // "Scheduled" (not "Closed") and keeps its controls.
+    expect(screen.getByText("Registration Scheduled")).toBeInTheDocument();
+    expect(screen.queryByText("Registration Closed")).toBeNull();
+    expect(screen.getByRole("button", { name: /Update Registration Window/ })).toBeInTheDocument();
+  });
+
+  it("opens on the Voting stage after a reload once the enrolment window is open", () => {
+    // 094 — the board is handed on to the voting schedule when it opens
+    // enrolment; a reload lands in the same place instead of dropping back on
+    // the stage it has finished scheduling.
+    electionPeriod = period({
+      lifecycleStage: "fingerprint_registration",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: localIso(2, "08:00"),
+      fingerprintRegistrationEndAt: localIso(3, "17:00"),
+    });
+    renderPage();
+
+    expect(screen.getByText("Stage 4: Voting Period")).toBeInTheDocument();
+    expect(screen.queryByText("Stage 3: Fingerprint Registration")).toBeNull();
+    // The stage itself has not advanced: Stage 4 is only the opened view, and
+    // the Fingerprint step keeps its (finished) check mark.
+    expect(screen.getByRole("button", { name: "View Voting stage" })).toHaveAttribute("aria-current", "step");
+    expect(screen.getByRole("button", { name: "View Fingerprint stage" })).not.toHaveAttribute("aria-current");
   });
 
   it("blocks publish & proclaim while a complaint is filed — resolve it first", () => {
@@ -1331,7 +1770,8 @@ describe("AdminElectionSetup", () => {
     const proclaim = screen.getByRole("button", { name: /Publish & Proclaim Winners/ });
     expect(proclaim).toBeDisabled();
     expect(screen.getByText(/must be resolved before results can be published/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Complaints" })).toHaveAttribute("href", "/admin/complaints");
+    expect(screen.queryByRole("link", { name: "Complaints" })).toBeNull();
+    expect(screen.getByText(/Resolve it to unlock publishing/)).toBeInTheDocument();
   });
 
   it("reports the complaint count from the server when context has none — and blocks", async () => {
@@ -1436,10 +1876,33 @@ describe("AdminElectionSetup", () => {
       await user.click(screen.getByRole("button", { name: /Publish & Proclaim Winners/ }));
 
       const dialog = await screen.findByRole("dialog");
-      expect(within(dialog).getByText("Ada Leader")).toBeInTheDocument();
+      // Ada Leader appears in the President tally section and in the summary.
+      expect(within(dialog).getAllByText("Ada Leader").length).toBeGreaterThan(0);
       // President is a clean win; Secretary is an all-zero tie.
       expect(within(dialog).getAllByText(/Tie/).length).toBeGreaterThan(0);
       expect(mockGetProclamationTallyRpc).toHaveBeenCalledWith(PERIOD_ID);
+    });
+
+    it("shows each candidate's profile — photo when submitted, generic avatar otherwise", async () => {
+      const user = userEvent.setup();
+      electionPeriod = publishedPeriod();
+      // Only Ada's profile exists in context; every other tally row falls back.
+      candidates = [
+        { id: "p1", picture: "http://example.com/ada.png", gradeLevel: "Grade 12" } as Candidate,
+      ];
+      mockGetProclamationTallyRpc.mockResolvedValue(tallyRows);
+      renderPage();
+
+      await user.click(screen.getByRole("button", { name: /Publish & Proclaim Winners/ }));
+      const dialog = await screen.findByRole("dialog");
+
+      // Ada's submitted photo and grade level join her tally row.
+      expect(
+        within(dialog).getByRole("img", { name: "Ada Leader" }),
+      ).toHaveAttribute("src", "http://example.com/ada.png");
+      expect(within(dialog).getByText("Alpha · Grade 12")).toBeInTheDocument();
+      // Candidates without a profile fall back to the generic avatar line.
+      expect(within(dialog).getAllByText("Independent").length).toBeGreaterThan(0);
     });
 
     it("requires the board to choose a winner — with one shared tie resolution method", async () => {
@@ -1451,6 +1914,24 @@ describe("AdminElectionSetup", () => {
       await user.click(screen.getByRole("button", { name: /Publish & Proclaim Winners/ }));
       const dialog = await screen.findByRole("dialog");
 
+      // The board cannot pick a winner until the shared tie method is
+      // recorded — the tied candidates are not selectable yet and are
+      // greyed out until it is.
+      expect(within(dialog).queryByRole("button", { name: /Cara One/ })).not.toBeInTheDocument();
+      expect(
+        within(dialog).getByText(/Record how the tie was resolved above before choosing a winner/),
+      ).toBeInTheDocument();
+      expect(within(dialog).getByText("Cara One").closest("div.opacity-60")).not.toBeNull();
+      // Only the clean-win President carries a trophy — tied candidates earn
+      // it only by being chosen.  (Scoped to the tally sections; the dialog
+      // header and action button carry their own trophy icons.)
+      expect(dialog.querySelectorAll("section svg.lucide-trophy").length).toBe(1);
+
+      await user.selectOptions(
+        within(dialog).getByLabelText("How the tie was resolved"),
+        "Coin Toss",
+      );
+
       // 085b — the per-candidate confirm no longer asks for a method; the
       // ONE shared decision lives below the complaint note in the dialog.
       await user.click(within(dialog).getByRole("button", { name: /Cara One/ }));
@@ -1458,10 +1939,10 @@ describe("AdminElectionSetup", () => {
       const alert = await screen.findByRole("alertdialog");
       await user.click(within(alert).getByRole("button", { name: /Confirm Winner/ }));
 
-      await user.selectOptions(
-        within(dialog).getByLabelText("How the tie was resolved"),
-        "Coin Toss",
-      );
+      // The chosen winner now carries the trophy too — still exactly one per
+      // position, and never on an unpicked tied candidate.
+      expect(dialog.querySelectorAll("section svg.lucide-trophy").length).toBe(2);
+
       await user.click(within(dialog).getByRole("button", { name: /Publish & Proclaim Winners/ }));
 
       await waitFor(() => {
@@ -1474,9 +1955,129 @@ describe("AdminElectionSetup", () => {
               tieBreak: "Coin Toss",
             },
           },
-          { complaintNote: undefined },
+          { complaintNote: undefined, decisionReason: undefined },
         );
       });
+      // The final confirm carries the same proclamation summary shown at the
+      // bottom of the review dialog.
+      expect(mockConfirm).toHaveBeenCalledWith(
+        expect.objectContaining({ content: expect.anything() }),
+      );
+    });
+
+    it("requires a Complaint Reason to proclaim when a substantiated grievance is on record (097)", async () => {
+      const user = userEvent.setup();
+      electionPeriod = publishedPeriod();
+      // An already-RESOLVED complaint classified as a substantiated grievance,
+      // with the Grievance Commissioner's findings on record.
+      complaints = [{
+        id: "c1",
+        status: "accepted",
+        subject: "Vote buying",
+        electionPeriodId: PERIOD_ID,
+        decision: "substantiated",
+        findings: "Ballot receipts confirmed a proxy vote.",
+      }];
+      // A tie-free tally, so the only thing blocking the action is the reason.
+      mockGetProclamationTallyRpc.mockResolvedValue([
+        { position: "President", candidateId: "p1", candidateName: "Ada Leader", partyName: "Alpha", votes: 10 },
+        { position: "President", candidateId: "p2", candidateName: "Bea Runner", partyName: "Beta", votes: 4 },
+      ]);
+      renderPage();
+
+      // Stage 5 — the substantiated grievance appears ONLY in the red
+      // section below, as the reason the board owes a Complaint Reason.
+      // Its findings are hidden until the Nature of Complaint is clicked.
+      expect(
+        screen.getByText(/A Complaint Reason is required when proclaiming winners due to:/),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("Ballot receipts confirmed a proxy vote.")).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /Vote buying/ }));
+      expect(screen.getByText("Ballot receipts confirmed a proxy vote.")).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: /Publish & Proclaim Winners/ }));
+      const dialog = await screen.findByRole("dialog");
+
+      const proclaim = within(dialog).getByRole("button", { name: /Publish & Proclaim Winners/ });
+      expect(within(dialog).getByLabelText(/Complaint Reason/)).toBeInTheDocument();
+      expect(proclaim).toBeDisabled();
+
+      // The grievance's findings are revealed the same way inside the dialog.
+      const dialogRow = within(dialog).getByRole("button", { name: /Vote buying/ });
+      expect(within(dialog).queryByText("Ballot receipts confirmed a proxy vote.")).not.toBeInTheDocument();
+      await user.click(dialogRow);
+      expect(within(dialog).getByText("Ballot receipts confirmed a proxy vote.")).toBeInTheDocument();
+
+      await user.type(within(dialog).getByLabelText(/Complaint Reason/), "Results were tainted by the substantiated grievance.");
+      expect(proclaim).toBeEnabled();
+    });
+
+    it("locks tie picks until the Complaint Reason and tie method are recorded (097)", async () => {
+      const user = userEvent.setup();
+      electionPeriod = publishedPeriod();
+      complaints = [{
+        id: "c1",
+        status: "accepted",
+        subject: "Vote buying",
+        electionPeriodId: PERIOD_ID,
+        decision: "substantiated",
+        findings: "Ballot receipts confirmed a proxy vote.",
+      }];
+      mockGetProclamationTallyRpc.mockResolvedValue(tallyRows);
+      renderPage();
+
+      await user.click(screen.getByRole("button", { name: /Publish & Proclaim Winners/ }));
+      const dialog = await screen.findByRole("dialog");
+
+      // Neither requirement answered yet — tied candidates are not pickable,
+      // and the pickable rows are greyed out.
+      expect(within(dialog).queryByRole("button", { name: /Cara One/ })).not.toBeInTheDocument();
+      expect(
+        within(dialog).getByText(
+          /Record the Complaint Reason and how the tie was resolved above before choosing a winner/,
+        ),
+      ).toBeInTheDocument();
+      expect(within(dialog).getByText("Cara One").closest("div.opacity-60")).not.toBeNull();
+
+      await user.type(within(dialog).getByLabelText(/Complaint Reason/), "The grievance did not change the outcome.");
+      await user.selectOptions(within(dialog).getByLabelText("How the tie was resolved"), "Coin Toss");
+
+      // Both recorded — the grey-out lifts and the tie opens for picks.
+      expect(within(dialog).getByText("Cara One").closest("div.opacity-60")).toBeNull();
+      await user.click(within(dialog).getByRole("button", { name: /Cara One/ }));
+      const alert = await screen.findByRole("alertdialog");
+      await user.click(within(alert).getByRole("button", { name: /Confirm Winner/ }));
+      expect(within(dialog).getByText("Chosen")).toBeInTheDocument();
+      // The chosen winner row carries the proclamation colour.  (The name
+      // also appears in the bottom summary — take the tally-section match.)
+      const chosenRow = within(dialog).getAllByText("Cara One")[0].closest("button");
+      expect(chosenRow).toHaveClass("bg-[#5C0102]");
+    });
+
+    it("summarizes the proclamation at the bottom of the dialog", async () => {
+      const user = userEvent.setup();
+      electionPeriod = publishedPeriod();
+      mockGetProclamationTallyRpc.mockResolvedValue(tallyRows);
+      renderPage();
+
+      await user.click(screen.getByRole("button", { name: /Publish & Proclaim Winners/ }));
+      const dialog = await screen.findByRole("dialog");
+
+      expect(within(dialog).getByText("Proclamation Summary")).toBeInTheDocument();
+      // Pending decisions are flagged, not hidden.
+      expect(within(dialog).getByText("Tie — no winner chosen yet")).toBeInTheDocument();
+      expect(within(dialog).getByText("Not recorded yet")).toBeInTheDocument();
+
+      await user.selectOptions(within(dialog).getByLabelText("How the tie was resolved"), "Coin Toss");
+      await user.click(within(dialog).getByRole("button", { name: /Cara One/ }));
+      const alert = await screen.findByRole("alertdialog");
+      await user.click(within(alert).getByRole("button", { name: /Confirm Winner/ }));
+
+      // The summary now reflects the board's decisions.
+      expect(within(dialog).getByText("Tie — board choice")).toBeInTheDocument();
+      expect(within(dialog).getByText("Tie resolution:")).toBeInTheDocument();
+      expect(within(dialog).queryByText("Not recorded yet")).not.toBeInTheDocument();
+      expect(within(dialog).queryByText("Tie — no winner chosen yet")).not.toBeInTheDocument();
     });
   });
 });

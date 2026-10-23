@@ -6,7 +6,6 @@ import {
   CalendarDays,
   Gavel,
   MapPin,
-  ShieldAlert,
   Trophy,
   Users,
 } from "lucide-react";
@@ -15,6 +14,7 @@ import type {
   PastElectionResults,
 } from "../lib/supabaseData";
 import { FULL_POSITION_ORDER as POSITION_ORDER } from "../lib/partyScope";
+import { ComplaintRecordSection } from "./ComplaintRecordSection";
 
 const POSITION_INDEX = new Map<string, number>(
   POSITION_ORDER.map((position, index) => [position, index]),
@@ -79,38 +79,52 @@ export function PositionCard({ position }: { position: PastElectionPositionResul
       {ranked.length === 0 ? (
         <p className="px-5 py-6 text-sm text-gray-500">No approved candidates for this position.</p>
       ) : (
-        <ul className="divide-y divide-gray-100">
+        <ul className="p-2 space-y-1.5">
           {ranked.map((candidate, index) => {
             const share = formatPercentage(candidate.votes, position.votesCast);
             return (
               <li
                 key={`${candidate.name}-${index}`}
-                className="px-5 py-4 flex flex-col sm:flex-row sm:items-center gap-4"
+                className={`px-4 py-3.5 flex flex-col sm:flex-row sm:items-center gap-4 rounded-2xl ${
+                  candidate.proclaimedWinner ? "bg-[#5C0102] shadow-sm" : ""
+                }`}
               >
                 <div className="flex items-center gap-3 min-w-0 flex-1">
+                  {/* The trophy marks the proclaimed winner — the same column
+                      pattern as the Proclamation Dialog (empty on the other
+                      rows so every candidate stays aligned). */}
+                  <div className="flex items-center justify-center w-6 shrink-0">
+                    {candidate.proclaimedWinner && (
+                      <Trophy size={18} className="text-amber-300 drop-shadow-sm" />
+                    )}
+                  </div>
                   {candidate.picture ? (
                     <img
                       src={candidate.picture}
                       alt={candidate.name}
                       className="w-12 h-12 rounded-full object-cover border-2 flex-shrink-0"
-                      style={{ borderColor: candidate.proclaimedWinner ? "#B45309" : "#5C0102" }}
+                      style={{ borderColor: candidate.proclaimedWinner ? "#FFFFFF" : "#5C0102" }}
                     />
                   ) : (
                     <div
-                      className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0"
+                      className={`w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 ${
+                        candidate.proclaimedWinner
+                          ? "bg-white/10"
+                          : "bg-gray-100"
+                      }`}
                       style={{
                         border: "2px solid",
-                        borderColor: candidate.proclaimedWinner ? "#B45309" : "#5C0102",
+                        borderColor: candidate.proclaimedWinner ? "#FFFFFF" : "#5C0102",
                       }}
                     >
-                      <Users size={20} className="text-gray-400" />
+                      <Users size={20} className={candidate.proclaimedWinner ? "text-white/70" : "text-gray-400"} />
                     </div>
                   )}
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="font-medium text-gray-900 truncate">{candidate.name}</h3>
+                      <h3 className={`font-medium truncate ${candidate.proclaimedWinner ? "text-white" : "text-gray-900"}`}>{candidate.name}</h3>
                       {candidate.proclaimedWinner ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 text-[11px] font-medium">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-white text-[#5C0102] border border-white px-2 py-0.5 text-[11px] font-medium">
                           <Gavel size={11} />
                           Proclaimed winner
                         </span>
@@ -121,23 +135,23 @@ export function PositionCard({ position }: { position: PastElectionPositionResul
                         </span>
                       ) : null}
                     </div>
-                    <p className="text-sm text-gray-500 truncate">
+                    <p className={`text-sm truncate ${candidate.proclaimedWinner ? "text-white/70" : "text-gray-500"}`}>
                       {candidate.partyName || "Independent"} · {candidate.gradeLevel}
                     </p>
                   </div>
                 </div>
 
                 <div className="sm:text-right sm:w-40">
-                  <div className="text-lg text-gray-900">
+                  <div className={`text-lg ${candidate.proclaimedWinner ? "text-white" : "text-gray-900"}`}>
                     {candidate.votes}
-                    <span className="text-sm text-gray-500"> · {share}</span>
+                    <span className={`text-sm ${candidate.proclaimedWinner ? "text-white/70" : "text-gray-500"}`}> · {share}</span>
                   </div>
-                  <div className="mt-1.5 h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                  <div className={`mt-1.5 h-1.5 rounded-full overflow-hidden ${candidate.proclaimedWinner ? "bg-white/20" : "bg-gray-100"}`}>
                     <div
                       className="h-full rounded-full"
                       style={{
                         width: `${leaderVotes > 0 ? Math.max((candidate.votes / leaderVotes) * 100, 3) : 3}%`,
-                        backgroundColor: candidate.proclaimedWinner ? "#B45309" : "#5C0102",
+                        backgroundColor: candidate.proclaimedWinner ? "#FFFFFF" : "#5C0102",
                       }}
                     />
                   </div>
@@ -218,15 +232,15 @@ export default function ElectionResultsView({
         </div>
       </motion.div>
 
-      {results.election.complaintNote && (
-        <div className="mb-8 rounded-2xl border border-amber-200 bg-amber-50 p-4 flex items-start gap-3 text-sm text-amber-800">
-          <ShieldAlert size={16} className="mt-0.5 shrink-0" />
-          <div>
-            <div className="font-medium">A complaint was on record for this election.</div>
-            <div className="text-xs mt-0.5">Electoral Board note: {results.election.complaintNote}</div>
-          </div>
-        </div>
-      )}
+      <div className="mb-8">
+        <ComplaintRecordSection
+          entries={results.election.complaints ?? []}
+          complaintNote={results.election.complaintNote}
+          decisionReason={results.election.decisionReason}
+          decisionReasonLabel="Complaint Resolution and Justification"
+          showFindings={false}
+        />
+      </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm mb-8">
         <div className="rounded-2xl border border-gray-200 bg-white px-4 py-3 shadow-sm">

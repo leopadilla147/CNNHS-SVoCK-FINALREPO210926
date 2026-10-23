@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toComplaintDto, buildSubmitPayload, statusLabel, statusMeta, sortFiledFirst, complaintWindowOpen, complaintsForElection } from "../complaints";
+import { toComplaintDto, buildSubmitPayload, statusLabel, statusMeta, sortFiledFirst, complaintWindowOpen, complaintsForElection, COMPLAINT_SUBJECTS, COMPLAINT_SUBJECT_OTHERS, resolveComplaintSubject, validateComplaintForm, formatSubmittedAt, validateEvidenceFiles, toEvidenceArray, isImageEvidence, complaintDecisionLabel, complaintDecisionDefinition, substantiatedComplaints, COMPLAINT_AGAINST_OPTIONS, COMPLAINT_AGAINST_OTHERS, resolveComplaintAgainst, EVIDENCE_ACCEPT, EVIDENCE_MAX_FILES } from "../complaints";
 import type { Complaint } from "../../context/AppContext";
 
 describe("buildSubmitPayload", () => {
@@ -44,6 +44,9 @@ describe("toComplaintDto", () => {
       description: "details",
       status: "filed",
       submittedAt: "2026-09-18",
+      submittedAtExact: "2026-09-18T01:00:00+08:00",
+      evidence: [],
+      findingsEvidence: [],
       rejectionReason: "Rejected: insufficient evidence",
       findings: "Reviewed CCTV footage; statement taken from the canvasser.",
       incidentDate: "2026-09-17",
@@ -150,5 +153,199 @@ describe("complaintsForElection", () => {
   it("shows nothing when there is no current election period", () => {
     expect(complaintsForElection([row("c1", "period-1")], undefined)).toEqual([]);
     expect(complaintsForElection([row("c1", "period-1")], "")).toEqual([]);
+  });
+});
+
+describe("COMPLAINT_SUBJECTS (Nature of Complaint)", () => {
+  it("offers the new nature-of-complaint options with Others last", () => {
+    expect(COMPLAINT_SUBJECTS).toEqual([
+      "Dishonesty",
+      "Oppression",
+      "Disgraceful and Immoral Conduct",
+      "Impersonation",
+      "Falsification",
+      "Vote Solicitation",
+      "Negligence of Duty",
+      "Misconduct",
+      COMPLAINT_SUBJECT_OTHERS,
+    ]);
+  });
+});
+
+describe("COMPLAINT_AGAINST_OPTIONS", () => {
+  it("offers the complaint-against options with Others last", () => {
+    expect(COMPLAINT_AGAINST_OPTIONS).toEqual([
+      "Learner Government COMEA",
+      "Teacher",
+      "Learner",
+      "Candidate",
+      "Political Party",
+      COMPLAINT_AGAINST_OTHERS,
+    ]);
+  });
+});
+
+describe("resolveComplaintSubject / resolveComplaintAgainst", () => {
+  it("uses the dropdown value unless Others is picked", () => {
+    expect(resolveComplaintSubject("Misconduct", "ignored")).toBe("Misconduct");
+    expect(resolveComplaintAgainst("Teacher", "ignored")).toBe("Teacher");
+  });
+
+  it("uses the free-text value when Others is picked", () => {
+    expect(resolveComplaintSubject(COMPLAINT_SUBJECT_OTHERS, "  Bribing the SSLG adviser  ")).toBe("Bribing the SSLG adviser");
+    expect(resolveComplaintAgainst(COMPLAINT_AGAINST_OTHERS, "  the SSLG adviser  ")).toBe("the SSLG adviser");
+  });
+});
+
+describe("validateComplaintForm", () => {
+  const valid = {
+    complaintAgainst: "Teacher",
+    otherAgainst: "",
+    subject: "Misconduct",
+    otherSubject: "",
+    description: "Narrative of what happened.",
+    incidentDate: "2026-10-22",
+    certified: true,
+  };
+
+  it("accepts a complete form", () => {
+    expect(validateComplaintForm(valid)).toEqual({});
+  });
+
+  it("requires a complaint-against, with the free text when Others is picked", () => {
+    expect(validateComplaintForm({ ...valid, complaintAgainst: "" }).complaintAgainst).toBe("Please select who the complaint is against.");
+    const errors = validateComplaintForm({ ...valid, complaintAgainst: COMPLAINT_AGAINST_OTHERS, otherAgainst: "  " });
+    expect(errors.complaintAgainst).toBe("Please specify who or what the complaint is against.");
+    expect(validateComplaintForm({ ...valid, complaintAgainst: COMPLAINT_AGAINST_OTHERS, otherAgainst: "A group of students" }).complaintAgainst).toBeUndefined();
+  });
+
+  it("requires the nature of the complaint", () => {
+    expect(validateComplaintForm({ ...valid, subject: "" }).subject).toBe("Please select the nature of your complaint.");
+  });
+
+  it("requires the free text when Others is picked", () => {
+    const errors = validateComplaintForm({ ...valid, subject: COMPLAINT_SUBJECT_OTHERS, otherSubject: "  " });
+    expect(errors.subject).toBe("Please specify the nature of your complaint.");
+    expect(validateComplaintForm({ ...valid, subject: COMPLAINT_SUBJECT_OTHERS, otherSubject: "Bribery" }).subject).toBeUndefined();
+  });
+
+  it("requires a narrative report", () => {
+    expect(validateComplaintForm({ ...valid, description: "   " }).description).toBe("Please provide a narrative report.");
+  });
+
+  it("requires a date but allows a past incident date", () => {
+    expect(validateComplaintForm({ ...valid, incidentDate: "" }).incidentDate).toBe("Please select the date of the incident.");
+    expect(validateComplaintForm({ ...valid, incidentDate: "2026-10-21" }).incidentDate).toBeUndefined();
+    expect(validateComplaintForm({ ...valid, incidentDate: "2020-01-05" }).incidentDate).toBeUndefined();
+  });
+
+  it("requires the certification checkbox", () => {
+    expect(validateComplaintForm({ ...valid, certified: false }).certified).toBe("Please certify that the information is true and correct before filing.");
+  });
+});
+
+describe("formatSubmittedAt", () => {
+  it("renders the date and 12-hour time from the raw timestamp", () => {
+    const formatted = formatSubmittedAt({ submittedAt: "2026-10-22", submittedAtExact: "2026-10-22T15:45:00+08:00" });
+    expect(formatted).toMatch(/2026/);
+    expect(formatted).toMatch(/at/);
+    expect(formatted).toMatch(/(AM|PM)/);
+  });
+
+  it("falls back to the date-only value when the timestamp is missing", () => {
+    expect(formatSubmittedAt({ submittedAt: "2026-10-22" })).toBe("2026-10-22");
+    expect(formatSubmittedAt({ submittedAt: "2026-10-22", submittedAtExact: "not-a-date" })).toBe("2026-10-22");
+  });
+});
+
+describe("complaint decisions (097)", () => {
+  const row = (id: string, decision?: Complaint["decision"]): Complaint => ({
+    id,
+    studentName: "Juan Dela Cruz",
+    subject: "s",
+    description: "d",
+    status: "accepted",
+    submittedAt: "2026-09-01",
+    decision,
+  });
+
+  it("labels each decision and the unclassified legacy case", () => {
+    expect(complaintDecisionLabel("substantiated")).toBe("Substantiated Grievance");
+    expect(complaintDecisionLabel("unsubstantiated")).toBe("Unsubstantiated Grievance");
+    expect(complaintDecisionLabel("dismissed")).toBe("Dismissed Grievance");
+    expect(complaintDecisionLabel(undefined)).toBe("Not classified");
+  });
+
+  it("maps the decision column into the client shape", () => {
+    expect(toComplaintDto({ id: "c1", status: "accepted", submitted_at: "2026-09-18T01:00:00+08:00", decision: "substantiated" }).decision).toBe("substantiated");
+  });
+
+  it("documents what each decision means", () => {
+    expect(complaintDecisionDefinition("substantiated")).toBe("The complaint is supported by evidence.");
+    expect(complaintDecisionDefinition("unsubstantiated")).toBe("There is insufficient evidence to establish the allegation.");
+    expect(complaintDecisionDefinition("dismissed")).toBe("The complaint is closed without further action, according to the applicable rules.");
+    expect(complaintDecisionDefinition(undefined)).toBe("");
+  });
+
+  it("keeps only the substantiated grievances", () => {
+    const rows = [row("a", "substantiated"), row("b", "dismissed"), row("c"), row("d", "substantiated")];
+    expect(substantiatedComplaints(rows).map((r) => r.id)).toEqual(["a", "d"]);
+  });
+});
+
+describe("evidence helpers", () => {
+  // validateEvidenceFiles only reads name/type/size, so a plain cast is enough.
+  const file = (name: string, type: string, size = 1024): File =>
+    ({ name, type, size } as unknown as File);
+
+  it("exposes an accept string that includes images, PDF and Word", () => {
+    expect(EVIDENCE_ACCEPT).toContain("image/jpeg");
+    expect(EVIDENCE_ACCEPT).toContain("application/pdf");
+    expect(EVIDENCE_ACCEPT).toContain("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    expect(EVIDENCE_MAX_FILES).toBe(5);
+  });
+
+  it("asks for at least one file when nothing is picked", () => {
+    expect(validateEvidenceFiles([])).toMatch(/at least one file/i);
+  });
+
+  it("accepts allowed files within the limits", () => {
+    expect(validateEvidenceFiles([file("a.jpg", "image/jpeg"), file("b.pdf", "application/pdf")])).toBeNull();
+  });
+
+  it("rejects a disallowed file type", () => {
+    expect(validateEvidenceFiles([file("a.exe", "application/x-msdownload")])).toMatch(/not an allowed file type/i);
+  });
+
+  it("rejects files over 10 MB", () => {
+    expect(validateEvidenceFiles([file("big.pdf", "application/pdf", 10 * 1024 * 1024 + 1)])).toMatch(/larger than 10 MB/i);
+  });
+
+  it("rejects a running total over the file cap", () => {
+    const picks = [file("a.jpg", "image/jpeg")];
+    expect(validateEvidenceFiles(picks, EVIDENCE_MAX_FILES)).toMatch(/at most 5 files/i);
+  });
+
+  it("detects image attachments by extension for the thumbnail preview", () => {
+    expect(isImageEvidence("photo.JPG")).toBe(true);
+    expect(isImageEvidence("scan.png")).toBe(true);
+    expect(isImageEvidence("shot.webp")).toBe(true);
+    expect(isImageEvidence("evidence.pdf")).toBe(false);
+    expect(isImageEvidence("report.docx")).toBe(false);
+    expect(isImageEvidence(undefined)).toBe(false);
+  });
+
+  it("normalizes a raw jsonb evidence column", () => {
+    expect(toEvidenceArray([
+      { url: "https://x/complaint-evidence/a.jpg", name: "a.jpg" },
+      { url: "https://x/complaint-evidence/b.pdf" },
+      { url: 123 },
+      null,
+    ])).toEqual([
+      { url: "https://x/complaint-evidence/a.jpg", name: "a.jpg" },
+      { url: "https://x/complaint-evidence/b.pdf", name: "Evidence" },
+    ]);
+    expect(toEvidenceArray(null)).toEqual([]);
+    expect(toEvidenceArray("nope")).toEqual([]);
   });
 });

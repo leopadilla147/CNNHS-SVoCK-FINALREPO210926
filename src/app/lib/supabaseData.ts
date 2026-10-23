@@ -4,6 +4,7 @@ import type {
   Commissioner,
   CommissionerRole,
   Complaint,
+  ComplaintEvidence,
   CurrentUser,
   ElectionPeriod,
   KioskStatus,
@@ -17,6 +18,7 @@ import type {
 import { isSupabaseConfigured, supabase } from "./supabase";
 import { clearSessionToken, saveSessionToken } from "./session";
 import { canonicalAuditRole } from "./auditRoles";
+import { toEvidenceArray } from "./complaints";
 
 export const toDate = (value?: string) => value ? value.slice(0, 10) : "";
 // v1.1 election_periods stores start_time/end_time as PostgreSQL `time`
@@ -547,6 +549,10 @@ export async function insertComplaint(row: {
   title: string;
   description: string;
   incidentDate?: string;
+  /** 098: who/what the complaint is against (resolved "Others" text included). */
+  complaintAgainst?: string;
+  /** 096: supporting evidence already uploaded to the complaint-evidence bucket. */
+  evidence?: ComplaintEvidence[];
 }): Promise<Complaint> {
   const db = requireSupabase();
   const { data, error } = await db.from("complaints").insert({
@@ -554,9 +560,30 @@ export async function insertComplaint(row: {
     subject: row.title,
     description: row.description,
     incident_date: row.incidentDate || null,
+    complaint_against: row.complaintAgainst || null,
+    evidence_urls: row.evidence ?? [],
   }).select("*, students(first_name,last_name)").single();
   if (error) throw new Error(error.message);
   return mapComplaint(data);
+}
+
+/**
+ * 096: upload one complaint-evidence file to the public 'complaint-evidence'
+ * bucket.  `prefix` scopes the object name (student or findings); a random
+ * suffix keeps names unguessable and collision-free (072 precedent).
+ */
+export async function uploadComplaintEvidence(file: File | Blob, prefix: string): Promise<ComplaintEvidence> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const name = file instanceof File && file.name ? file.name : "evidence";
+  const ext = name.match(/\.(\w+)$/)?.[1]?.toLowerCase() || "bin";
+  const unique = typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Math.random().toString(36).slice(2)}${Date.now()}`;
+  const fileName = `${prefix}_${Date.now()}_${unique}.${ext}`;
+  const { error } = await supabase.storage.from("complaint-evidence").upload(fileName, file);
+  if (error) throw new Error(`Storage upload failed: ${error.message}`);
+  const { data: { publicUrl } } = supabase.storage.from("complaint-evidence").getPublicUrl(fileName);
+  return { url: publicUrl, name };
 }
 
 /**
@@ -571,7 +598,9 @@ export async function decideComplaintRpc(
   complaintId: string,
   action: "accepted",
   reason?: string,
-  findings?: string
+  findings?: string,
+  findingsEvidence?: ComplaintEvidence[],
+  decision?: Complaint["decision"]
 ): Promise<void> {
   const db = requireSupabase();
   const { error } = await db.rpc("decide_complaint_rpc", {
@@ -579,6 +608,8 @@ export async function decideComplaintRpc(
     p_action: action,
     p_reason: reason || null,
     p_findings: findings || null,
+    p_findings_evidence: findingsEvidence ?? [],
+    p_decision: decision || null,
   });
   if (error) throw new Error(error.message);
 }
@@ -767,8 +798,13 @@ function mapComplaint(row: any): Complaint {
     studentName,
     subject: row.subject,
     description: row.description,
+    complaintAgainst: row.complaint_against || undefined,
     status: row.status,
     submittedAt: toDate(row.submitted_at),
+    submittedAtExact: row.submitted_at || undefined,
+    decision: row.decision || undefined,
+    evidence: toEvidenceArray(row.evidence_urls),
+    findingsEvidence: toEvidenceArray(row.findings_evidence_urls),
     rejectionReason: row.resolution_note || undefined,
     findings: row.findings_note || undefined,
     incidentDate: row.incident_date ? toDate(row.incident_date) : undefined,
@@ -1523,6 +1559,10 @@ export interface PastElectionResults {
     proclaimedAt?: string;
     /** 081 — the board's public note on the complaint(s) of record. */
     complaintNote?: string;
+    /** 097 — the Board's one-time Complaint Reason (substantiated grievance). */
+    decisionReason?: string;
+    /** 099 — the election's sanitized public complaint record. */
+    complaints?: ElectionComplaintRecord[];
   };
   totals: {
     positionsContested: number;
@@ -1651,6 +1691,53 @@ export interface ProclamationTieAnnotation {
 export interface ProclamationAnnotations {
   ties: ProclamationTieAnnotation[];
   complaintNote?: string;
+  /** 097 — the Board's one-time Complaint Reason (owed when a substantiated
+   *  grievance is on record).  Public on the results pages with the note. */
+  decisionReason?: string;
+}
+
+/**
+ * 099 — one sanitized complaint in an election's public record.  The
+ * `get_election_complaint_record_rpc` definer view deliberately omits the
+ * student's name, the complaint text and every evidence URL (the 085
+ * privacy rule) — the results pages show subject + decision + findings.
+ */
+export interface ElectionComplaintRecord {
+  id: string;
+  subject: string;
+  status: "filed" | "accepted" | "rejected";
+  /** 097 — null while the complaint is filed or unclassified. */
+  decision?: "substantiated" | "unsubstantiated" | "dismissed" | null;
+  /** 086 — the Grievance Commissioner's findings note. */
+  findings?: string | null;
+  resolvedAt?: string | null;
+}
+
+/**
+ * 099 — the complaint record for one election, current or archived (the
+ * live `complaints` rows are never trimmed).  Fails soft to an empty
+ * record: an un-migrated database must never break the results pages.
+ */
+export async function getElectionComplaintRecordRpc(
+  electionPeriodId: string
+): Promise<ElectionComplaintRecord[]> {
+  if (!supabase) return [];
+  try {
+    const { data, error } = await supabase.rpc("get_election_complaint_record_rpc", {
+      p_election_period_id: electionPeriodId,
+    });
+    if (error || !data) return [];
+    return (data as any[]).map((row) => ({
+      id: row.id,
+      subject: row.subject || "",
+      status: row.status === "accepted" || row.status === "rejected" ? row.status : "filed",
+      decision: row.decision ?? null,
+      findings: row.findings ?? null,
+      resolvedAt: row.resolved_at ?? null,
+    }));
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -1674,7 +1761,7 @@ export async function getProclamationAnnotations(
         .eq("election_period_id", electionPeriodId),
       supabase
         .from("election_periods")
-        .select("proclamation_complaint_note")
+        .select("proclamation_complaint_note, proclamation_decision_reason")
         .eq("id", electionPeriodId)
         .maybeSingle(),
     ]);
@@ -1686,7 +1773,8 @@ export async function getProclamationAnnotations(
       candidateId: row.candidate_id || undefined,
     }));
     const complaintNote = periodRes.data?.proclamation_complaint_note || undefined;
-    return { ties, complaintNote };
+    const decisionReason = periodRes.data?.proclamation_decision_reason || undefined;
+    return { ties, complaintNote, decisionReason };
   } catch {
     return { ties: [] };
   }
@@ -1704,10 +1792,12 @@ export async function getPastElectionResults(
   if (!data) return null;
   const results = mapPastElectionResults(data);
   // 081 — annotate the record with the tie/complaint facts; a failure here
-  // must never hide the tally itself.
+  // must never hide the tally itself.  099 — the complaint record joins the
+  // same best-effort pass.
   try {
     const annotations = await getProclamationAnnotations(electionPeriodId);
     results.election.complaintNote = annotations.complaintNote;
+    results.election.decisionReason = annotations.decisionReason;
     for (const position of results.positions) {
       const tie = annotations.ties.find((t) => t.position === position.position && t.wasTie);
       if (tie) {
@@ -1715,6 +1805,7 @@ export async function getPastElectionResults(
         position.tieBreakNote = tie.tieBreakNote;
       }
     }
+    results.election.complaints = await getElectionComplaintRecordRpc(electionPeriodId);
   } catch {
     /* the annotations are an addition to the record, never a gate */
   }
@@ -1845,6 +1936,14 @@ export async function openElectionRpc(pElectionId: string): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
+export async function forceOpenVotingRpc(pElectionId: string): Promise<void> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("force_open_voting_rpc", {
+    p_election_id: pElectionId,
+  });
+  if (error) throw new Error(error.message);
+}
+
 export async function closeElectionRpc(pElectionId: string): Promise<void> {
   if (!supabase) throw new Error("Supabase is not configured.");
   const { error } = await supabase.rpc("close_election_rpc", {
@@ -1939,7 +2038,7 @@ export interface ProclaimedWinner {
 export async function proclaimWinnersRpc(
   pElectionId: string,
   resolutions: Record<string, TieResolution> = {},
-  decision?: { complaintNote?: string },
+  decision?: { complaintNote?: string; decisionReason?: string },
 ): Promise<ProclaimedWinner[]> {
   if (!supabase) throw new Error("Supabase is not configured.");
   const payload: Record<string, { method: string; candidate_id?: string; tie_break?: string }> = {};
@@ -1953,6 +2052,9 @@ export async function proclaimWinnersRpc(
   const { data, error } = await supabase.rpc("proclaim_winners_rpc", {
     p_election_id: pElectionId,
     p_resolutions: payload,
+    // 097 — the one-time Complaint Reason (required when a substantiated
+    // grievance is on record; blank otherwise).
+    p_decision_reason: decision?.decisionReason || null,
     p_complaint_note: decision?.complaintNote || null,
   });
   if (error) throw new Error(error.message);

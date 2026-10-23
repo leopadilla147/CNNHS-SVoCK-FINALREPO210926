@@ -1,11 +1,16 @@
 import { useState } from "react";
 import { motion } from "motion/react";
-import { AlertCircle, Send, Clock, CheckCircle, XCircle, CalendarDays, MessageSquare, Lock, Download } from "lucide-react";
+import { AlertCircle, Send, Clock, CheckCircle, XCircle, CalendarDays, MessageSquare, Lock, Paperclip, Upload, X } from "lucide-react";
 import { useApp } from "../../context/AppContext";
-import type { Complaint } from "../../context/AppContext";
-import { insertComplaint } from "../../lib/supabaseData";
-import { saveResponseLetter } from "../../lib/docxResponseLetter";
-import { statusMeta, sortFiledFirst, complaintWindowOpen, complaintsForElection } from "../../lib/complaints";
+import type { Complaint, ComplaintEvidence } from "../../context/AppContext";
+import { insertComplaint, uploadComplaintEvidence } from "../../lib/supabaseData";
+import { EvidenceFileThumb, EvidenceAttachment } from "../../components/EvidencePreview";
+import { statusMeta, sortFiledFirst, complaintWindowOpen, complaintsForElection, COMPLAINT_SUBJECTS, COMPLAINT_SUBJECT_OTHERS, resolveComplaintSubject, COMPLAINT_AGAINST_OPTIONS, COMPLAINT_AGAINST_OTHERS, resolveComplaintAgainst, COMPLAINT_CERTIFICATION, validateComplaintForm, formatSubmittedAt, validateEvidenceFiles, EVIDENCE_ACCEPT, EVIDENCE_MAX_FILES, EVIDENCE_TYPES_LABEL } from "../../lib/complaints";
+import type { ComplaintFormErrors } from "../../lib/complaints";
+
+/** Human-readable evidence size for the attachment chips. */
+const formatBytes = (bytes: number) =>
+  bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 
 const TONE_CLASSES: Record<string, string> = {
   amber: "bg-amber-100 text-amber-700",
@@ -15,15 +20,20 @@ const TONE_CLASSES: Record<string, string> = {
 
 export default function StudentComplaints() {
   const { complaints, setComplaints, currentUser, addLog, electionPeriod } = useApp();
-  const [title, setTitle] = useState("");
+  const [complaintAgainst, setComplaintAgainst] = useState("");
+  const [otherAgainst, setOtherAgainst] = useState("");
+  const [subject, setSubject] = useState("");
+  const [otherSubject, setOtherSubject] = useState("");
   const [description, setDescription] = useState("");
   const [incidentDate, setIncidentDate] = useState("");
+  const [certified, setCertified] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  // 092: the resolved complaint's response letter downloads on demand.
-  const [downloading, setDownloading] = useState<string | null>(null);
-  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<ComplaintFormErrors>({});
+  // 096: optional supporting-evidence files picked for the next complaint.
+  const [evidenceFiles, setEvidenceFiles] = useState<File[]>([]);
+  const [evidenceError, setEvidenceError] = useState("");
 
   // 089: the filing window opens at the campaign stage and closes as soon as
   // voting ends; complaints also only ever show for their own election.
@@ -40,57 +50,91 @@ export default function StudentComplaints() {
     );
   };
 
-  // 092: the response letter for a resolved complaint — generated in this
-  // browser with the Findings, the current date, and the deciding
-  // Commissioner's name, and downloaded on demand (the Commissioner's old
-  // auto-download was removed).
-  const downloadLetter = async (complaint: Complaint) => {
-    setDownloading(complaint.id);
-    setDownloadError(null);
-    try {
-      await saveResponseLetter(
-        {
-          studentName: complaint.studentName,
-          subject: complaint.subject,
-          status: "accepted",
-          findings: complaint.findings,
-          commissionerName: complaint.resolvedByName,
-        },
-        "grievance-response-letter.docx"
-      );
-    } catch {
-      setDownloadError(complaint.id);
+  // Clear a single field's error as soon as the student edits it.
+  const clearFieldError = (field: keyof ComplaintFormErrors) =>
+    setFieldErrors((previous) => {
+      if (!previous[field]) return previous;
+      const next = { ...previous };
+      delete next[field];
+      return next;
+    });
+
+  // 096: append freshly picked files after validating them against the cap,
+  // type, and size limits (the bucket enforces the same on upload).
+  const handleEvidenceSelect = (picked: File[]) => {
+    if (picked.length === 0) return;
+    const problem = validateEvidenceFiles(picked, evidenceFiles.length);
+    if (problem) {
+      setEvidenceError(problem);
+      return;
     }
-    setDownloading(null);
+    setEvidenceError("");
+    setEvidenceFiles((previous) => [...previous, ...picked]);
+  };
+
+  const removeEvidenceFile = (index: number) => {
+    setEvidenceError("");
+    setEvidenceFiles((previous) => previous.filter((_, i) => i !== index));
+  };
+
+  const resetEvidence = () => {
+    setEvidenceFiles([]);
+    setEvidenceError("");
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser?.id) return;
-    if (!title.trim() || !description.trim()) {
-      setError("Please provide a subject and a description.");
+    const nextErrors = validateComplaintForm({ complaintAgainst, otherAgainst, subject, otherSubject, description, incidentDate, certified });
+    setFieldErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) {
+      setSuccess("");
+      setError("Please complete the required fields highlighted below.");
       return;
     }
+    const evidenceProblem = evidenceFiles.length > 0 ? validateEvidenceFiles(evidenceFiles) : null;
+    if (evidenceProblem) {
+      setEvidenceError(evidenceProblem);
+      setSuccess("");
+      setError("Please fix the supporting evidence and try again.");
+      return;
+    }
+    const resolvedSubject = resolveComplaintSubject(subject, otherSubject);
+    const resolvedAgainst = resolveComplaintAgainst(complaintAgainst, otherAgainst);
     setError("");
     setSuccess("");
     setSubmitting(true);
     try {
+      // 096: upload every picked file first, then file the complaint with
+      // the resulting attachment URLs (one INSERT, no orphaned complaint).
+      const evidence: ComplaintEvidence[] = [];
+      for (const file of evidenceFiles) {
+        evidence.push(await uploadComplaintEvidence(file, `complaint_${currentUser.id}`));
+      }
       const row = await insertComplaint({
         studentId: currentUser.id,
-        title: title.trim(),
+        title: resolvedSubject,
         description: description.trim(),
-        incidentDate: incidentDate || undefined,
+        incidentDate,
+        complaintAgainst: resolvedAgainst,
+        evidence,
       });
       setComplaints([row, ...complaints]);
-      setTitle("");
+      setComplaintAgainst("");
+      setOtherAgainst("");
+      setSubject("");
+      setOtherSubject("");
       setDescription("");
       setIncidentDate("");
+      setCertified(false);
+      setFieldErrors({});
+      resetEvidence();
       setSuccess("Your complaint has been filed and is now awaiting review by the Commissioner of Grievance.");
       addLog({
         user: currentUser?.name || "Student",
         role: "Student",
         action: "Filed Complaint",
-        details: `Filed complaint "${title.trim()}"`,
+        details: `Filed complaint "${resolvedSubject}"`,
         type: "info",
       });
     } catch (err) {
@@ -114,38 +158,148 @@ export default function StudentComplaints() {
         {windowOpen ? (
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Subject</label>
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g. Vote buying reported in Grade 11"
-              maxLength={200}
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102]"
-            />
+            <label htmlFor="complaint-against" className="block text-xs font-medium text-gray-500 mb-1">Complaint Against</label>
+            <div className="flex gap-2">
+              <select
+                id="complaint-against"
+                value={complaintAgainst}
+                onChange={(e) => { setComplaintAgainst(e.target.value); clearFieldError("complaintAgainst"); }}
+                aria-invalid={Boolean(fieldErrors.complaintAgainst)}
+                className={`px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] ${
+                  complaintAgainst === COMPLAINT_AGAINST_OTHERS ? "w-2/5 shrink-0" : "w-full"
+                }`}
+              >
+                <option value="" disabled>Select who the complaint is against...</option>
+                {COMPLAINT_AGAINST_OPTIONS.map((option) => (
+                  <option key={option} value={option}>{option}</option>
+                ))}
+              </select>
+              {complaintAgainst === COMPLAINT_AGAINST_OTHERS && (
+                <input
+                  type="text"
+                  value={otherAgainst}
+                  onChange={(e) => { setOtherAgainst(e.target.value); clearFieldError("complaintAgainst"); }}
+                  placeholder="Please specify"
+                  maxLength={200}
+                  aria-invalid={Boolean(fieldErrors.complaintAgainst)}
+                  className="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102]"
+                />
+              )}
+            </div>
+            {fieldErrors.complaintAgainst && <p role="alert" className="mt-1 text-xs text-red-600">{fieldErrors.complaintAgainst}</p>}
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Description</label>
+            <label htmlFor="complaint-subject" className="block text-xs font-medium text-gray-500 mb-1">Nature of Complaint</label>
+            <div className="flex gap-2">
+              <select
+                id="complaint-subject"
+                value={subject}
+                onChange={(e) => { setSubject(e.target.value); clearFieldError("subject"); }}
+                aria-invalid={Boolean(fieldErrors.subject)}
+                className={`px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] ${
+                  subject === COMPLAINT_SUBJECT_OTHERS ? "w-2/5 shrink-0" : "w-full"
+                }`}
+              >
+                <option value="" disabled>Select the nature of the complaint...</option>
+                {COMPLAINT_SUBJECTS.map((option) => (
+                  <option key={option} value={option}>{option}</option>
+                ))}
+              </select>
+              {subject === COMPLAINT_SUBJECT_OTHERS && (
+                <input
+                  type="text"
+                  value={otherSubject}
+                  onChange={(e) => { setOtherSubject(e.target.value); clearFieldError("subject"); }}
+                  placeholder="Please specify"
+                  maxLength={200}
+                  aria-invalid={Boolean(fieldErrors.subject)}
+                  className="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102]"
+                />
+              )}
+            </div>
+            {fieldErrors.subject && <p role="alert" className="mt-1 text-xs text-red-600">{fieldErrors.subject}</p>}
+          </div>
+          <div>
+            <label htmlFor="complaint-description" className="block text-xs font-medium text-gray-500 mb-1">Narrative Report</label>
             <textarea
+              id="complaint-description"
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Describe what happened, including any people involved and when..."
+              onChange={(e) => { setDescription(e.target.value); clearFieldError("description"); }}
+              placeholder="Narrate what happened, including any people involved and when..."
               rows={4}
               maxLength={2000}
+              aria-invalid={Boolean(fieldErrors.description)}
               className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102]"
             />
+            {fieldErrors.description && <p role="alert" className="mt-1 text-xs text-red-600">{fieldErrors.description}</p>}
+          </div>
+          <div>
+            <label htmlFor="complaint-incident-date" className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1">
+              <CalendarDays size={12} /> Date of Incident
+            </label>
+            <input
+              id="complaint-incident-date"
+              type="date"
+              value={incidentDate}
+              onChange={(e) => { setIncidentDate(e.target.value); clearFieldError("incidentDate"); }}
+              aria-invalid={Boolean(fieldErrors.incidentDate)}
+              className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102]"
+            />
+            {fieldErrors.incidentDate && <p role="alert" className="mt-1 text-xs text-red-600">{fieldErrors.incidentDate}</p>}
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1">
-              <CalendarDays size={12} /> Date of Incident (optional)
+              <Paperclip size={12} /> Supporting Evidence (optional)
             </label>
-            <input
-              type="date"
-              value={incidentDate}
-              onChange={(e) => setIncidentDate(e.target.value)}
-              className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102]"
-            />
+            <label className="inline-flex items-center gap-2 px-3 py-2 border border-dashed border-gray-300 rounded-lg text-xs font-medium text-gray-600 bg-gray-50 cursor-pointer hover:border-[#5C0102] hover:text-[#5C0102] transition-colors">
+              <Upload size={13} /> Attach files
+              <input
+                type="file"
+                multiple
+                accept={EVIDENCE_ACCEPT}
+                className="hidden"
+                onChange={(e) => {
+                  handleEvidenceSelect(Array.from(e.target.files ?? []));
+                  e.target.value = "";
+                }}
+              />
+            </label>
+            <span className="ml-2 text-xs text-gray-400">Up to {EVIDENCE_MAX_FILES} files · {EVIDENCE_TYPES_LABEL} · max 10 MB each</span>
+            {evidenceFiles.length > 0 && (
+              <ul className="mt-2 space-y-1.5">
+                {evidenceFiles.map((file, index) => (
+                  <li key={`${file.name}-${index}`} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-gray-50 border border-gray-100 text-xs">
+                    <EvidenceFileThumb file={file} size={36} />
+                    <span className="text-gray-700 truncate flex-1">{file.name}</span>
+                    <span className="text-gray-400 shrink-0">{formatBytes(file.size)}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeEvidenceFile(index)}
+                      aria-label={`Remove ${file.name}`}
+                      className="text-gray-400 hover:text-red-600 shrink-0"
+                    >
+                      <X size={13} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {evidenceError && <p role="alert" className="mt-1 text-xs text-red-600">{evidenceError}</p>}
           </div>
+          <div className="flex items-start gap-2 rounded-lg bg-gray-50 border border-gray-100 p-3">
+            <input
+              id="complaint-certify"
+              type="checkbox"
+              checked={certified}
+              onChange={(e) => { setCertified(e.target.checked); clearFieldError("certified"); }}
+              aria-invalid={Boolean(fieldErrors.certified)}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-[#5C0102]"
+            />
+            <label htmlFor="complaint-certify" className="text-xs text-gray-600 leading-relaxed">
+              {COMPLAINT_CERTIFICATION}
+            </label>
+          </div>
+          {fieldErrors.certified && <p role="alert" className="text-xs text-red-600">{fieldErrors.certified}</p>}
           {error && <p className="text-xs text-red-600">{error}</p>}
           {success && <p className="text-xs text-green-600">{success}</p>}
           <button
@@ -190,13 +344,30 @@ export default function StudentComplaints() {
                     <h4 className="text-gray-900 text-sm font-medium">{complaint.subject}</h4>
                     {getStatusBadge(complaint.status)}
                   </div>
-                  <span className="text-xs text-gray-400">Filed {complaint.submittedAt}</span>
+                  <span className="text-xs text-gray-400">Filed {formatSubmittedAt(complaint)}</span>
                 </div>
+                {complaint.complaintAgainst && (
+                  <p className="text-xs text-gray-500 mb-1">Against: <strong className="text-gray-700">{complaint.complaintAgainst}</strong></p>
+                )}
                 <p className="text-xs text-gray-600 mb-2">{complaint.description}</p>
                 <div className="flex flex-wrap gap-3 text-xs text-gray-400">
                   {complaint.incidentDate && <span>Incident date: <strong className="text-gray-600">{complaint.incidentDate}</strong></span>}
                   {complaint.resolvedAt && <span>Resolved: <strong className="text-gray-600">{complaint.resolvedAt}</strong></span>}
                 </div>
+                {complaint.evidence && complaint.evidence.length > 0 && (
+                  <div className="mt-3">
+                    <div className="text-xs font-medium text-gray-500 mb-1.5 flex items-center gap-1">
+                      <Paperclip size={11} /> Supporting evidence
+                    </div>
+                    <ul className="space-y-1.5">
+                      {complaint.evidence.map((item, index) => (
+                        <li key={`${item.url}-${index}`}>
+                          <EvidenceAttachment item={item} />
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 {complaint.status === "rejected" && complaint.rejectionReason && (
                   <div className="mt-3 p-3 rounded-lg bg-red-50 border border-red-100">
                     <div className="text-xs font-medium text-red-800 mb-0.5">Rejection reason</div>
@@ -214,22 +385,21 @@ export default function StudentComplaints() {
                       <>
                         <div className="text-xs font-medium text-green-800 mb-0.5 uppercase tracking-wide">Findings</div>
                         <p className="text-xs text-green-900 whitespace-pre-wrap mb-3">{complaint.findings}</p>
-                        <button
-                          onClick={() => downloadLetter(complaint)}
-                          disabled={downloading === complaint.id}
-                          className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs font-medium hover:bg-green-700 transition-colors disabled:opacity-60"
-                        >
-                          {downloading === complaint.id ? (
-                            <span className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />
-                          ) : (
-                            <Download size={12} />
-                          )}
-                          {downloading === complaint.id ? "Preparing letter..." : "Download Response Letter"}
-                        </button>
-                        {downloadError === complaint.id && (
-                          <p className="text-xs text-red-600 mt-2">The letter could not be generated. Please try again.</p>
-                        )}
                       </>
+                    )}
+                    {complaint.findingsEvidence && complaint.findingsEvidence.length > 0 && (
+                      <div className="mt-3">
+                        <div className="text-xs font-medium text-green-800 mb-1.5 flex items-center gap-1">
+                          <Paperclip size={11} /> Evidence from the Commission
+                        </div>
+                        <ul className="space-y-1.5">
+                          {complaint.findingsEvidence.map((item, index) => (
+                            <li key={`${item.url}-${index}`}>
+                              <EvidenceAttachment item={item} linkClassName="text-xs text-green-800 underline" />
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
                     )}
                   </div>
                 )}

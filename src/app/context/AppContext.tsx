@@ -197,13 +197,32 @@ export interface ElectionPeriod {
   proclamationComplaintNote?: string;
 }
 
+/** 096: one supporting-evidence attachment on a complaint. */
+export interface ComplaintEvidence {
+  url: string;
+  name: string;
+}
+
+/** 097: the Grievance Commissioner's classification of a resolution. */
+export type ComplaintDecision = "substantiated" | "unsubstantiated" | "dismissed";
+
 export interface Complaint {
   id: string;
   studentName: string;
   subject: string;
   description: string;
+  /** 098: who/what the complaint is against (Nature-of-Complaint companion). */
+  complaintAgainst?: string;
   status: "filed" | "accepted" | "rejected";
   submittedAt: string;
+  /** 097: how the complaint was decided (null while filed / unclassified). */
+  decision?: ComplaintDecision;
+  /** 096: the student's supporting evidence attachments. */
+  evidence?: ComplaintEvidence[];
+  /** 096: the Grievance Commissioner's findings evidence attachments. */
+  findingsEvidence?: ComplaintEvidence[];
+  /** Raw submitted_at timestamptz — drives the "filed at <time>" stamp. */
+  submittedAtExact?: string;
   rejectionReason?: string;
   /** Commissioner working notes (086 findings_note) — editable while 'filed'. */
   findings?: string;

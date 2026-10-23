@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { useApp, Complaint } from "../../context/AppContext";
-import { statusMeta } from "../../lib/complaints";
+import { statusMeta, complaintDecisionLabel } from "../../lib/complaints";
 import { listElectionPeriodLabels } from "../../lib/supabaseData";
-import { FolderArchive, MessageSquare, Search, Eye, XCircle, Clock, CheckCircle } from "lucide-react";
+import { FolderArchive, MessageSquare, Search, Eye, XCircle, Clock, CheckCircle, Paperclip } from "lucide-react";
+import { EvidenceAttachment } from "../../components/EvidencePreview";
 
 // 092 — the dedicated complaint archive.  Unlike Complaint Management (which
 // scopes to the live election via complaintsForElection), this page lists
@@ -203,16 +204,26 @@ export default function AdminComplaintsArchive() {
               </div>
 
               <div className="p-5 space-y-4 text-sm">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className={`text-xs px-2.5 py-1 rounded-full font-medium flex items-center gap-1 w-fit ${TONE_CLASSES[statusMeta(preview.status).tone]}`}>
                     {preview.status === "accepted" ? <CheckCircle size={11} /> : preview.status === "rejected" ? <XCircle size={11} /> : <Clock size={11} />}
                     {statusMeta(preview.status).label}
                   </span>
+                  {preview.status !== "filed" && (
+                    <span className={`text-xs px-2.5 py-1 rounded-full font-medium w-fit border ${
+                      preview.decision === "substantiated"
+                        ? "bg-red-50 text-red-700 border-red-200"
+                        : "bg-gray-50 text-gray-600 border-gray-200"
+                    }`}>
+                      {complaintDecisionLabel(preview.decision)}
+                    </span>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {[
                     ["Filed", preview.submittedAt],
+                    ...(preview.complaintAgainst ? [["Against", preview.complaintAgainst]] : []),
                     ...(preview.incidentDate ? [["Incident Date", preview.incidentDate]] : []),
                     ...(preview.resolvedAt ? [["Resolved", preview.resolvedAt]] : []),
                   ].map(([label, val]) => (
@@ -224,14 +235,38 @@ export default function AdminComplaintsArchive() {
                 </div>
 
                 <div className="bg-gray-50 rounded-lg p-3">
-                  <div className="text-xs text-gray-400 mb-1">Description</div>
+                  <div className="text-xs text-gray-400 mb-1">Narrative Report</div>
                   <p className="text-gray-800 whitespace-pre-wrap text-sm">{preview.description}</p>
                 </div>
+
+                {preview.evidence && preview.evidence.length > 0 && (
+                  <div className="bg-gray-50 rounded-lg p-3">
+                    <div className="text-xs text-gray-400 mb-1 flex items-center gap-1">
+                      <Paperclip size={11} /> Supporting evidence
+                    </div>
+                    <ul className="space-y-1.5">
+                      {preview.evidence.map((item, index) => (
+                        <li key={`${item.url}-${index}`}>
+                          <EvidenceAttachment item={item} />
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
 
                 {preview.findings && (
                   <div className="bg-green-50 border border-green-100 rounded-lg p-3">
                     <div className="text-xs font-medium text-green-800 mb-1 uppercase tracking-wide">Findings</div>
                     <p className="text-green-900 whitespace-pre-wrap text-sm">{preview.findings}</p>
+                    {preview.findingsEvidence && preview.findingsEvidence.length > 0 && (
+                      <ul className="mt-2 pt-2 border-t border-green-100 space-y-1.5">
+                        {preview.findingsEvidence.map((item, index) => (
+                          <li key={`${item.url}-${index}`}>
+                            <EvidenceAttachment item={item} linkClassName="text-xs text-green-800 underline" />
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 )}
 

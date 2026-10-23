@@ -13,6 +13,9 @@ import {
 interface ConfirmOptions {
   title?: string;
   description?: string | ReactNode;
+  /** Rich body rendered below the header, e.g. a summary of what is about
+   *  to happen (the proclamation summary in the final proclaim confirm). */
+  content?: ReactNode;
   confirmText?: string;
   cancelText?: string;
   destructive?: boolean;
@@ -29,9 +32,13 @@ export function useConfirm(options: ConfirmOptions = {}) {
 
   const [open, setOpen] = useState(false);
   const [resolver, setResolver] = useState<((value: boolean) => void) | null>(null);
+  // Per-call overrides — a call may enrich the dialog (e.g. attach a summary)
+  // without every caller of this hook instance seeing it.
+  const [overrides, setOverrides] = useState<Partial<ConfirmOptions>>({});
 
-  const confirm = useCallback((): Promise<boolean> => {
+  const confirm = useCallback((callOptions?: Partial<ConfirmOptions>): Promise<boolean> => {
     return new Promise((resolve) => {
+      setOverrides(callOptions ?? {});
       setOpen(true);
       setResolver(() => resolve);
     });
@@ -47,20 +54,30 @@ export function useConfirm(options: ConfirmOptions = {}) {
     resolver?.(false);
   };
 
+  const effective: ConfirmOptions = {
+    title,
+    description,
+    confirmText,
+    cancelText,
+    destructive,
+    ...overrides,
+  };
+
   const dialog = (
     <AlertDialog open={open} onOpenChange={(o) => { if (!o) handleCancel(); }}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>{title}</AlertDialogTitle>
-          <AlertDialogDescription>{description}</AlertDialogDescription>
+          <AlertDialogTitle>{effective.title}</AlertDialogTitle>
+          <AlertDialogDescription>{effective.description}</AlertDialogDescription>
         </AlertDialogHeader>
+        {effective.content}
         <AlertDialogFooter>
-          <AlertDialogCancel onClick={handleCancel}>{cancelText}</AlertDialogCancel>
+          <AlertDialogCancel onClick={handleCancel}>{effective.cancelText}</AlertDialogCancel>
           <AlertDialogAction
             onClick={handleConfirm}
-            className={destructive ? "bg-red-600 hover:bg-red-700 text-white" : undefined}
+            className={effective.destructive ? "bg-red-600 hover:bg-red-700 text-white" : undefined}
           >
-            {confirmText}
+            {effective.confirmText}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

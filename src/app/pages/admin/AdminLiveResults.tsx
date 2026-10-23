@@ -9,8 +9,10 @@ import {
   type ProclamationAnnotations,
 } from "../../lib/supabaseData";
 import type { RealtimeChannel } from "@supabase/supabase-js";
-import { Lock, RefreshCw, Trophy, Activity, Users, BarChart3, MinusCircle, Gavel, ShieldAlert } from "lucide-react";
+import { Lock, RefreshCw, Trophy, Activity, Users, BarChart3, MinusCircle, Gavel } from "lucide-react";
 import { FULL_POSITION_ORDER as POSITIONS } from "../../lib/partyScope";
+import { complaintsForElection } from "../../lib/complaints";
+import { ComplaintRecordSection } from "../../components/ComplaintRecordSection";
 
 type LiveResult = {
   candidate_id: string;
@@ -22,7 +24,7 @@ type LiveResult = {
 };
 
 export default function AdminLiveResults() {
-  const { candidates: contextCandidates, electionPeriod } = useApp();
+  const { candidates: contextCandidates, electionPeriod, complaints = [] } = useApp();
   const [liveResults, setLiveResults] = useState<Map<string, LiveResult[]>>(new Map());
   // 079: per-position abstain counts, kept in step with the live tally —
   // abstain rows are votes INSERTs, so the realtime subscription refreshes
@@ -158,6 +160,22 @@ export default function AdminLiveResults() {
     [liveResults],
   );
 
+  // 099 — the election's complaint record, straight from the admin context
+  // (the complaints table is admin-readable), shaped for the shared record
+  // section: substantiated grievances with their findings, other decisions,
+  // and whatever is still on file.
+  const liveComplaints = useMemo(
+    () =>
+      complaintsForElection(complaints, electionPeriod.id).map((c) => ({
+        id: c.id,
+        subject: c.subject,
+        status: c.status,
+        decision: c.decision ?? null,
+        findings: c.findings ?? null,
+      })),
+    [complaints, electionPeriod.id],
+  );
+
   if (!showResults) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center p-6 md:p-8">
@@ -259,15 +277,13 @@ export default function AdminLiveResults() {
         </div>
       </motion.div>
 
-      {annotations.complaintNote && (
-        <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 flex items-start gap-3 text-sm text-amber-800">
-          <ShieldAlert size={16} className="mt-0.5 shrink-0" />
-          <div>
-            <div className="font-medium">A complaint was on record for this election.</div>
-            <div className="text-xs mt-0.5">Electoral Board note: {annotations.complaintNote}</div>
-          </div>
-        </div>
-      )}
+      <div className="mb-6">
+        <ComplaintRecordSection
+          entries={liveComplaints}
+          complaintNote={annotations.complaintNote}
+          decisionReason={annotations.decisionReason}
+        />
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
         {POSITIONS.map((pos) => {
@@ -330,40 +346,43 @@ export default function AdminLiveResults() {
                   const isWinner = index === 0 && candidate.votes > 0;
                   const isTie = index > 0 && candidate.votes === winner.votes && candidate.votes > 0;
                   const isLeader = isWinner || isTie;
-                  
+                  // 081 — the board's proclaimed pick: the whole row wears the
+                  // proclamation colour, matching the Proclamation Dialog.
+                  const isProclaimed = positionProclamation?.candidateId === candidate.id;
+
                   return (
-                    <div key={candidate.id} className={`relative overflow-hidden rounded-2xl p-3 flex items-center gap-3 z-10 transition-colors border ${isLeader ? 'bg-white border-amber-200/60 shadow-sm' : 'bg-white/60 border-transparent hover:bg-white hover:border-gray-100'}`}>
+                    <div key={candidate.id} className={`relative overflow-hidden rounded-2xl p-3 flex items-center gap-3 z-10 transition-colors border ${isProclaimed ? 'bg-[#5C0102] border-[#5C0102] shadow-sm' : isLeader ? 'bg-white border-amber-200/60 shadow-sm' : 'bg-white/60 border-transparent hover:bg-white hover:border-gray-100'}`}>
                       {/* Progress Bar Background */}
-                      <div 
-                        className={`absolute left-0 top-0 bottom-0 opacity-[0.08] z-0 ${isLeader ? 'bg-amber-500' : 'bg-[#5C0102]'}`} 
+                      <div
+                        className={`absolute left-0 top-0 bottom-0 z-0 ${isProclaimed ? 'bg-white opacity-[0.14]' : `opacity-[0.08] ${isLeader ? 'bg-amber-500' : 'bg-[#5C0102]'}`}`}
                         style={{ width: `${percentage}%`, transition: 'width 1s cubic-bezier(0.4, 0, 0.2, 1)' }}
                       />
-                      
+
                       <div className="z-10 flex items-center justify-center w-6 shrink-0">
-                        {isLeader ? (
-                           <Trophy size={20} className="text-amber-500 drop-shadow-sm" />
+                        {isLeader || isProclaimed ? (
+                           <Trophy size={20} className={isProclaimed ? 'text-amber-300 drop-shadow-sm' : 'text-amber-500 drop-shadow-sm'} />
                         ) : (
                            <span className="text-xs font-black text-gray-300">{index + 1}</span>
                         )}
                       </div>
-                      
+
                       {candidate.picture ? (
                         <img
                           src={candidate.picture}
                           alt=""
-                          className={`w-11 h-11 rounded-full object-cover z-10 border-2 shrink-0 ${isLeader ? 'border-amber-400' : 'border-gray-100'}`}
+                          className={`w-11 h-11 rounded-full object-cover z-10 border-2 shrink-0 ${isProclaimed ? 'border-white' : isLeader ? 'border-amber-400' : 'border-gray-100'}`}
                         />
                       ) : (
-                        <div className={`w-11 h-11 rounded-full z-10 flex items-center justify-center border-2 shrink-0 ${isLeader ? 'border-amber-400 bg-amber-50 text-amber-600' : 'border-gray-100 bg-gray-50 text-gray-400'}`}>
+                        <div className={`w-11 h-11 rounded-full z-10 flex items-center justify-center border-2 shrink-0 ${isProclaimed ? 'border-white bg-white/10 text-white/70' : isLeader ? 'border-amber-400 bg-amber-50 text-amber-600' : 'border-gray-100 bg-gray-50 text-gray-400'}`}>
                            <Users size={18} />
                         </div>
                       )}
-                      
+
                       <div className="flex-1 min-w-0 z-10">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className={`text-sm font-bold truncate leading-tight ${isLeader ? 'text-gray-900' : 'text-gray-700'}`}>{candidate.name}</span>
-                          {positionProclamation?.candidateId === candidate.id ? (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 text-[10px] font-bold">
+                          <span className={`text-sm font-bold truncate leading-tight ${isProclaimed ? 'text-white' : isLeader ? 'text-gray-900' : 'text-gray-700'}`}>{candidate.name}</span>
+                          {isProclaimed ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-white text-[#5C0102] border border-white px-2 py-0.5 text-[10px] font-bold">
                               <Gavel size={10} />
                               Proclaimed winner
                             </span>
@@ -375,21 +394,21 @@ export default function AdminLiveResults() {
                           ) : null}
                         </div>
                         <div className="flex items-center gap-1.5 mt-0.5">
-                           <span className="text-[11px] font-semibold text-gray-500 truncate max-w-[120px]">{candidate.party}</span>
+                           <span className={`text-[11px] font-semibold truncate max-w-[120px] ${isProclaimed ? 'text-white/70' : 'text-gray-500'}`}>{candidate.party}</span>
                            {hasVotes && (
                              <>
                                <span className="w-1 h-1 rounded-full bg-gray-300"></span>
-                               <span className={`text-[11px] font-black ${isLeader ? 'text-amber-600' : 'text-gray-400'}`}>{percentage.toFixed(1)}%</span>
+                               <span className={`text-[11px] font-black ${isProclaimed ? 'text-white/80' : isLeader ? 'text-amber-600' : 'text-gray-400'}`}>{percentage.toFixed(1)}%</span>
                              </>
                            )}
                         </div>
                       </div>
-                      
+
                       <div className="text-right z-10 pl-2 shrink-0">
-                        <div className={`text-lg font-black leading-none ${isLeader ? 'text-green-600' : 'text-gray-900'}`}>
+                        <div className={`text-lg font-black leading-none ${isProclaimed ? 'text-white' : isLeader ? 'text-green-600' : 'text-gray-900'}`}>
                            {candidate.votes.toLocaleString()}
                         </div>
-                        <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mt-1">votes</div>
+                        <div className={`text-[9px] font-bold uppercase tracking-widest mt-1 ${isProclaimed ? 'text-white/60' : 'text-gray-400'}`}>votes</div>
                       </div>
                     </div>
                   );

@@ -1,7 +1,7 @@
 import { motion } from "motion/react";
 import { Link } from "react-router";
 import { useApp } from "../../../context/AppContext";
-import { complaintsForElection } from "../../../lib/complaints";
+import { complaintsForElection, formatSubmittedAt } from "../../../lib/complaints";
 import { AlertCircle, CheckCircle, HelpCircle, Activity, Clock, ArrowRight } from "lucide-react";
 import ElectionStageBanner from "../../../components/ElectionStageBanner";
 
@@ -15,7 +15,11 @@ export default function GrievanceDashboard() {
   const filedComplaints = electionComplaints.filter((c) => c.status === "filed").length;
   const unresolved = electionComplaints
     .filter((c) => c.status === "filed")
-    .sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1));
+    .sort((a, b) => {
+      const av = a.submittedAtExact ?? a.submittedAt;
+      const bv = b.submittedAtExact ?? b.submittedAt;
+      return av < bv ? 1 : av > bv ? -1 : 0;
+    });
   const acceptedComplaints = electionComplaints.filter((c) => c.status === "accepted").length;
 
   const stats = [
@@ -83,7 +87,7 @@ export default function GrievanceDashboard() {
               >
                 <div className="min-w-0">
                   <div className="text-sm font-medium text-gray-900 truncate">{complaint.subject}</div>
-                  <div className="text-xs text-gray-500">From {complaint.studentName} · Filed {complaint.submittedAt}</div>
+                  <div className="text-xs text-gray-500">From {complaint.studentName} · Filed {formatSubmittedAt(complaint)}</div>
                 </div>
                 <ArrowRight size={16} className="text-gray-300 flex-shrink-0" />
               </Link>

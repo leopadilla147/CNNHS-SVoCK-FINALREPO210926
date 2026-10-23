@@ -52,18 +52,152 @@ export interface AccomplishmentReportSeed {
   venue?: string;
   /** Acting Chief Commissioner's name — printed on the "Approved by" line. */
   chiefName?: string;
+  /**
+   * { signatory role title -> officer name } resolved from the chief-gated
+   * staff roster.  When present it replaces the bundled template names on the
+   * matching default signatory lines (Electoral / Screening / Grievance /
+   * Co-commissioner) so a fresh report starts with the acting officers.
+   */
+  officerNames?: Record<string, string>;
 }
 
 export const DEFAULT_PERIOD_LABEL = "2026-2027";
 export const DEFAULT_EVENT_DATE_TIME = "February 11, 2026 7:30 AM";
-export const DEFAULT_EVENT_VENUE =
-  "Camarines Norte National High School at the School's Computer Laboratory using the CNNHS SVoCK Online Voting System";
+
+/** School prefix and platform suffix of the default "Place / venue / platform" line. */
+const VENUE_LINE_SCHOOL = "Camarines Norte National High School";
+const VENUE_LINE_PLATFORM = "Using Student Vote Counting Kiosk (SVoCK)";
+
+/**
+ * Default "Place / venue / platform" line: the school plus the venue chosen in
+ * Election Setup Stage 4, on the Student Vote Counting Kiosk (SVoCK) platform.
+ * Without a venue it degrades to "Camarines Norte National High School Using
+ * Student Vote Counting Kiosk (SVoCK)".
+ */
+export function defaultVenueLine(venue?: string): string {
+  const place = venue?.trim();
+  return [VENUE_LINE_SCHOOL, place, VENUE_LINE_PLATFORM].filter(Boolean).join(" ");
+}
+
+export const DEFAULT_EVENT_VENUE = defaultVenueLine();
+
+/**
+ * The LG-COMEA position/role titles offered in the signatory editor's
+ * dropdown.  The chosen title is what gets saved and printed on the report.
+ */
+export const SIGNATORY_ROLE_OPTIONS = [
+  "LG-COMEA Electoral Commissioner",
+  "LG-COMEA Screening and Validation Commissioner",
+  "LG-COMEA Grievance Commissioner",
+  "LG-COMEA Appointed Commissioner",
+  "School Head / LG-COMEA Chief Commissioner",
+] as const;
+
+/** Dropdown sentinel for a custom (or pre-existing template) role. */
+export const SIGNATORY_ROLE_OTHER = "Others";
+
+/**
+ * Dropdown titles that map onto a system commissioner role (the 035
+ * commissioner_role CHECK set).  The signatory editor uses this, together
+ * with the chief-gated staff roster, to prefill a signatory's Name when a
+ * commissioner title is chosen.  "LG-COMEA Appointed Commissioner" has no
+ * system role (the 'appointment' role was retired in Phase 3 REMOVE-08), so
+ * it never prefills — its Name stays fully manual.
+ */
+export const SIGNATORY_ROLE_SYSTEM_ROLES: Record<string, string> = {
+  "LG-COMEA Electoral Commissioner": "electoral_board",
+  "LG-COMEA Screening and Validation Commissioner": "screening_validation",
+  "LG-COMEA Grievance Commissioner": "grievance",
+  "School Head / LG-COMEA Chief Commissioner": "chief",
+};
+
+/** Minimal shape of a list_staff_roster_rpc row needed for name resolution. */
+export interface StaffRosterEntry {
+  full_name: string | null;
+  role_type: string;
+  commissioner_role: string | null;
+  status: string;
+}
+
+/** Dropdown titles resolved from a CO-commissioner roster row (the role they co-serve). */
+const SIGNATORY_ROLE_CO_ROLES: Record<string, string> = {
+  "LG-COMEA Electoral Co-commissioner": "electoral_board",
+};
+
+/**
+ * Build the { dropdown title -> full name } prefill map from the staff
+ * roster.  Only ACTIVE staff count; the chief comes from role_type='chief',
+ * each commissioner title from the PRIMARY commissioner
+ * (role_type='commissioner') holding that commissioner_role, and the
+ * co-commissioner title from an active co_commissioner of that role.
+ */
+export function resolveCommissionerNames(
+  roster: StaffRosterEntry[]
+): Record<string, string> {
+  const chiefName = roster.find(
+    (row) =>
+      row.status === "active" && row.role_type === "chief" && row.full_name?.trim()
+  )?.full_name?.trim();
+
+  const primaryByRole = new Map<string, string>();
+  const coByRole = new Map<string, string>();
+  roster.forEach((row) => {
+    if (row.status !== "active") return;
+    const name = row.full_name?.trim();
+    if (!name || !row.commissioner_role) return;
+    if (row.role_type === "commissioner") {
+      if (!primaryByRole.has(row.commissioner_role)) {
+        primaryByRole.set(row.commissioner_role, name);
+      }
+    } else if (row.role_type === "co_commissioner") {
+      if (!coByRole.has(row.commissioner_role)) {
+        coByRole.set(row.commissioner_role, name);
+      }
+    }
+  });
+
+  const names: Record<string, string> = {};
+  Object.entries(SIGNATORY_ROLE_SYSTEM_ROLES).forEach(([label, systemRole]) => {
+    const name = systemRole === "chief" ? chiefName : primaryByRole.get(systemRole);
+    if (name) names[label] = name;
+  });
+  Object.entries(SIGNATORY_ROLE_CO_ROLES).forEach(([label, systemRole]) => {
+    const name = coByRole.get(systemRole);
+    if (name) names[label] = name;
+  });
+  return names;
+}
+
+/**
+ * Map a stored signatory role onto the dropdown: a known LG-COMEA title
+ * selects that option; anything else (a custom entry, or one of the bundled
+ * template roles such as "LG-COMEA Student Chairperson") selects "Others" and
+ * keeps the stored text for the free-text input.
+ */
+export function resolveSignatoryRoleSelection(role: string): {
+  option: string;
+  customText: string;
+} {
+  const trimmed = role.trim();
+  if ((SIGNATORY_ROLE_OPTIONS as readonly string[]).includes(trimmed)) {
+    return { option: trimmed, customText: "" };
+  }
+  return { option: SIGNATORY_ROLE_OTHER, customText: role };
+}
 /** Bundled template signatory, used only when the chief cannot be resolved. */
 export const DEFAULT_CHIEF_SIGNATORY = "FRANCISCO D. TORRERO, SSP-II";
 export const DEFAULT_CHIEF_ROLE = "School Head / LG-COMEA Chief Commissioner";
 
-/** The bundled COMEA signatories, with the chief's name swapped in. */
-function defaultSignatoryGroups(chiefName: string): ReportSignatoryGroup[] {
+/** The bundled COMEA signatories, with the live officers' names swapped in. */
+function defaultSignatoryGroups(
+  chiefName: string,
+  officerNames?: Record<string, string>
+): ReportSignatoryGroup[] {
+  // A roster-resolved name wins over the bundled template name for the lines
+  // that map onto a system officer; everything else keeps the bundled text.
+  const name = (role: string, bundled: string): string =>
+    officerNames?.[role]?.trim() || bundled;
+
   return [
     {
       heading: "Prepared by:",
@@ -75,11 +209,26 @@ function defaultSignatoryGroups(chiefName: string): ReportSignatoryGroup[] {
     {
       heading: "Noted by:",
       signatories: [
-        { name: "MELISSA M. MELENDREZ", role: "LG-COMEA Electoral Commissioner" },
-        { name: "MA. LOURDES M. BALANE, HT-III", role: "LG-COMEA Screening and Validation Commissioner" },
-        { name: "RAY DUOVANI N. REGONDOLA", role: "LG-COMEA Electoral Co-commissioner" },
-        { name: "IVY DENICE M. ABOGADO, RGC", role: "LG-COMEA Grievance Commissioner" },
-        { name: "WILSON ANGEL H. VILLARIN, ASP-II", role: "LG-COMEA Appointed Commissioner" },
+        {
+          name: name("LG-COMEA Electoral Commissioner", "MELISSA M. MELENDREZ"),
+          role: "LG-COMEA Electoral Commissioner",
+        },
+        {
+          name: name("LG-COMEA Screening and Validation Commissioner", "MA. LOURDES M. BALANE, HT-III"),
+          role: "LG-COMEA Screening and Validation Commissioner",
+        },
+        {
+          name: name("LG-COMEA Electoral Co-commissioner", "RAY DUOVANI N. REGONDOLA"),
+          role: "LG-COMEA Electoral Co-commissioner",
+        },
+        {
+          name: name("LG-COMEA Grievance Commissioner", "IVY DENICE M. ABOGADO, RGC"),
+          role: "LG-COMEA Grievance Commissioner",
+        },
+        {
+          name: name("LG-COMEA Appointed Commissioner", "WILSON ANGEL H. VILLARIN, ASP-II"),
+          role: "LG-COMEA Appointed Commissioner",
+        },
       ],
     },
     {
@@ -102,7 +251,7 @@ export function defaultAccomplishmentReportDraft(
   return {
     periodLabel,
     dateTime: seed.dateTime?.trim() || DEFAULT_EVENT_DATE_TIME,
-    venue: seed.venue?.trim() || DEFAULT_EVENT_VENUE,
+    venue: seed.venue?.trim() || defaultVenueLine(),
     rationaleLead:
       "Accomplishment Report of (COMEA) Learners Government — Commission on Election and Appointment.",
     rationaleParagraphs: [
@@ -129,7 +278,7 @@ export function defaultAccomplishmentReportDraft(
       "The school may continue to strengthen student participation in future elections by encouraging active involvement across all grade levels.",
       "Continuous supervision and proper coordination among teachers, advisers, and student officers are also recommended to maintain the credibility and orderliness of the election process.",
     ],
-    signatoryGroups: defaultSignatoryGroups(chiefName),
+    signatoryGroups: defaultSignatoryGroups(chiefName, seed.officerNames),
   };
 }
 

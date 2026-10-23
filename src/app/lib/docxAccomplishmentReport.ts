@@ -11,8 +11,6 @@ import {
   BorderStyle,
   ImageRun,
 } from "docx";
-import type { Candidate } from "../context/AppContext";
-import type { ChiefElectionResultRow } from "./reports";
 import {
   defaultAccomplishmentReportDraft,
   type AccomplishmentReportDraft,
@@ -23,19 +21,6 @@ export interface AccomplishmentReportDocxInput {
   periodLabel: string;
   dateTime?: string;
   venue?: string;
-  totals: {
-    totalVoters: number;
-    voted: number;
-    notVoted: number;
-    turnoutPct: number;
-  };
-  /**
-   * Retained for call-site compatibility.  v1.3 (Chief's request) removed the
-   * "Election Summary / Highlights" and winners tables from the document, so
-   * `totals`, `approvedCandidates` and `results` are no longer rendered.
-   */
-  approvedCandidates: Candidate[];
-  results: ChiefElectionResultRow[];
   /**
    * The acting Chief Commissioner's name (adminprofiles.full_name) for the
    * "Approved by" signatory line.  Optional — when absent the bundled

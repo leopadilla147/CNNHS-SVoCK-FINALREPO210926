@@ -567,31 +567,10 @@ export function generateEnclosure21(logs: LogEntry[]) {
 </body></html>`;
   }
 
-  export interface ChiefElectionResultRow {
-    position: string;
-    winnerName: string;
-    party: string;
-    gradeLevel: string;
-    votes: number;
-  }
-
   export interface ChiefElectionReportInput {
     periodLabel: string;
     dateTime?: string;
     venue?: string;
-    /**
-     * Retained for call-site compatibility.  v1.3 (Chief's request) removed
-     * the "Election Summary / Highlights" metrics table from the document, so
-     * `totals`, `approvedCandidates` and `results` are no longer rendered.
-     */
-    totals: {
-      totalVoters: number;
-      voted: number;
-      notVoted: number;
-      turnoutPct: number;
-    };
-    approvedCandidates: Candidate[];
-    results: ChiefElectionResultRow[];
     /**
      * The acting Chief Commissioner's name (from adminprofiles.full_name),
      * printed on the "Approved by" signatory line.  Optional: callers that

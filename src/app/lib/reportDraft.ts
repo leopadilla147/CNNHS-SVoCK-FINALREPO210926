@@ -99,6 +99,33 @@ export function resetReportDraft(seed: AccomplishmentReportSeed = {}): Accomplis
   return snapshot;
 }
 
+/**
+ * Upgrade a still-pristine draft with late-arriving seed values (e.g. roster
+ * officer names that resolve after the page's first render).  The re-seed
+ * only happens while the draft is byte-identical to the template built
+ * WITHOUT those values — the moment the Chief has edited anything, the stored
+ * draft wins and this is a no-op.
+ */
+export function refreshReportDraftIfPristine(
+  seed: AccomplishmentReportSeed = {}
+): AccomplishmentReportDraft | null {
+  if (!snapshot || !seed.officerNames || Object.keys(seed.officerNames).length === 0) {
+    return null;
+  }
+  const key = storageKey(seed);
+  if (snapshotKey !== key) return null;
+
+  const baseSeed = { ...seed, officerNames: undefined };
+  if (JSON.stringify(snapshot) !== JSON.stringify(defaultAccomplishmentReportDraft(baseSeed))) {
+    return null;
+  }
+
+  snapshot = defaultAccomplishmentReportDraft(seed);
+  writeStored(key, snapshot);
+  emit();
+  return snapshot;
+}
+
 /** React binding for the editable report draft. */
 export function useReportDraft(seed: AccomplishmentReportSeed = {}): AccomplishmentReportDraft {
   ensureReportDraft(seed);

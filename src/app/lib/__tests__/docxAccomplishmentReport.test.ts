@@ -16,41 +16,6 @@ const sampleInput = {
   periodLabel: "2026-2027",
   dateTime: "February 11, 2026 7:30 AM",
   venue: "Camarines Norte National High School Computer Laboratory",
-  totals: {
-    totalVoters: 1500,
-    voted: 1350,
-    notVoted: 150,
-    turnoutPct: 90,
-  },
-  approvedCandidates: [
-    {
-      id: "c1",
-      surname: "Dela Cruz",
-      givenName: "Juan",
-      position: "President",
-      gradeLevel: "Grade 11",
-      gender: "Male",
-      dateOfBirth: "2009-01-01",
-      age: 17,
-      email: "juan@test.local",
-      mobileNumber: "09171234567",
-      homeAddress: "Daet",
-      documents: { applicationForm: true, introductoryProfile: true },
-      status: "approved" as const,
-      submittedAt: "2026-01-01T00:00:00Z",
-      votes: 750,
-      studentId: "s1",
-    },
-  ],
-  results: [
-    {
-      position: "President",
-      winnerName: "Juan Dela Cruz",
-      party: "Mabuhay Party",
-      gradeLevel: "Grade 11",
-      votes: 750,
-    },
-  ],
 };
 
 async function extractBodyXml(input: AccomplishmentReportDocxInput): Promise<string> {

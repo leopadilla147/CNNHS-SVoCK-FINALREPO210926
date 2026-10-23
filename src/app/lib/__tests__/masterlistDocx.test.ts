@@ -2,11 +2,26 @@ import { describe, it, expect } from "vitest";
 import {
   MASTERLIST_MAX_BYTES,
   buildHeaderIndex,
+  buildHeaderIndexFromCells,
   toMasterlistRow,
+  validateMasterlistRow,
+  isValidCalendarDate,
   parseMasterlist,
+  parseMasterlistRows,
   extractMasterlistText,
+  extractAndParseMasterlist,
   isFullMasterlistMatch,
+  partitionMasterlistMatches,
+  findFirstLrnConflict,
+  describeLrnConflict,
+  splitFullName,
+  toTitleCase,
+  normalizeSex,
+  normalizeGradeLevel,
+  toIsoBirthdate,
+  extractSchoolYear,
 } from "../masterlistDocx";
+import type { MasterlistRow } from "../masterlistDocx";
 
 const HEADER =
   "LRN\tFULL NAME (LAST, FIRST, MIDDLE)\tSEX\tBIRTHDATE (MM/DD/YYYY)\tAGE AS OF\tPARENT/GUARDIAN\tGRADE LEVEL\tSTRAND/CLUSTER\tSECTION\tADVISER NAME";
@@ -17,10 +32,13 @@ describe("buildHeaderIndex", () => {
     expect(index).not.toBeNull();
     expect(index!.lrn).toBe(0);
     expect(index!.name).toBe(1);
+    expect(index!.sex).toBe(2);
     expect(index!.birthdate).toBe(3);
+    expect(index!.parent).toBe(5);
     expect(index!.grade).toBe(6);
     expect(index!.strand).toBe(7);
     expect(index!.section).toBe(8);
+    expect(index!.adviser).toBe(9);
   });
 
   it("returns null for lines with no recognizable header", () => {
@@ -45,10 +63,16 @@ describe("toMasterlistRow", () => {
     ]);
     expect(row).not.toBeNull();
     expect(row!.lrn).toBe("123456789012");
-    expect(row!.fullName).toBe("DELA CRUZ, JUAN A.");
+    // Names are Title Cased, strand/section keep their acronym casing.
+    expect(row!.fullName).toBe("Dela Cruz, Juan A.");
     expect(row!.birthdate).toBe("05/14/2009");
     expect(row!.gradeSection).toBe("7 - SAMPAGUITA");
     expect(row!.strand).toBe("STEM");
+    expect(row!.sex).toBe("Male");
+    expect(row!.gradeLevel).toBe("Grade 7");
+    expect(row!.section).toBe("SAMPAGUITA");
+    expect(row!.parentGuardian).toBe("Dela Cruz, Maria");
+    expect(row!.adviser).toBe("Ms. Santos");
   });
 
   it("rejects rows with an invalid LRN", () => {
@@ -73,32 +97,81 @@ describe("parseMasterlist", () => {
       HEADER,
       "123456789012\tDELA CRUZ, JUAN A.\tM\t05/14/2009\t15\tDELA CRUZ, MARIA\t7\tSTEM\tSAMPAGUITA\tMS. SANTOS",
       "987654321098\tSANTOS, MARIA L.\tF\t02/22/2010\t14\tSANTOS, PEDRO\t8\tGAS\tROSAL\tMR. REYES",
-      "Malformed line without tabs breaks into cells",
     ].join("\n");
 
     const result = parseMasterlist(text);
     expect(result.rows).toHaveLength(2);
-    expect(result.skipped).toBeGreaterThan(0);
-    expect(result.errors.length).toBe(result.skipped);
     expect(result.rows[0].lrn).toBe("123456789012");
-    expect(result.rows[0].fullName).toBe("DELA CRUZ, JUAN A.");
+    expect(result.rows[0].fullName).toBe("Dela Cruz, Juan A.");
     expect(result.rows[1].gradeSection).toBe("8 - ROSAL");
     expect(result.rows[1].strand).toBe("GAS");
+    expect(result.skipped).toBe(0);
+    expect(result.errors).toHaveLength(0);
+    expect(result.stoppedAtRow).toBeUndefined();
   });
 
-  it("skips malformed rows and reports per-row errors", () => {
+  it("silently skips rows with an empty LRN cell and keeps reading", () => {
     const text = [
       HEADER,
       "123456789012\tDELA CRUZ, JUAN A.\tM\t05/14/2009\t15\tDELA CRUZ, MARIA\t7\tSTEM\tSAMPAGUITA\tMS. SANTOS",
-      "BAD-LRN\tSANTOS, MARIA L.\tF\t02/22/2010\t14\tSANTOS, PEDRO\t8\tGAS\tROSAL\tMR. REYES",
+      // LRN cell empty even though other cells are filled — not read.
+      "\tALVAREZ, PEDRO C.\tM\t06/06/2010\t14\tALVAREZ, ROSA\t8\tGAS\tROSAL\tMR. REYES",
+      "987654321098\tSANTOS, MARIA L.\tF\t02/22/2010\t14\tSANTOS, PEDRO\t8\tGAS\tROSAL\tMR. REYES",
+    ].join("\n");
+
+    const result = parseMasterlist(text);
+    expect(result.rows).toHaveLength(2);
+    expect(result.skipped).toBe(0);
+    expect(result.errors).toHaveLength(0);
+    expect(result.stoppedAtRow).toBeUndefined();
+  });
+
+  it("stops at the first invalid row and imports nothing", () => {
+    const text = [
+      HEADER,
+      "123456789012\tDELA CRUZ, JUAN A.\tM\t05/14/2009\t15\tDELA CRUZ, MARIA\t7\tSTEM\tSAMPAGUITA\tMS. SANTOS",
+      "987654321098\tSANTOS, MARIA L.\tF\t02/22/2010\t14\tSANTOS, PEDRO\t8\tGAS\tROSAL\tMR. REYES",
+      "BAD-LRN\t\tF\t02/22/2010\t14\tSANTOS, PEDRO\t8\tGAS\tROSAL\tMR. REYES",
+      "111111111111\tREYES, ANA B.\tF\t03/03/2011\t13\tREYES, LUIS\t9\tSTEM\tILANG\tMS. CRUZ",
+    ].join("\n");
+
+    const result = parseMasterlist(text);
+    // Even though rows 2 and 3 were valid, a later error clears the result.
+    expect(result.rows).toHaveLength(0);
+    expect(result.skipped).toBe(1);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain("Row 4");
+    expect(result.errors[0]).toContain("invalid LRN");
+    expect(result.stoppedAtRow).toBe(4);
+  });
+
+  it("rejects a duplicated LRN in the text path too", () => {
+    const text = [
+      HEADER,
+      "123456789012\tDELA CRUZ, JUAN A.\tM\t05/14/2009\t15\tDELA CRUZ, MARIA\t7\tSTEM\tSAMPAGUITA\tMS. SANTOS",
+      "123456789012\tDELA CRUZ, JUAN A.\tM\t05/14/2009\t15\tDELA CRUZ, MARIA\t7\tSTEM\tSAMPAGUITA\tMS. SANTOS",
+    ].join("\n");
+
+    const result = parseMasterlist(text);
+    expect(result.rows).toHaveLength(0);
+    expect(result.skipped).toBe(1);
+    expect(result.errors[0]).toContain("Row 3");
+    expect(result.errors[0]).toContain("duplicate LRN 123456789012");
+    expect(result.stoppedAtRow).toBe(3);
+  });
+
+  it("fails fast on a present-but-incomplete row (missing required details)", () => {
+    const text = [
+      HEADER,
       "123456789013\t\tF\t02/22/2010\t14\tSANTOS, PEDRO\t8\tGAS\tROSAL\tMR. REYES",
     ].join("\n");
 
     const result = parseMasterlist(text);
-    expect(result.rows).toHaveLength(1);
-    expect(result.skipped).toBe(2);
-    expect(result.errors[0]).toContain("Row 3");
-    expect(result.errors[1]).toContain("Row 4");
+    expect(result.rows).toHaveLength(0);
+    expect(result.skipped).toBe(1);
+    expect(result.errors[0]).toContain("Row 2");
+    expect(result.errors[0]).toContain("missing Full Name");
+    expect(result.stoppedAtRow).toBe(2);
   });
 
   it("handles newline-separated (multi-space) rows without a header index", () => {
@@ -119,6 +192,231 @@ describe("extractMasterlistText", () => {
       "The masterlist file is larger than 5MB."
     );
   });
+  it("silently ignores every unfilled template row (no LRN)", () => {
+    const blank = [
+      ["LRN", "FULL NAME (LAST, FIRST, MIDDLE)", "SEX", "BIRTHDATE (MM/DD/YYYY)", "AGE", "PARENT", "GRADE LEVEL", "STRAND", "SECTION", "ADVISER"],
+      ...Array.from({ length: 3 }, () => ["", "", "", "", "", "", "", "", "", ""]),
+    ];
+    const result = parseMasterlistRows(blank);
+    expect(result.rows).toHaveLength(0);
+    expect(result.skipped).toBe(0);
+    expect(result.errors).toHaveLength(0);
+    expect(result.stoppedAtRow).toBeUndefined();
+  });
+
+  it("rejects a duplicated LRN and reports both row numbers", () => {
+    const header = ["LRN", "FULL NAME (LAST, FIRST, MIDDLE)", "SEX", "BIRTHDATE (MM/DD/YYYY)", "AGE", "PARENT", "GRADE LEVEL", "STRAND", "SECTION", "ADVISER"];
+    const rowA = ["123456789012", "DELA CRUZ, JUAN A.", "M", "05/14/2009", "15", "", "7", "STEM", "SAMPAGUITA", "MS. SANTOS"];
+    const rowB = ["123456789012", "DELA CRUZ, JUAN A.", "M", "05/14/2009", "15", "", "7", "STEM", "SAMPAGUITA", "MS. SANTOS"];
+
+    const result = parseMasterlistRows([header, rowA, rowB]);
+    expect(result.rows).toHaveLength(0);
+    expect(result.skipped).toBe(1);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain("Row 3");
+    expect(result.errors[0]).toContain("duplicate LRN 123456789012");
+    expect(result.errors[0]).toContain("Row 2");
+    expect(result.stoppedAtRow).toBe(3);
+  });
+
+  it("allows distinct LRNs and re-uploads of the same LRN set", () => {
+    const header = ["LRN", "FULL NAME (LAST, FIRST, MIDDLE)", "SEX", "BIRTHDATE (MM/DD/YYYY)", "AGE", "PARENT", "GRADE LEVEL", "STRAND", "SECTION", "ADVISER"];
+    const a = ["123456789012", "DELA CRUZ, JUAN A.", "M", "05/14/2009", "15", "", "7", "STEM", "SAMPAGUITA", "MS. SANTOS"];
+    const b = ["987654321098", "SANTOS, MARIA L.", "F", "02/22/2010", "14", "", "8", "GAS", "ROSAL", "MR. REYES"];
+    const result = parseMasterlistRows([header, a, b]);
+    expect(result.rows).toHaveLength(2);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("stops at the first invalid row and clears the valid prefix (all-or-nothing)", () => {
+    const header = ["LRN", "FULL NAME (LAST, FIRST, MIDDLE)", "SEX", "BIRTHDATE (MM/DD/YYYY)", "AGE", "PARENT", "GRADE LEVEL", "STRAND", "SECTION", "ADVISER"];
+    const good = ["123456789012", "DELA CRUZ, JUAN A.", "M", "05/14/2009", "15", "DELA CRUZ, MARIA", "7", "STEM", "SAMPAGUITA", "MS. SANTOS"];
+    const bad = ["987654321098", "SANTOS, MARIA L.", "", "02/22/2010", "14", "SANTOS, PEDRO", "8", "GAS", "ROSAL", "MR. REYES"];
+
+    const result = parseMasterlistRows([header, good, bad, good]);
+    expect(result.rows).toHaveLength(0);
+    expect(result.skipped).toBe(1);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain("Row 3");
+    expect(result.errors[0]).toContain("missing Sex/Gender");
+    expect(result.stoppedAtRow).toBe(3);
+  });
+});
+
+describe("validateMasterlistRow (required-field rules)", () => {
+  const ok = [
+    "123456789012",
+    "DELA CRUZ, JUAN A.",
+    "M",
+    "05/14/2009",
+    "15",
+    "DELA CRUZ, MARIA",
+    "7",
+    "STEM",
+    "SAMPAGUITA",
+    "MS. SANTOS",
+  ];
+
+  it("accepts a fully-formed row", () => {
+    const result = validateMasterlistRow(ok);
+    expect(result.kind).toBe("ok");
+  });
+
+  it("ignores a row with no LRN", () => {
+    expect(validateMasterlistRow(["", "DELA CRUZ, JUAN A.", "M", "05/14/2009"]).kind).toBe("ignored");
+  });
+
+  it("flags an LRN cell that is present but not 12 digits", () => {
+    for (const bad of ["1364001100", "ABCD12345678", "1364001100012"]) {
+      const result = validateMasterlistRow([bad, ...ok.slice(1)]);
+      expect(result.kind, `expected ${bad} to fail`).toBe("invalid");
+      if (result.kind !== "invalid") continue;
+      expect(result.problems.join(" ")).toContain("invalid LRN — must be exactly 12 digits, numbers only");
+    }
+  });
+
+  it("does not treat a 12-digit number in another column as the LRN", () => {
+    // LRN cell empty; a stray 12-digit run elsewhere must not rescue the row.
+    const result = validateMasterlistRow(["", "DELA CRUZ, JUAN A.", "M", "05/14/2009", "15", "123456789012"]);
+    expect(result.kind).toBe("ignored");
+  });
+
+  it("flags every missing required detail by name", () => {
+    // LRN present; name, sex, birthdate, grade all blank.
+    const result = validateMasterlistRow(["123456789012", "", "", "", "", "", "", "", "", ""]);
+    expect(result.kind).toBe("invalid");
+    if (result.kind !== "invalid") return;
+    expect(result.problems.join(" ")).toContain("missing Full Name");
+    expect(result.problems.join(" ")).toContain("missing Sex/Gender");
+    expect(result.problems.join(" ")).toContain("missing Birthdate");
+    expect(result.problems.join(" ")).toContain("missing Grade Level");
+  });
+
+  it("rejects a Full Name that is not in LAST, FIRST format", () => {
+    const result = validateMasterlistRow([...ok.slice(0, 1), "JUAN DELA CRUZ", ...ok.slice(2)]);
+    expect(result.kind).toBe("invalid");
+    if (result.kind !== "invalid") return;
+    expect(result.problems.join(" ")).toContain('invalid Full Name — use "Last Name, First Name, Middle Initial"');
+  });
+
+  it("rejects a multi-letter middle name", () => {
+    const result = validateMasterlistRow([...ok.slice(0, 1), "DELA CRUZ, JUAN ANTHONY", ...ok.slice(2)]);
+    expect(result.kind).toBe("invalid");
+    if (result.kind !== "invalid") return;
+    expect(result.problems.join(" ")).toContain("middle name must be a single initial");
+  });
+
+  it("rejects an invalid Sex/Gender", () => {
+    const result = validateMasterlistRow([...ok.slice(0, 2), "X", ...ok.slice(3)]);
+    expect(result.kind).toBe("invalid");
+    if (result.kind !== "invalid") return;
+    expect(result.problems.join(" ")).toContain("invalid Sex/Gender — use Male or Female");
+  });
+
+  it("rejects a malformed or impossible Birthdate", () => {
+    for (const bad of ["2009-05-14", "13/45/2009", "02/30/2009", "5/4/2009"]) {
+      const result = validateMasterlistRow([...ok.slice(0, 3), bad, ...ok.slice(4)]);
+      expect(result.kind, `expected ${bad} to fail`).toBe("invalid");
+      if (result.kind !== "invalid") continue;
+      expect(result.problems.join(" ")).toContain("invalid Birthdate — use MM/DD/YYYY");
+    }
+  });
+
+  it("rejects an out-of-range Grade Level", () => {
+    const result = validateMasterlistRow([...ok.slice(0, 6), "Grade 13", ...ok.slice(7)]);
+    expect(result.kind).toBe("invalid");
+    if (result.kind !== "invalid") return;
+    expect(result.problems.join(" ")).toContain("invalid Grade Level — use Grade 7 to Grade 12");
+  });
+
+  it("accepts bare grades and M/F shorthand", () => {
+    const result = validateMasterlistRow([...ok.slice(0, 2), "f", ...ok.slice(3, 6), "12", ...ok.slice(7)]);
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
+    expect(result.row.sex).toBe("Female");
+    expect(result.row.gradeLevel).toBe("Grade 12");
+  });
+
+  it("isValidCalendarDate accepts real dates and rejects impossible ones", () => {
+    expect(isValidCalendarDate("02/29/2008")).toBe(true);
+    expect(isValidCalendarDate("02/29/2009")).toBe(false);
+    expect(isValidCalendarDate("12/31/2010")).toBe(true);
+    expect(isValidCalendarDate("04/31/2010")).toBe(false);
+  });
+});
+
+describe("extractAndParseMasterlist (structured docx table path)", () => {
+  const DOC_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>STUDENT MASTER LIST</w:t></w:r></w:p>
+    <w:p><w:r><w:t>SY: 2026-2027</w:t></w:r></w:p>
+    <w:tbl>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>LRN</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>FULL NAME (LAST NAME, FIRST NAME, MIDDLE NAME)</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>SEX (MALE OR FEMALE)</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>BIRTHDATE(MM/DD/YYYY)</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>AGE AS OF JUNE 8, 2026</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>FULL NAME OF PARENT/LEGAL GUARDIAN</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>GRADE LEVEL</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>STRAND/CLUSTER(IF SHS)</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>SECTION</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>ADVISER NAME</w:t></w:r></w:p></w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>1) 123456789012</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>DELA CRUZ, JUAN A.</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>M</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>05/14/2009</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>15</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>DELA CRUZ, MARIA</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>7</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t></w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>SAMPAGUITA</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>MS. SANTOS</w:t></w:r></w:p></w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>2) 987654321098</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>SANTOS, MARIA L.</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>F</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>02/22/2010</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>14</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>SANTOS, PEDRO</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>8</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>GAS</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>ROSAL</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>MR. REYES</w:t></w:r></w:p></w:tc>
+      </w:tr>
+    </w:tbl>
+  </w:body>
+</w:document>`;
+
+  async function templateFile(): Promise<File> {
+    const JSZip = (await import("jszip")).default;
+    const zip = new JSZip();
+    zip.file("word/document.xml", DOC_XML);
+    const blob = await zip.generateAsync({ type: "blob" });
+    return new File([blob], "masterlist.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+  }
+
+  it("recovers rows from the real table layout, including the 1) LRN marker cell", async () => {
+    const { parsed, text } = await extractAndParseMasterlist(await templateFile());
+    expect(parsed.rows).toHaveLength(2);
+    expect(parsed.skipped).toBe(0);
+    expect(parsed.rows[0].lrn).toBe("123456789012");
+    expect(parsed.rows[0].sex).toBe("Male");
+    expect(parsed.rows[0].gradeLevel).toBe("Grade 7");
+    expect(parsed.rows[0].section).toBe("SAMPAGUITA");
+    expect(parsed.rows[0].fullName).toBe("Dela Cruz, Juan A.");
+    expect(parsed.rows[0].parentGuardian).toBe("Dela Cruz, Maria");
+    expect(parsed.rows[0].adviser).toBe("Ms. Santos");
+    expect(parsed.rows[1].sex).toBe("Female");
+    expect(parsed.rows[1].strand).toBe("GAS");
+    expect(extractSchoolYear(text)).toBe("2026-2027");
+  });
 });
 
 describe("isFullMasterlistMatch (D-10)", () => {
@@ -128,12 +426,19 @@ describe("isFullMasterlistMatch (D-10)", () => {
     birthdate: "05/14/2009",
     gradeSection: "7 - SAMPAGUITA",
     strand: "STEM",
+    sex: "Male",
+    gradeLevel: "Grade 7",
+    section: "SAMPAGUITA",
+    parentGuardian: "DELA CRUZ, MARIA",
+    adviser: "MS. SANTOS",
   };
   const student = {
     lrn: "123456789012",
     firstName: "Juan",
     lastName: "Dela Cruz",
     birthdate: "05/14/2009",
+    gender: "Male",
+    gradeLevel: "Grade 7",
   };
 
   it("matches on LRN + normalized full name + birthdate", () => {
@@ -158,5 +463,225 @@ describe("isFullMasterlistMatch (D-10)", () => {
     expect(
       isFullMasterlistMatch({ ...row, fullName: "SANTOS, MARIA L." }, student)
     ).toBe(false);
+  });
+
+  it("does not match on sex mismatch when both sides carry a value", () => {
+    expect(
+      isFullMasterlistMatch({ ...row, sex: "Female" }, { ...student, gender: "Male" })
+    ).toBe(false);
+    expect(
+      isFullMasterlistMatch({ ...row, sex: "Male" }, { ...student, gender: "Male" })
+    ).toBe(true);
+  });
+
+  it("ignores sex when the masterlist cell is blank", () => {
+    expect(isFullMasterlistMatch({ ...row, sex: "" }, { ...student, gender: "Female" })).toBe(true);
+  });
+
+  it("does not match on grade level mismatch when both sides carry a value", () => {
+    expect(
+      isFullMasterlistMatch(
+        { ...row, gradeLevel: "Grade 8" },
+        { ...student, gradeLevel: "Grade 7" }
+      )
+    ).toBe(false);
+    expect(
+      isFullMasterlistMatch(
+        { ...row, gradeLevel: "Grade 7" },
+        { ...student, gradeLevel: "Grade 7" }
+      )
+    ).toBe(true);
+  });
+});
+
+describe("splitFullName", () => {
+  it("splits the template's LAST, FIRST MIDDLE form and Title Cases it", () => {
+    expect(splitFullName("DELA CRUZ, JUAN A.")).toEqual({
+      lastName: "Dela Cruz",
+      firstName: "Juan",
+      middleName: "A.",
+    });
+  });
+
+  it("handles a comma-less name with a token fallback", () => {
+    expect(splitFullName("JUAN A. DELA CRUZ")).toEqual({
+      firstName: "Juan",
+      middleName: "A. Dela",
+      lastName: "Cruz",
+    });
+  });
+
+  it("handles a single-token name", () => {
+    expect(splitFullName("MARIANO")).toEqual({
+      lastName: "Mariano",
+      firstName: "",
+      middleName: "",
+    });
+  });
+});
+
+describe("partitionMasterlistMatches (upload flow)", () => {
+  const row = (lrn: string, extra: Partial<MasterlistRow> = {}): MasterlistRow => ({
+    lrn,
+    fullName: "Dela Cruz, Juan A.",
+    birthdate: "05/14/2009",
+    gradeSection: "7 - SAMPAGUITA",
+    strand: "STEM",
+    sex: "Male",
+    gradeLevel: "Grade 7",
+    section: "SAMPAGUITA",
+    parentGuardian: "",
+    adviser: "",
+    ...extra,
+  });
+  const student = (id: string, lrn: string, status: string) => ({
+    id,
+    lrn,
+    firstName: "Juan",
+    lastName: "Dela Cruz",
+    birthdate: "05/14/2009",
+    gender: "Male",
+    gradeLevel: "Grade 7",
+    status,
+  });
+
+  it("routes pending matches to approval and approved ones to the stamp list", () => {
+    const result = partitionMasterlistMatches(
+      [row("111111111111"), row("222222222222")],
+      [student("s1", "111111111111", "pending"), student("s2", "222222222222", "approved")]
+    );
+    expect(result.pendingIds).toEqual(["s1"]);
+    expect(result.alreadyApprovedIds).toEqual(["s2"]);
+    expect(result.forReview).toBe(0);
+    expect(result.awaiting).toBe(0);
+    expect(result.alreadyRejected).toBe(0);
+  });
+
+  it("counts unregistered rows as awaiting and mismatches as review", () => {
+    const result = partitionMasterlistMatches(
+      [row("111111111111"), row("222222222222"), row("333333333333", { fullName: "Santos, Maria L." })],
+      [student("s2", "222222222222", "pending"), student("s3", "333333333333", "pending")]
+    );
+    expect(result.awaiting).toBe(1);
+    expect(result.pendingIds).toEqual(["s2"]);
+    expect(result.forReview).toBe(1);
+  });
+
+  it("never overturns an explicit rejection", () => {
+    const result = partitionMasterlistMatches(
+      [row("111111111111")],
+      [student("s1", "111111111111", "rejected")]
+    );
+    expect(result.pendingIds).toEqual([]);
+    expect(result.alreadyApprovedIds).toEqual([]);
+    expect(result.alreadyRejected).toBe(1);
+  });
+
+  it("does not auto-approve when a required detail differs", () => {
+    const result = partitionMasterlistMatches(
+      [row("111111111111", { sex: "Female" })],
+      [student("s1", "111111111111", "pending")]
+    );
+    expect(result.pendingIds).toEqual([]);
+    expect(result.forReview).toBe(1);
+  });
+});
+
+describe("findFirstLrnConflict / describeLrnConflict", () => {
+  const row = (lrn: string, sheetRow: number): MasterlistRow => ({
+    lrn,
+    fullName: "Dela Cruz, Juan A.",
+    birthdate: "05/14/2009",
+    gradeSection: "7 - SAMPAGUITA",
+    strand: "STEM",
+    sex: "Male",
+    gradeLevel: "Grade 7",
+    section: "SAMPAGUITA",
+    parentGuardian: "",
+    adviser: "",
+    sheetRow,
+  });
+
+  it("returns null when no LRN is known to the system", () => {
+    expect(findFirstLrnConflict([row("111111111111", 2)], new Map())).toBeNull();
+  });
+
+  it("reports the topmost conflicting row in sheet order", () => {
+    const conflicts = new Map([
+      ["333333333333", { reason: "registered" as const, detail: "approved" }],
+      ["222222222222", { reason: "listed" as const, detail: "enrolled" }],
+    ]);
+    const clash = findFirstLrnConflict(
+      [row("111111111111", 2), row("222222222222", 3), row("333333333333", 4)],
+      conflicts
+    );
+    expect(clash?.row.lrn).toBe("222222222222");
+    expect(clash?.row.sheetRow).toBe(3);
+  });
+
+  it("words a registered clash with the account status", () => {
+    expect(
+      describeLrnConflict(row("123456789012", 5), { reason: "registered", detail: "approved" })
+    ).toBe(
+      "Row 5: LRN 123456789012 is already registered (approved account). No LRN may be reused — nothing was imported."
+    );
+  });
+
+  it("words a masterlist clash as awaiting registration", () => {
+    expect(
+      describeLrnConflict(row("987654321098", 7), { reason: "listed", detail: "enrolled" })
+    ).toBe(
+      "Row 7: LRN 987654321098 is already on the Student Masterlist list (awaiting registration). No LRN may be reused — nothing was imported."
+    );
+  });
+});
+
+describe("toTitleCase", () => {
+  it("capitalises only the first letter of each name part", () => {
+    expect(toTitleCase("PADILLA, LEONARD")).toBe("Padilla, Leonard");
+    expect(toTitleCase("leonard padilla")).toBe("Leonard Padilla");
+    expect(toTitleCase("DELA CRUZ, JUAN A.")).toBe("Dela Cruz, Juan A.");
+  });
+
+  it("keeps hyphenated and apostrophised parts capitalised", () => {
+    expect(toTitleCase("MARIA-CLARA")).toBe("Maria-Clara");
+    expect(toTitleCase("O'BRIEN")).toBe("O'Brien");
+    expect(toTitleCase("MC DONALD")).toBe("Mc Donald");
+  });
+
+  it("normalises stray casing and leaves short values alone", () => {
+    expect(toTitleCase("dELA cRUZ")).toBe("Dela Cruz");
+    expect(toTitleCase("a.")).toBe("A.");
+    expect(toTitleCase("")).toBe("");
+  });
+});
+
+describe("normalizeSex / normalizeGradeLevel / toIsoBirthdate / extractSchoolYear", () => {
+  it("normalizes sex values", () => {
+    expect(normalizeSex("M")).toBe("Male");
+    expect(normalizeSex("MALE")).toBe("Male");
+    expect(normalizeSex("female")).toBe("Female");
+    expect(normalizeSex("F")).toBe("Female");
+    expect(normalizeSex("")).toBe("");
+    expect(normalizeSex("x")).toBe("");
+  });
+
+  it("normalizes grade levels to the DB CHECK shape", () => {
+    expect(normalizeGradeLevel("7")).toBe("Grade 7");
+    expect(normalizeGradeLevel("grade 11")).toBe("Grade 11");
+    expect(normalizeGradeLevel("GRADE 12")).toBe("Grade 12");
+    expect(normalizeGradeLevel("")).toBe("");
+  });
+
+  it("converts template birthdates to ISO", () => {
+    expect(toIsoBirthdate("05/14/2009")).toBe("2009-05-14");
+    expect(toIsoBirthdate("2009-05-14")).toBe("2009-05-14");
+    expect(toIsoBirthdate("unknown")).toBe("unknown");
+  });
+
+  it("extracts the SY header label", () => {
+    expect(extractSchoolYear("STUDENT MASTER LIST\nSY: 2026-2027")).toBe("2026-2027");
+    expect(extractSchoolYear("S.Y. 2026 – 2027")).toBe("2026-2027");
+    expect(extractSchoolYear("no year here")).toBe("");
   });
 });

@@ -48,7 +48,12 @@ export interface Student {
   registeredAt: string;
   /** 072: optional student-uploaded photo (student-pictures bucket URL). */
   profilePictureUrl?: string;
-  verificationStatus?: "autoApproved" | "forReview" | "blocked";
+  /** MASTER-02: 'automatic' — the registration matched the Student
+   *  Masterlist (LRN + full name + birthdate + grade level + gender) and
+   *  was approved with no human action; 'manual' — any mismatch (or no
+   *  masterlist row), decided by the SSLG Adviser in Student Enrollment.
+   *  Persisted in students.verification (migration 100). */
+  verificationStatus?: "automatic" | "manual";
   mismatchCount?: number;
 }
 

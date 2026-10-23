@@ -1,31 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { generateComeaCertificate, generateChiefElectionReport } from "../reports";
 import { defaultAccomplishmentReportDraft } from "../accomplishmentReportContent";
-import type { Candidate } from "../../context/AppContext";
-
-function candidate(id: string, surname: string, givenName: string): Candidate {
-  return {
-    id,
-    surname,
-    givenName,
-    gradeLevel: "Grade 11",
-    position: "President",
-    gender: "Male",
-    dateOfBirth: "2009-01-01",
-    age: 17,
-    email: `${givenName.toLowerCase()}@test.local`,
-    mobileNumber: "09171234567",
-    homeAddress: "Daet, Camarines Norte",
-    documents: {
-      applicationForm: true,
-      introductoryProfile: true,
-    },
-    status: "approved",
-    submittedAt: "2026-01-01T00:00:00Z",
-    votes: 0,
-    studentId: "student-1",
-  };
-}
 
 describe("generateComeaCertificate", () => {
   it("returns a non-empty HTML document", () => {
@@ -63,17 +38,6 @@ describe("generateComeaCertificate", () => {
 describe("generateChiefElectionReport", () => {
   const sampleInput = {
     periodLabel: "2026-2027",
-    totals: { totalVoters: 100, voted: 75, notVoted: 25, turnoutPct: 75 },
-    approvedCandidates: [candidate("1", "Dela Cruz", "Juan"), candidate("2", "Santos", "Maria")],
-    results: [
-      {
-        position: "President",
-        winnerName: "Juan Dela Cruz",
-        party: "Independent",
-        gradeLevel: "Grade 11",
-        votes: 120,
-      },
-    ],
   };
 
   it("returns a non-empty HTML document", () => {

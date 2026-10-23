@@ -1,22 +1,12 @@
 import React from "react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import {
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  LineChart,
-  Line,
-} from "recharts";
 import { motion } from "motion/react";
 import {
   Users,
   TrendingUp,
   Clock,
   Eye,
-  Activity,
   AlertCircle,
   Shield,
   ArrowUpRight,
@@ -38,7 +28,6 @@ export default function ChiefDashboard() {
     candidates,
     complaints,
     electionPeriod,
-    logs,
     currentUser,
   } = useApp();
 
@@ -93,19 +82,6 @@ export default function ChiefDashboard() {
   // Chief's pending-action callout counts only the current election's rows.
   const openComplaints = complaintsForElection(complaints, electionPeriod.id)
     .filter((c) => c.status === "filed").length;
-
-  const activityData = Array.from(
-    logs.reduce((map, log) => {
-      const day = log.timestamp.slice(5, 10) || "Today";
-      const entry = map.get(day) || { day, logins: 0, registrations: 0 };
-      if (log.action.toLowerCase().includes("login")) entry.logins += 1;
-      if (log.action.toLowerCase().includes("registration")) entry.registrations += 1;
-      map.set(day, entry);
-      return map;
-    }, new Map<string, { day: string; logins: number; registrations: number }>())
-  ).slice(0, 5);
-
-  const recentLogs = logs.slice(0, 5);
 
   // Session-only photo documentation shared with the Election Reports page.
   const reportImages = useReportImages();
@@ -313,94 +289,8 @@ export default function ChiefDashboard() {
         </motion.div>
       )}
 
-      {/* Analytics Visualizations */}
+      {/* Student Registration Overview */}
       <div className="grid grid-cols-1 gap-6">
-        <div className="bg-white rounded-2xl shadow-xs border border-gray-200/90 p-6">
-          <div className="mb-4">
-            <h3 className="font-bold text-gray-900 text-sm">System Traffic</h3>
-            <p className="text-gray-400 text-xs mt-0.5">Logins & registrations (last 5 days)</p>
-          </div>
-          <ResponsiveContainer width="100%" height={230}>
-            <LineChart data={activityData} margin={{ top: 5, right: 10, left: -15, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-              <XAxis dataKey="day" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip
-                contentStyle={{
-                  fontSize: 12,
-                  borderRadius: 12,
-                  boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
-                  border: "1px solid #e5e7eb",
-                }}
-              />
-              <Line
-                type="monotone"
-                dataKey="logins"
-                stroke="#5C0102"
-                strokeWidth={2.5}
-                dot={{ r: 3 }}
-                isAnimationActive
-                animationDuration={1000}
-              />
-              <Line
-                type="monotone"
-                dataKey="registrations"
-                stroke="#DC2626"
-                strokeWidth={2}
-                dot={{ r: 3 }}
-                isAnimationActive
-                animationDuration={1000}
-                strokeDasharray="4 4"
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* Activity & Registration Overview Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white rounded-2xl shadow-xs border border-gray-200/90 p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-bold text-gray-900 text-sm flex items-center gap-2">
-              <Activity size={16} className="text-[#5C0102]" />
-              <span>Recent Audit Events</span>
-            </h3>
-            <Link
-              to="/admin/logs"
-              className="text-xs font-semibold text-[#5C0102] hover:underline flex items-center gap-1"
-            >
-              <span>View full log</span>
-              <ArrowUpRight size={13} />
-            </Link>
-          </div>
-
-          <div className="space-y-3">
-            {recentLogs.map((log) => (
-              <div
-                key={log.id}
-                className="flex items-start gap-3 p-2.5 rounded-xl hover:bg-gray-50/80 transition-colors text-xs"
-              >
-                <div
-                  className={`w-2 h-2 rounded-full shrink-0 mt-1.5 ${
-                    log.type === "success"
-                      ? "bg-emerald-500"
-                      : log.type === "error"
-                      ? "bg-red-500"
-                      : log.type === "warning"
-                      ? "bg-amber-500"
-                      : "bg-blue-500"
-                  }`}
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="text-gray-900 font-bold truncate">{log.action}</div>
-                  <div className="text-gray-500 truncate mt-0.5">{log.details}</div>
-                  <div className="text-gray-400 text-[10px] mt-0.5">{log.timestamp}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
         <div className="bg-white rounded-2xl shadow-xs border border-gray-200/90 p-6">
           <h3 className="font-bold text-gray-900 text-sm flex items-center gap-2 mb-4">
             <Users size={16} className="text-[#5C0102]" />

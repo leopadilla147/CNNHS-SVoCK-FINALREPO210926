@@ -19,6 +19,13 @@ import { isSupabaseConfigured, supabase } from "./supabase";
 import { clearSessionToken, saveSessionToken } from "./session";
 import { canonicalAuditRole } from "./auditRoles";
 import { toEvidenceArray } from "./complaints";
+import {
+  splitFullName,
+  toIsoBirthdate,
+  toTitleCase,
+  type LrnConflictInfo,
+  type MasterlistRow,
+} from "./masterlistDocx";
 
 export const toDate = (value?: string) => value ? value.slice(0, 10) : "";
 // v1.1 election_periods stores start_time/end_time as PostgreSQL `time`
@@ -144,9 +151,16 @@ export async function registerStudentDirect(input: {
   const passwordHash = await hashPassword(input.password);
   const id = crypto.randomUUID();
 
+  // Names are stored Title Cased ("Leonard Padilla"), matching the masterlist
+  // presentation — only the first letter of each name part is a capital.
+  // Comparisons against the masterlist stay case-insensitive (normalize()).
+  const firstName = toTitleCase(input.firstName.trim());
+  const middleName = toTitleCase((input.middleName || "").trim());
+  const lastName = toTitleCase(input.lastName.trim());
+
   const { data: master, error: masterError } = await client
     .from("student_masterlist")
-    .select("id, first_name, last_name, birthdate, grade_level")
+    .select("id, first_name, last_name, birthdate, grade_level, gender")
     .eq("lrn", lrn)
     .eq("enrollment_status", "enrolled")
     .maybeSingle();
@@ -154,29 +168,31 @@ export async function registerStudentDirect(input: {
   if (masterError) throw new Error(masterError.message);
 
   let status: "pending" | "approved" | "rejected";
-  let verificationStatus: "autoApproved" | "forReview" | "blocked" | undefined;
+  let verificationStatus: "automatic" | "manual" | undefined;
   let mismatchCount: number;
   let masterlistId: string | null;
 
   if (master) {
     const mismatchChecks = [
-      normalize(master.first_name) !== normalize(input.firstName),
-      normalize(master.last_name) !== normalize(input.lastName),
+      normalize(master.first_name) !== normalize(firstName),
+      normalize(master.last_name) !== normalize(lastName),
       toDate(master.birthdate) !== input.birthdate,
       normalize(master.grade_level) !== normalize(input.gradeLevel),
+      normalize(master.gender) !== normalize(input.gender),
     ];
     mismatchCount = mismatchChecks.filter(Boolean).length;
 
-    if (mismatchCount >= 2) {
-      throw new Error("The registration information does not match school enrollment records.");
-    }
-
+    // Locked flow (MASTER-02): a full match (first name, last name,
+    // birthdate, grade level, gender — LRN is the lookup key) approves the
+    // registration automatically; ANY mismatch leaves it pending for the
+    // SSLG Adviser's manual review.  The former 2+-mismatch hard block was
+    // retired — the adviser decides, never a client-side rejection.
     status = mismatchCount === 0 ? "approved" : "pending";
-    verificationStatus = mismatchCount === 0 ? "autoApproved" : "forReview";
+    verificationStatus = mismatchCount === 0 ? "automatic" : "manual";
     masterlistId = master.id;
   } else {
     status = "pending";
-    verificationStatus = "forReview";
+    verificationStatus = "manual";
     mismatchCount = 0;
     masterlistId = null;
   }
@@ -184,16 +200,17 @@ export async function registerStudentDirect(input: {
   // v1.1 (036) trimmed students: verification_status / mismatch_count /
   // reviewed_at / must_change_password / session_version were DROPPED, so
   // they must NOT appear in the insert (PGRST204 column-not-found -> 400).
-  // The match result still drives `status`; the verification badge is now
-  // derived on the client only (see the returned Student below).
+  // Migration 100 re-introduces students.verification ('automatic' /
+  // 'manual') for the masterlist flow; the verification badge is rendered
+  // from it (see mapStudent).
   const { error } = await client
     .from("students")
     .insert({
       id,
       masterlist_id: masterlistId,
-      first_name: input.firstName,
-      middle_name: input.middleName || null,
-      last_name: input.lastName,
+      first_name: firstName,
+      middle_name: middleName || null,
+      last_name: lastName,
       grade_level: input.gradeLevel,
       gender: input.gender,
       birthdate: input.birthdate,
@@ -201,6 +218,7 @@ export async function registerStudentDirect(input: {
       email: input.email,
       password_hash: passwordHash,
       status,
+      verification: verificationStatus,
     });
 
   if (error) {
@@ -213,9 +231,9 @@ export async function registerStudentDirect(input: {
 
   return {
     id,
-    firstName: input.firstName,
-    middleName: input.middleName || undefined,
-    lastName: input.lastName,
+    firstName,
+    middleName: middleName || undefined,
+    lastName,
     gradeLevel: input.gradeLevel,
     gender: input.gender,
     birthdate: input.birthdate,
@@ -263,8 +281,8 @@ export async function signInStudentDirect(email: string, password: string): Prom
   if (session.status !== "approved") {
     throw new Error(
       session.status === "pending"
-        ? "Your account is still pending Commissioner approval."
-        : "Your account has been rejected. Please contact the Commissioner of Grievance."
+        ? "Your account is still awaiting SSLG Adviser approval."
+        : "Your account has been rejected. Please contact the SSLG Adviser."
     );
   }
 
@@ -318,6 +336,113 @@ export async function importStudentMasterlistCsv(csvText: string, schoolYear: st
       gender: record.gender || "",
       school_year: schoolYear,
       enrollment_status: record.enrollment_status || "enrolled",
+    });
+  });
+
+  if (!payload.length) return { imported: 0, skipped, errors };
+
+  const { error } = await client
+    .from("student_masterlist")
+    .upsert(payload, { onConflict: "lrn,school_year" });
+
+  if (error) throw new Error(error.message);
+  return { imported: payload.length, skipped, errors };
+}
+
+/**
+ * Which of the supplied LRNs already exist in the system (MASTER-01 upload
+ * pre-check): as a registered student account (public.students) or as an
+ * existing Student Masterlist row (the awaiting-registration list).
+ *
+ * School year is deliberately ignored — an LRN identifies one learner — so a
+ * sheet may not re-introduce an LRN the system already knows about.  Rows are
+ * keyed by LRN, and a registered account wins the description when both
+ * exist.  Lookups are chunked to keep the PostgREST query string bounded.
+ */
+export async function findExistingLrns(
+  lrns: string[]
+): Promise<Map<string, LrnConflictInfo>> {
+  const client = requireSupabase();
+  const found = new Map<string, LrnConflictInfo>();
+  const unique = Array.from(new Set(lrns));
+  const CHUNK = 300;
+
+  for (let i = 0; i < unique.length; i += CHUNK) {
+    const batch = unique.slice(i, i + CHUNK);
+    const [studentsRes, masterlistRes] = await Promise.all([
+      client.from("students").select("lrn, status").in("lrn", batch),
+      client.from("student_masterlist").select("lrn, enrollment_status").in("lrn", batch),
+    ]);
+    if (studentsRes.error) throw new Error(studentsRes.error.message);
+    if (masterlistRes.error) throw new Error(masterlistRes.error.message);
+
+    for (const row of studentsRes.data || []) {
+      found.set(row.lrn, { reason: "registered", detail: row.status || "pending" });
+    }
+    for (const row of masterlistRes.data || []) {
+      if (!found.has(row.lrn)) {
+        found.set(row.lrn, { reason: "listed", detail: row.enrollment_status || "enrolled" });
+      }
+    }
+  }
+
+  return found;
+}
+
+/**
+ * Persist parsed CNNHS-MASTER-LIST-FORMAT.docx rows into student_masterlist
+ * (MASTER-01 insert flow).  Upserts on (lrn, school_year) so re-uploading a
+ * corrected sheet updates rather than duplicates.  Rows whose grade level or
+ * birthdate cannot be mapped to the DB CHECK shapes are skipped and reported
+ * — a partially-readable row must not abort the whole sheet.
+ */
+export async function importStudentMasterlistDocx(
+  rows: MasterlistRow[],
+  schoolYear: string
+): Promise<CsvImportResult> {
+  const client = requireSupabase();
+
+  // Guard: one LRN may appear only once per sheet.  Duplicates would make
+  // PostgREST's upsert fail with the cryptic "ON CONFLICT DO UPDATE command
+  // cannot affect row a second time"; the parser already rejects them, so
+  // this only catches a caller that bypassed it.
+  const seenLrn = new Set<string>();
+  for (const row of rows) {
+    if (seenLrn.has(row.lrn)) {
+      throw new Error(
+        `Duplicate LRN ${row.lrn} in the masterlist — no LRN may appear twice in the same sheet.`
+      );
+    }
+    seenLrn.add(row.lrn);
+  }
+
+  const payload: Record<string, string | null>[] = [];
+  const errors: string[] = [];
+  let skipped = 0;
+
+  rows.forEach((row, index) => {
+    const { lastName, firstName, middleName } = splitFullName(row.fullName);
+    const gradeLevel = /^Grade (7|8|9|10|11|12)$/.test(row.gradeLevel) ? row.gradeLevel : "";
+    const birthdate = toIsoBirthdate(row.birthdate);
+    if (!firstName || !lastName || !gradeLevel || !/^\d{4}-\d{2}-\d{2}$/.test(birthdate)) {
+      skipped += 1;
+      errors.push(`Row ${index + 2}: unreadable name, grade level, or birthdate — skipped.`);
+      return;
+    }
+    payload.push({
+      lrn: row.lrn,
+      first_name: firstName,
+      middle_name: middleName || null,
+      last_name: lastName,
+      birthdate,
+      grade_level: gradeLevel,
+      gender: row.sex || null,
+      section: row.section || null,
+      strand: row.strand || null,
+      parent_guardian: row.parentGuardian || null,
+      adviser_name: row.adviser || null,
+      school_year: schoolYear,
+      enrollment_status: "enrolled",
     });
   });
 
@@ -386,6 +511,32 @@ export async function fetchSupabaseState() {
   };
 }
 
+/**
+ * Pure builder for the students UPDATE payload (client state → DB).
+ *
+ * 036 trimmed students.reviewed_at, so only surviving columns are written.
+ * 100 adds `verification` ('automatic' | 'manual'), which rides along so
+ * client-side student state changes keep the persisted verdict in sync —
+ * but ONLY when the client actually knows it.  A state row that never
+ * carried a verdict must not blank out the DB value the registration /
+ * review flow already persisted (an auto-approved student must keep
+ * 'automatic', never be rewritten to null).
+ */
+export function buildStudentSyncPayload(student: Student) {
+  return {
+    first_name: student.firstName,
+    middle_name: student.middleName || null,
+    last_name: student.lastName,
+    grade_level: student.gradeLevel,
+    gender: student.gender,
+    birthdate: student.birthdate,
+    lrn: student.lrn,
+    email: student.email,
+    status: student.status,
+    ...(student.verificationStatus ? { verification: student.verificationStatus } : {}),
+  };
+}
+
 export async function syncStudents(next: Student[], previous: Student[]) {
   if (!supabase) return;
   const db = supabase;
@@ -393,18 +544,7 @@ export async function syncStudents(next: Student[], previous: Student[]) {
     if (!isUuid(student.id)) return Promise.resolve();
     const before = previous.find((s) => s.id === student.id);
     if (before && JSON.stringify(before) === JSON.stringify(student)) return Promise.resolve();
-    // 036 trimmed students.reviewed_at — write only surviving columns.
-    return db.from("students").update({
-      first_name: student.firstName,
-      middle_name: student.middleName || null,
-      last_name: student.lastName,
-      grade_level: student.gradeLevel,
-      gender: student.gender,
-      birthdate: student.birthdate,
-      lrn: student.lrn,
-      email: student.email,
-      status: student.status,
-    }).eq("id", student.id);
+    return db.from("students").update(buildStudentSyncPayload(student)).eq("id", student.id);
   }));
 }
 
@@ -669,8 +809,9 @@ function mapStudent(row: any): Student {
     email: row.email,
     registeredAt: toDate(row.registered_at),
     profilePictureUrl: row.profile_picture_url || undefined,
-    verificationStatus: row.verification_status || undefined,
-    mismatchCount: row.mismatch_count ?? undefined,
+    // 100: persisted 'automatic' | 'manual' verdict (was client-derived
+    // after 036 dropped verification_status).
+    verificationStatus: row.verification || undefined,
   };
 }
 
@@ -993,12 +1134,18 @@ export async function reviewStudentRpc(
   // Retained for call-site compatibility; 036 (AUTH-05) removed the
   // server-side p_actor_id parameter — the actor derives exclusively from
   // the session spine — so it is intentionally NOT sent.
-  _p_actor_id?: string
+  _p_actor_id?: string,
+  // 100: optional verification stamp on the approve path.  The upload
+  // auto-approve passes "automatic"; the adviser's manual review passes
+  // nothing (the RPC keeps the registration's own verdict, defaulting to
+  // 'manual').
+  p_verification?: "automatic" | "manual"
 ): Promise<any> {
   if (!supabase) throw new Error("Supabase is not configured.");
   const { data, error } = await supabase.rpc("review_student_rpc", {
     p_student_id,
     p_action,
+    p_verification: p_verification ?? null,
   });
   if (error) {
     const msg = [error.message, error.details, error.hint].filter(Boolean).join(" | ");

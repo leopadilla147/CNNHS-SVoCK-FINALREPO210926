@@ -155,10 +155,11 @@ export default function RegisterPage() {
       setStudents([...students, newStudent]);
       setSubmittedStatus(newStudent.status === "approved" ? "approved" : "pending");
       addLog({
-        user: `${form.firstName} ${form.lastName}`,
+        // newStudent carries the stored Title Cased name, not the raw input.
+        user: `${newStudent.firstName} ${newStudent.lastName}`,
         role: "Student",
         action: "Student Registration",
-        details: `Student registered (LRN: ${form.lrn}) - ${newStudent.status === "approved" ? "Auto approved" : "Pending Commissioner review"}`,
+        details: `Student registered (LRN: ${form.lrn}) - ${newStudent.status === "approved" ? "Auto approved via Student Masterlist" : "Awaiting SSLG Adviser review"}`,
         type: newStudent.status === "approved" ? "success" : "info",
       });
       setSubmitted(true);
@@ -189,19 +190,21 @@ export default function RegisterPage() {
           <p className="text-gray-500 text-sm mb-6">
             {submittedStatus === "approved" ? (
               <>
-                Your LRN matched the school enrollment master list. Your
-                account is now <strong>approved</strong> and ready for login.
+                Your registration details matched the official{" "}
+                <strong>Student Masterlist</strong> (LRN, full name, birthdate,
+                grade level, and gender). Your account has been{" "}
+                <strong>automatically approved</strong> and is ready for login.
               </>
             ) : (
               <>
                 Your registration has been submitted successfully. Your account is
-                now <strong>pending Commissioner review</strong>.
+                now <strong>awaiting SSLG Adviser review</strong>.
               </>
             )}
           </p>
           {submittedStatus === "pending" && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700 mb-6">
-              The Commissioner of Grievance can approve the account from Student Enrollment.
+              The SSLG Adviser can approve your account from Student Enrollment once your details are verified.
             </div>
           )}
           <Link
@@ -233,8 +236,9 @@ export default function RegisterPage() {
             </Link>
             <h1 className="text-gray-900 mb-1">Student Registration</h1>
             <p className="text-gray-500 text-sm">
-              Your LRN is checked first against the school master list. Matching records are
-              approved automatically; one minor mismatch is sent for Commissioner review.
+              Your details are checked against the Student Masterlist (LRN, full name,
+              birthdate, grade level, and gender). Exact matches are approved
+              automatically; any mismatch waits for SSLG Adviser review.
             </p>
           </div>
 

@@ -109,4 +109,58 @@ describe("reportDraft store", () => {
     expect(draft.objectives.length).toBeGreaterThan(0);
     expect(draft.periodLabel).toBe("2026-2027");
   });
+
+  describe("refreshReportDraftIfPristine", () => {
+    const officerNames = {
+      "LG-COMEA Grievance Commissioner": "GRIEVANCE OFFICER",
+      "LG-COMEA Electoral Commissioner": "ELECTORAL OFFICER",
+    };
+
+    it("upgrades a pristine template draft with late-arriving officer names", async () => {
+      const store = await loadStore();
+      store.ensureReportDraft({ periodLabel: "2026-2027" });
+
+      const refreshed = store.refreshReportDraftIfPristine({
+        periodLabel: "2026-2027",
+        officerNames,
+      });
+
+      expect(refreshed).not.toBeNull();
+      const noted = refreshed?.signatoryGroups.find((g) => g.heading === "Noted by:");
+      const byRole = Object.fromEntries(noted?.signatories.map((s) => [s.role, s.name]) ?? []);
+      expect(byRole["LG-COMEA Grievance Commissioner"]).toBe("GRIEVANCE OFFICER");
+      expect(byRole["LG-COMEA Electoral Commissioner"]).toBe("ELECTORAL OFFICER");
+      // Persisted for the next visit too.
+      const stored = JSON.parse(window.localStorage.getItem(KEY_2026) ?? "{}");
+      expect(JSON.stringify(stored.signatoryGroups)).toContain("GRIEVANCE OFFICER");
+    });
+
+    it("never touches a draft the Chief has edited", async () => {
+      const store = await loadStore();
+      const draft = store.ensureReportDraft({ periodLabel: "2026-2027" });
+      store.setReportDraft({ ...draft, rationaleLead: "MY EDITED LEAD" });
+
+      const refreshed = store.refreshReportDraftIfPristine({
+        periodLabel: "2026-2027",
+        officerNames,
+      });
+
+      expect(refreshed).toBeNull();
+      expect(store.getReportDraft().rationaleLead).toBe("MY EDITED LEAD");
+      expect(JSON.stringify(store.getReportDraft().signatoryGroups)).not.toContain(
+        "GRIEVANCE OFFICER"
+      );
+    });
+
+    it("is a no-op without officer names or a matching draft key", async () => {
+      const store = await loadStore();
+      const draft = store.ensureReportDraft({ periodLabel: "2026-2027" });
+
+      expect(store.refreshReportDraftIfPristine({ periodLabel: "2026-2027" })).toBeNull();
+      expect(store.refreshReportDraftIfPristine({ periodLabel: "2026-2027", officerNames: {} })).toBeNull();
+      // Different school-year key: nothing refreshed.
+      expect(store.refreshReportDraftIfPristine({ periodLabel: "2031-2032", officerNames })).toBeNull();
+      expect(store.getReportDraft()).toBe(draft);
+    });
+  });
 });

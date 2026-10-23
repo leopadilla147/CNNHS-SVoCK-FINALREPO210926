@@ -4,7 +4,7 @@ import { HelpCircle, Search, ChevronDown, ChevronRight, MessageCircle, Mail, Pho
 import { useApp } from "../../context/AppContext";
 
 const faqItems = [
-  { q: "How do I register as a voter?", a: "Go to the Registration page and fill out the required fields. Your LRN must match the school enrollment masterlist for automatic approval." },
+  { q: "How do I register as a voter?", a: "Go to the Registration page and fill out the required fields. Your details (LRN, full name, birthdate, grade level, and gender) must match the Student Masterlist for automatic approval." },
   { q: "How do I apply for candidacy?", a: "Once the candidacy period is open by the Electoral Board, go to Apply for Candidacy in your student dashboard and follow the 5-step process." },
   { q: "How does biometric voting work?", a: "On your first visit to the kiosk, you will log in with your student account and register your fingerprint. On subsequent votes, you just scan your fingerprint." },
   { q: "What if I forget my password?", a: "Contact the Commissioner of Grievance or your class adviser to reset your password." },

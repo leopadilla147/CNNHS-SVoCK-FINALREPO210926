@@ -1,20 +1,20 @@
 import { motion } from "motion/react";
-import { ChangeEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, ReactNode, useEffect, useRef, useState } from "react";
 import {
   Printer,
-  Trophy,
   ChevronDown,
   Download,
-  FileText,
   FileCheck,
   ImagePlus,
   Eye,
   PenLine,
   Plus,
   RotateCcw,
+  Save,
+  Check,
   Trash2,
 } from "lucide-react";
-import { useApp, Candidate, ElectionPeriod, LogEntry } from "../../context/AppContext";
+import { useApp } from "../../context/AppContext";
 import {
   generateChiefElectionReport, openPrintWindow, wrapReportDocument,
 } from "../../lib/reports";
@@ -23,14 +23,23 @@ import {
   type AccomplishmentReportImage,
 } from "../../lib/docxAccomplishmentReport";
 import {
+  defaultVenueLine,
+  resolveCommissionerNames,
+  resolveSignatoryRoleSelection,
+  SIGNATORY_ROLE_OPTIONS,
+  SIGNATORY_ROLE_OTHER,
   type AccomplishmentReportDraft,
+  type ReportSignatory,
   type ReportSignatoryGroup,
 } from "../../lib/accomplishmentReportContent";
 import {
+  getReportDraft,
+  refreshReportDraftIfPristine,
   resetReportDraft,
   setReportDraft,
   useReportDraft,
 } from "../../lib/reportDraft";
+import { listStaffRosterRpc } from "../../lib/supabaseData";
 import {
   addReportImages,
   clearReportImages,
@@ -39,15 +48,7 @@ import {
   setReportImageCaption,
   useReportImages,
 } from "../../lib/reportImages";
-import {
-  getLiveResultsRpc, getAbstainSummaryRpc, type LiveResultRow,
-} from "../../lib/supabaseData";
-import { EXECUTIVE_POSITIONS } from "../../lib/partyScope";
-
-// Canonical core-position ordering; every other position (including the
-// grade-level representatives) is derived from the live results.
-const CORE_POSITIONS = EXECUTIVE_POSITIONS;
-const isGradeRep = (p: string) => /representative/i.test(p);
+import { useConfirm } from "../../lib/useConfirm";
 
 /** Photo documentation: fixed render box for .docx embedding (in points). */
 const DOCX_IMAGE_MAX_WIDTH = 420;
@@ -80,19 +81,22 @@ async function fitImage(dataUrl: string): Promise<{ width: number; height: numbe
 /**
  * Election Reports (Chief Commissioner).
  *
- * v1.2 scope per the Chief's request:
- *   * the DepEd Enclosure Reports grid and the estimated voter-turnout
- *     charts/sections are REMOVED;
- *   * the results now come from the role-gated get_live_results_rpc
- *     (real per-candidate vote counts) and get_abstain_summary_rpc
- *     (046 abstain ledger), so the abstain percentage and the winners
- *     summary are computed from actual ballots;
- *   * the Winners Summary lists EVERY position on the ballot — including
- *     the grade-level representatives — each with a dropdown of all its
- *     candidates sorted by votes (highest first).
+ * v1.4 scope per the Chief's request:
+ *   * the on-page "CNNHS Student Election" summary and the Winners Summary
+ *     table are REMOVED — the page now focuses on the official LG-COMEA
+ *     Accomplishment Report (edit → preview → print → .docx);
+ *   * every editor field keeps unsaved local state and is persisted only
+ *     through its own Save button;
+ *   * "Reset to default text" asks for confirmation first;
+ *   * defaults come from the live election: the active period's school year
+ *     ("None" until a period exists), the current date/time, and the school +
+ *     Stage-4 venue on the SVoCK platform;
+ *   * signatory "Position / role" is a dropdown of the LG-COMEA titles
+ *     ("Others" reveals a free-text field);
+ *   * the "Download Base Template (.docx)" link is removed.
  */
 export default function AdminReports() {
-  const { candidates, electionPeriod, logs, currentUser } = useApp();
+  const { electionPeriod, currentUser } = useApp();
 
   // 068 renamed every officer account, so the acting chief's name replaces
   // the bundled template signatory.  Only the chief can resolve officer
@@ -100,108 +104,69 @@ export default function AdminReports() {
   // printing this page keeps the template line.
   const chiefName =
     currentUser?.commissionerRole === "chief" ? currentUser.name : undefined;
-  const approved = candidates.filter((c) => c.status === "approved");
 
-  const [liveResults, setLiveResults] = useState<LiveResultRow[] | null>(null);
-  const [abstainByPosition, setAbstainByPosition] = useState<Record<string, number>>({});
-  const [resultsError, setResultsError] = useState("");
+  const [isDownloadingDocx, setIsDownloadingDocx] = useState(false);
 
-  // Live results + abstain ledger are chief-gated RPCs (027 / 046); this
-  // tab is Chief-only, but a failure degrades to the candidate list with
-  // zero counts rather than breaking the page.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [rows, abstain] = await Promise.all([
-          getLiveResultsRpc(),
-          getAbstainSummaryRpc().catch(() => [] as { position: string; abstain_count: number }[]),
-        ]);
-        if (cancelled) return;
-        setLiveResults(rows);
-        const map: Record<string, number> = {};
-        abstain.forEach((a) => { map[a.position] = Number(a.abstain_count) || 0; });
-        setAbstainByPosition(map);
-      } catch (err) {
-        if (!cancelled) setResultsError(err instanceof Error ? err.message : "Live results unavailable.");
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
-
-  /**
-   * Per-position candidate rows sorted by votes (highest first).  Live
-   * rows win when available; otherwise the approved candidate list is
-   * used (votes stay 0 until ballots exist).
-   */
-  const resultsByPosition = useMemo(() => {
-    const map = new Map<string, Array<{ id: string; name: string; party: string; gradeLevel: string; votes: number; picture?: string }>>();
-
-    if (liveResults && liveResults.length > 0) {
-      liveResults.forEach((r) => {
-        const list = map.get(r.position) ?? [];
-        list.push({
-          id: r.candidate_id,
-          name: `${r.given_name} ${r.surname}`,
-          party: r.party_name || "Independent",
-          gradeLevel: "",
-          votes: Number(r.votes) || 0,
-        });
-        map.set(r.position, list);
-      });
-      // Enrich grade level from the candidate roster where available.
-      map.forEach((list) => list.forEach((row) => {
-        const c = approved.find((x) => x.id === row.id);
-        if (c) { row.gradeLevel = c.gradeLevel || ""; row.picture = c.picture; }
-      }));
-    } else {
-      approved.forEach((c) => {
-        const list = map.get(c.position) ?? [];
-        list.push({
-          id: c.id,
-          name: `${c.givenName} ${c.surname}`,
-          party: c.partyAffiliation || "Independent",
-          gradeLevel: c.gradeLevel || "",
-          votes: c.votes || 0,
-          picture: c.picture,
-        });
-        map.set(c.position, list);
-      });
-    }
-
-    map.forEach((list) => list.sort((a, b) => b.votes - a.votes));
-    return map;
-  }, [liveResults, approved]);
-
-  const positions = useMemo(() => {
-    const rank = (p: string): [number, string] => {
-      const i = CORE_POSITIONS.indexOf(p);
-      if (i >= 0) return [i, ""];
-      if (isGradeRep(p)) return [2, p];
-      return [1, p];
-    };
-    return [...resultsByPosition.keys()].sort((a, b) => {
-      const [ra, na] = rank(a);
-      const [rb, nb] = rank(b);
-      return ra !== rb ? ra - rb : na.localeCompare(nb);
-    });
-  }, [resultsByPosition]);
-
-  const totalVotesCast = useMemo(
-    () => [...resultsByPosition.values()].reduce((sum, list) => sum + list.reduce((s, c) => s + c.votes, 0), 0),
-    [resultsByPosition]
-  );
-  const totalAbstains = useMemo(
-    () => Object.values(abstainByPosition).reduce((s, n) => s + n, 0),
-    [abstainByPosition]
-  );
-  const totalBallots = totalVotesCast + totalAbstains;
-  const abstainPct = totalBallots > 0 ? Math.round((totalAbstains / totalBallots) * 1000) / 10 : 0;
-
-  const ctx: ReportContext = { candidates, electionPeriod, logs };
-
+  // School year shown on the card badge and in the .docx filename.
   const startYear = new Date(electionPeriod.startDate).getFullYear();
   const schoolYear = Number.isNaN(startYear) ? "2026-2027" : `${startYear}-${startYear + 1}`;
+
+  /**
+   * Default "School year / period": the active election period's school year,
+   * or "None" until an election period exists.
+   */
+  const defaultPeriodLabel = electionPeriod.schoolYear?.trim() || "None";
+
+  /**
+   * Default "Date / time": the moment the report page is opened (fixed for
+   * the lifetime of the page so re-renders don't move the timestamp).
+   */
+  const [currentDateTime] = useState(() => {
+    const now = new Date();
+    const date = now.toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    const time = now.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+    return `${date} ${time}`;
+  });
+
+  // Session-only photo documentation (see lib/reportImages.ts).
+  const reportImages = useReportImages();
+  const [imageError, setImageError] = useState<string | null>(null);
+
+  // Chief-gated staff roster (046): resolves the acting commissioner's name
+  // for each signatory role, so choosing a commissioner title prefills the
+  // Name field (still editable).  The RPC refuses non-chiefs (046 raises,
+  // which PostgREST surfaces as a 400), so non-chief admins skip the call
+  // entirely and keep manual names — the same posture as chiefName above.
+  // A chief-side failure is surfaced so a bad deploy is diagnosable.
+  const [commissionerNames, setCommissionerNames] = useState<Record<string, string>>({});
+  const [rosterError, setRosterError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (currentUser?.commissionerRole !== "chief") return;
+    let cancelled = false;
+    listStaffRosterRpc()
+      .then((rows) => {
+        if (cancelled) return;
+        setCommissionerNames(resolveCommissionerNames(rows));
+        setRosterError(null);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setRosterError(
+            err instanceof Error ? err.message : "Could not load the staff roster."
+          );
+        }
+      });
+    return () => { cancelled = true; };
+  }, [currentUser?.commissionerRole]);
 
   /**
    * Editable body of the report.  Seeded from the live election the first time
@@ -209,14 +174,23 @@ export default function AdminReports() {
    * edits survive a reload (see lib/reportDraft.ts — no database involved).
    */
   const reportDraftSeed = {
-    periodLabel: schoolYear,
-    dateTime: electionPeriod.startDate
-      ? `${electionPeriod.startDate} ${electionPeriod.startTime}`
-      : undefined,
-    venue: electionPeriod.venue,
+    periodLabel: defaultPeriodLabel,
+    dateTime: currentDateTime,
+    venue: defaultVenueLine(electionPeriod.venue),
     chiefName,
+    officerNames: commissionerNames,
   };
   const reportDraft = useReportDraft(reportDraftSeed);
+
+  /**
+   * The roster (and the election period) resolve asynchronously, after the
+   * draft has already been seeded.  While the Chief hasn't edited anything
+   * yet, upgrade the template-fresh draft in place so the default signatory
+   * names are the acting officers' names; any edit locks the draft in.
+   */
+  useEffect(() => {
+    refreshReportDraftIfPristine(reportDraftSeed);
+  });
 
   /** Apply a partial edit on top of the current draft. */
   const patchDraft = (patch: Partial<AccomplishmentReportDraft>) =>
@@ -231,10 +205,6 @@ export default function AdminReports() {
     patch[key] = next;
     setReportDraft({ ...reportDraft, ...patch });
   };
-
-  // Session-only photo documentation (see lib/reportImages.ts).
-  const reportImages = useReportImages();
-  const [imageError, setImageError] = useState<string | null>(null);
 
   const handleAddImages = async (event: ChangeEvent<HTMLInputElement>) => {
     const input = event.target;
@@ -277,37 +247,6 @@ export default function AdminReports() {
       })
     );
 
-  interface ReportContext {
-    candidates: Candidate[];
-    electionPeriod: ElectionPeriod;
-    logs: LogEntry[];
-  }
-
-  const results = positions
-    .map((position) => {
-      const list = resultsByPosition.get(position) ?? [];
-      const winner = list[0];
-      return winner ? {
-        position,
-        winnerName: winner.name,
-        party: winner.party,
-        gradeLevel: winner.gradeLevel,
-        votes: winner.votes,
-      } : null;
-    })
-    .filter((r): r is NonNullable<typeof r> => r !== null);
-
-  // Participation estimate for the accomplishment report: the busiest
-  // position's ballot count is the best available participation measure
-  // (each voter casts one ballot per position).
-  const busiestBallots = Math.max(0, ...positions.map((p) => {
-    const list = resultsByPosition.get(p) ?? [];
-    return list.reduce((s, c) => s + c.votes, 0) + (abstainByPosition[p] ?? 0);
-  }));
-  const turnoutPct = electionPeriodIsActiveGuard(busiestBallots);
-
-  const [isDownloadingDocx, setIsDownloadingDocx] = useState(false);
-
   /**
    * Everything the printed report, the .docx export and the on-page preview
    * share — including the Chief's edited draft, so all three stay in lockstep.
@@ -315,17 +254,9 @@ export default function AdminReports() {
   const chiefReportInput = {
     chiefName,
     draft: reportDraft,
-    periodLabel: schoolYear,
-    dateTime: reportDraftSeed.dateTime,
-    venue: electionPeriod.venue,
-    totals: {
-      totalVoters: approved.length,
-      voted: busiestBallots,
-      notVoted: Math.max(approved.length - busiestBallots, 0),
-      turnoutPct,
-    },
-    approvedCandidates: approved,
-    results,
+    periodLabel: defaultPeriodLabel,
+    dateTime: currentDateTime,
+    venue: defaultVenueLine(electionPeriod.venue),
   };
 
   // The document as it will print — rendered in the page for review.
@@ -361,13 +292,28 @@ export default function AdminReports() {
     }
   };
 
+  // "Reset to default text" is destructive (it discards every edit for this
+  // school year), so it asks for confirmation first.
+  const { confirm, dialog: confirmDialog } = useConfirm({
+    title: "Reset to default text?",
+    description:
+      "This will discard all of your edits and restore the bundled LG-COMEA template text. This cannot be undone.",
+    confirmText: "Reset to default",
+    cancelText: "Cancel",
+    destructive: true,
+  });
+
+  const handleResetDraft = async () => {
+    if (await confirm()) resetReportDraft(reportDraftSeed);
+  };
+
   return (
     <div className="p-6 md:p-8 max-w-7xl mx-auto">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <h1 className="text-gray-900 mb-1">Election Reports</h1>
-            <p className="text-gray-500 text-sm">Live results, abstain percentage, and official LG-COMEA Accomplishment Report for the CNNHS Student Election.</p>
+            <p className="text-gray-500 text-sm">Official LG-COMEA Accomplishment Report for the CNNHS Student Election — edit, preview, print, and export as .docx.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -392,12 +338,6 @@ export default function AdminReports() {
           </div>
         </div>
       </motion.div>
-
-      {resultsError && (
-        <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-700">
-          {resultsError} — showing approved candidates with zero counts.
-        </div>
-      )}
 
       {/* Chief Commissioner Election Report Card (LG-COMEA Accomplishment Report) */}
       <div className="bg-white rounded-2xl shadow-xs border border-gray-200/90 p-6 mb-6">
@@ -446,15 +386,6 @@ export default function AdminReports() {
             )}
             <span>Download Filled Report (.docx)</span>
           </button>
-
-          <a
-            href="/templates/LG-COMEA_ACCOMPLISHMENT-REPORT.SSLG-AND-YES-O-26-27.docx"
-            download="LG-COMEA_ACCOMPLISHMENT-REPORT.SSLG-AND-YES-O-26-27.docx"
-            className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
-          >
-            <FileText size={15} className="text-gray-500" />
-            <span>Download Base Template (.docx)</span>
-          </a>
         </div>
       </div>
 
@@ -468,13 +399,13 @@ export default function AdminReports() {
             <div>
               <h3 className="font-bold text-gray-900 text-base">Edit Report Content</h3>
               <p className="text-xs text-gray-500 mt-0.5">
-                Everything you type here goes straight into the printed report and the .docx export. Saved in this browser only.
+                Everything you type here goes straight into the printed report and the .docx export. Each field keeps its own Save button; saved in this browser only.
               </p>
             </div>
           </div>
           <button
             type="button"
-            onClick={() => resetReportDraft(reportDraftSeed)}
+            onClick={() => void handleResetDraft()}
             className="flex items-center gap-2 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
           >
             <RotateCcw size={13} /> Reset to default text
@@ -487,17 +418,17 @@ export default function AdminReports() {
               <EditorTextField
                 label="School year / period"
                 value={reportDraft.periodLabel}
-                onChange={(value) => patchDraft({ periodLabel: value })}
+                onCommit={(value) => patchDraft({ periodLabel: value })}
               />
               <EditorTextField
                 label="Date / time"
                 value={reportDraft.dateTime}
-                onChange={(value) => patchDraft({ dateTime: value })}
+                onCommit={(value) => patchDraft({ dateTime: value })}
               />
               <EditorTextField
                 label="Place / venue / platform"
                 value={reportDraft.venue}
-                onChange={(value) => patchDraft({ venue: value })}
+                onCommit={(value) => patchDraft({ venue: value })}
               />
             </div>
           </EditorSection>
@@ -506,14 +437,14 @@ export default function AdminReports() {
             <EditorTextField
               label="Lead line"
               value={reportDraft.rationaleLead}
-              onChange={(value) => patchDraft({ rationaleLead: value })}
+              onCommit={(value) => patchDraft({ rationaleLead: value })}
             />
             <EditorListField
               legend="Rationale paragraphs"
               items={reportDraft.rationaleParagraphs}
               rows={4}
               addLabel="Add paragraph"
-              onChange={(next) => setDraftList("rationaleParagraphs", next)}
+              onCommit={(next) => setDraftList("rationaleParagraphs", next)}
             />
           </EditorSection>
 
@@ -524,7 +455,7 @@ export default function AdminReports() {
               items={reportDraft.objectives}
               rows={2}
               addLabel="Add objective"
-              onChange={(next) => setDraftList("objectives", next)}
+              onCommit={(next) => setDraftList("objectives", next)}
             />
           </EditorSection>
 
@@ -534,7 +465,7 @@ export default function AdminReports() {
               items={reportDraft.highlights}
               rows={4}
               addLabel="Add paragraph"
-              onChange={(next) => setDraftList("highlights", next)}
+              onCommit={(next) => setDraftList("highlights", next)}
             />
           </EditorSection>
 
@@ -542,7 +473,7 @@ export default function AdminReports() {
             <EditorTextField
               label="Financial Accomplishment / Liquidation Report (if any)"
               value={reportDraft.financialLiquidation}
-              onChange={(value) => patchDraft({ financialLiquidation: value })}
+              onCommit={(value) => patchDraft({ financialLiquidation: value })}
             />
           </EditorSection>
 
@@ -552,13 +483,19 @@ export default function AdminReports() {
               items={reportDraft.recommendations}
               rows={2}
               addLabel="Add recommendation"
-              onChange={(next) => setDraftList("recommendations", next)}
+              onCommit={(next) => setDraftList("recommendations", next)}
             />
           </EditorSection>
 
           <EditorSection title="Signatories">
+            {rosterError && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                Commissioner names couldn't be preloaded — {rosterError} You can still type names manually.
+              </p>
+            )}
             <SignatoryGroupsEditor
               groups={reportDraft.signatoryGroups}
+              commissionerNames={commissionerNames}
               onChange={(next) => patchDraft({ signatoryGroups: next })}
             />
           </EditorSection>
@@ -685,112 +622,7 @@ export default function AdminReports() {
         )}
       </div>
 
-      {/* Summary Header */}
-      <div
-        className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6 text-center"
-        style={{ borderTop: "4px solid #5C0102" }}
-      >
-        <h2 className="text-gray-900 mb-1">CNNHS Student Election</h2>
-        <p className="text-gray-500 text-sm">Camarines Norte National High School</p>
-        <p className="text-gray-400 text-xs mt-1">
-          Election Period: {electionPeriod.startDate} {electionPeriod.startTime} — {electionPeriod.endDate} {electionPeriod.endTime}
-        </p>
-        <div className="flex flex-wrap justify-center gap-6 mt-4 pt-4 border-t border-gray-100">
-          {[
-            { label: "Registered Voters", value: approved.length, color: "#5C0102" },
-            { label: "Total Votes Cast", value: totalVotesCast.toLocaleString(), color: "#5C0102" },
-            { label: "Abstain Votes", value: totalAbstains.toLocaleString(), color: "#9CA3AF" },
-            { label: "Abstain Percentage", value: `${abstainPct}%`, color: "#B91C1C" },
-            { label: "Active Candidates", value: approved.length, color: "#5C0102" },
-            { label: "Positions", value: positions.length, color: "#5C0102" },
-          ].map((s) => (
-            <div key={s.label} className="text-center">
-              <div className="text-2xl font-bold" style={{ color: s.color }}>{s.value}</div>
-              <div className="text-xs text-gray-400">{s.label}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Winners Summary — every position, incl. grade-level representatives */}
-      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 mb-6">
-        <h3 className="text-gray-900 mb-1 text-sm flex items-center gap-2">
-          <Trophy size={16} style={{ color: "#5C0102" }} /> Winners Summary (Based on Current Results)
-        </h3>
-        <p className="text-gray-400 text-xs mb-4">
-          Every position on the ballot — including grade-level representatives. Expand a position to see all of its candidates sorted by votes (highest first).
-        </p>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr style={{ backgroundColor: "#FFF5F5" }}>
-                <th className="text-left py-2.5 px-4 text-xs font-medium text-gray-500">Position</th>
-                <th className="text-left py-2.5 px-4 text-xs font-medium text-gray-500">Leading Candidate</th>
-                <th className="text-left py-2.5 px-4 text-xs font-medium text-gray-500">Party</th>
-                <th className="text-left py-2.5 px-4 text-xs font-medium text-gray-500">Votes</th>
-                <th className="text-left py-2.5 px-4 text-xs font-medium text-gray-500">Vote %</th>
-                <th className="text-left py-2.5 px-4 text-xs font-medium text-gray-500">Abstain %</th>
-                <th className="text-left py-2.5 px-4 text-xs font-medium text-gray-500">Grade</th>
-                <th className="text-left py-2.5 px-4 text-xs font-medium text-gray-500">All Candidates</th>
-              </tr>
-            </thead>
-              <tbody className="divide-y divide-gray-50">
-                {positions.map((position) => {
-                  const list = resultsByPosition.get(position) ?? [];
-                  const winner = list[0];
-                  const posTotal = list.reduce((s, c) => s + c.votes, 0);
-                  const abstains = abstainByPosition[position] ?? 0;
-                  const posBallots = posTotal + abstains;
-                  return (
-                    <tr key={position} className="hover:bg-gray-50 transition-colors cursor-pointer">
-                      <td className="py-3 px-4 font-medium text-gray-900">{position}</td>
-                      <td className="py-3 px-4">
-                        {winner ? (
-                          <div className="flex items-center gap-2">
-                            {winner.picture && <img src={winner.picture} alt="" className="w-7 h-7 rounded-full object-cover" />}
-                            <span className="text-gray-800">{winner.name}</span>
-                            <Trophy size={12} style={{ color: "#5C0102" }} />
-                          </div>
-                        ) : <span className="text-gray-400">No candidates</span>}
-                      </td>
-                      <td className="py-3 px-4 text-gray-500 text-xs">{winner?.party || "—"}</td>
-                      <td className="py-3 px-4 font-bold" style={{ color: "#5C0102" }}>{winner ? winner.votes.toLocaleString() : "—"}</td>
-                      <td className="py-3 px-4 text-gray-500 text-xs">{winner && posTotal > 0 ? `${Math.round((winner.votes / posTotal) * 100)}%` : "—"}</td>
-                      <td className="py-3 px-4 text-gray-500 text-xs">
-                        {posBallots > 0 ? `${Math.round((abstains / posBallots) * 100)}%` : "—"}
-                        <span className="text-gray-300 ml-1">({abstains})</span>
-                      </td>
-                      <td className="py-3 px-4 text-gray-500 text-xs">{winner?.gradeLevel || "—"}</td>
-                      <td className="py-3 px-4">
-                        {list.length > 0 ? (
-                          <select
-                            defaultValue="0"
-                            className="w-full rounded-lg border border-gray-200 px-2 py-1.5 text-xs bg-white"
-                            title="All candidates for this position, sorted by votes (highest first)"
-                          >
-                            {list.map((c, i) => (
-                              <option key={c.id} value={String(i)}>
-                                {i + 1}. {c.name} — {c.votes.toLocaleString()} vote{c.votes === 1 ? "" : "s"}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          <span className="text-gray-400 text-xs">—</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-                {positions.length === 0 && (
-                  <tr><td colSpan={8} className="py-10 text-center text-gray-400 text-sm">No results yet.</td></tr>
-                )}
-              </tbody>
-           </table>
-        </div>
-        <div className="mt-3 flex items-center gap-1.5 text-xs text-gray-400">
-          <ChevronDown size={12} /> Click any row to open the dropdown and see all candidates for that position, sorted by votes (highest first). The winner is shown by default.
-        </div>
-      </motion.div>
+      {confirmDialog}
     </div>
   );
 }
@@ -822,36 +654,118 @@ function EditorSection({
           className={`text-gray-400 transition-transform ${open ? "rotate-180" : ""}`}
         />
       </button>
-      {open && (
-        <div className="px-4 pb-4 space-y-3">
-          {description && <p className="text-[11px] text-gray-400">{description}</p>}
-          {children}
-        </div>
-      )}
+      {/* Children stay mounted while collapsed so unsaved edits survive. */}
+      <div className={open ? "px-4 pb-4 space-y-3" : "hidden px-4 pb-4 space-y-3"}>
+        {description && <p className="text-[11px] text-gray-400">{description}</p>}
+        {children}
+      </div>
     </div>
   );
 }
 
-/** Labelled single-line input used throughout the report editor. */
+/**
+ * Local unsaved state for one editor control.  Edits stay in component state
+ * until the control's Save button commits them; the committed value re-syncs
+ * the local state whenever it changes underneath the editor (after a Save, or
+ * after "Reset to default text").
+ */
+function useDraftField<T>(committed: T, commit: (next: T) => void) {
+  const [local, setLocal] = useState(committed);
+  const [justSaved, setJustSaved] = useState(false);
+  const savedTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    setLocal(committed);
+  }, [committed]);
+
+  useEffect(
+    () => () => {
+      if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
+    },
+    []
+  );
+
+  const dirty = local !== committed;
+
+  const save = () => {
+    commit(local);
+    setJustSaved(true);
+    if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
+    savedTimer.current = window.setTimeout(() => setJustSaved(false), 1800);
+  };
+
+  return { local, setLocal, dirty, justSaved, save };
+}
+
+/** Per-field Save control: disabled until edited, flashes "Saved" after committing. */
+function FieldSaveButton({
+  dirty,
+  justSaved,
+  onClick,
+}: {
+  dirty: boolean;
+  justSaved: boolean;
+  onClick: () => void;
+}) {
+  if (justSaved) {
+    return (
+      <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-600 shrink-0">
+        <Check size={11} /> Saved
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!dirty}
+      title={dirty ? "Save this field" : "No changes to save"}
+      className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold shrink-0 transition-colors ${
+        dirty
+          ? "bg-[#5C0102] text-white hover:opacity-90 cursor-pointer"
+          : "bg-gray-100 text-gray-400 cursor-not-allowed"
+      }`}
+    >
+      <Save size={11} /> Save
+    </button>
+  );
+}
+
+/**
+ * Labelled single-line input used throughout the report editor.  Edits stay
+ * local until the field's Save button commits them into the report draft
+ * (Enter also saves).
+ */
 function EditorTextField({
   label,
   value,
-  onChange,
+  onCommit,
   placeholder,
 }: {
   label: string;
   value: string;
-  onChange: (value: string) => void;
+  onCommit: (value: string) => void;
   placeholder?: string;
 }) {
+  const { local, setLocal, dirty, justSaved, save } = useDraftField(value, onCommit);
+
   return (
     <label className="block">
-      <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">{label}</span>
+      <span className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">{label}</span>
+        <FieldSaveButton dirty={dirty} justSaved={justSaved} onClick={save} />
+      </span>
       <input
         type="text"
-        value={value}
+        value={local}
         placeholder={placeholder}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={(event) => setLocal(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            if (dirty) save();
+          }
+        }}
         className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-red-100"
       />
     </label>
@@ -865,15 +779,17 @@ function EditorListField({
   items,
   rows = 3,
   addLabel,
-  onChange,
+  onCommit,
 }: {
   legend: string;
   hint?: string;
   items: string[];
   rows?: number;
   addLabel: string;
-  onChange: (next: string[]) => void;
+  onCommit: (next: string[]) => void;
 }) {
+  const { local, setLocal, dirty, justSaved, save } = useDraftField(items, onCommit);
+
   return (
     <div>
       <div className="flex items-end justify-between gap-3">
@@ -881,37 +797,40 @@ function EditorListField({
           <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">{legend}</div>
           {hint && <p className="text-[11px] text-gray-400 mt-0.5">{hint}</p>}
         </div>
-        <button
-          type="button"
-          onClick={() => onChange([...items, ""])}
-          className="flex items-center gap-1 text-[11px] font-semibold text-[#5C0102] hover:underline shrink-0 cursor-pointer"
-        >
-          <Plus size={12} /> {addLabel}
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => setLocal([...local, ""])}
+            className="flex items-center gap-1 text-[11px] font-semibold text-[#5C0102] hover:underline cursor-pointer"
+          >
+            <Plus size={12} /> {addLabel}
+          </button>
+          <FieldSaveButton dirty={dirty} justSaved={justSaved} onClick={save} />
+        </div>
       </div>
 
       <div className="mt-2 space-y-2">
-        {items.map((item, index) => (
+        {local.map((item, index) => (
           <div key={index} className="flex items-start gap-2">
             <textarea
               value={item}
               rows={rows}
               onChange={(event) =>
-                onChange(items.map((value, i) => (i === index ? event.target.value : value)))
+                setLocal(local.map((value, i) => (i === index ? event.target.value : value)))
               }
               className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-800 bg-white leading-relaxed focus:outline-none focus:ring-2 focus:ring-red-100"
             />
             <button
               type="button"
               title="Remove"
-              onClick={() => onChange(items.filter((_, i) => i !== index))}
+              onClick={() => setLocal(local.filter((_, i) => i !== index))}
               className="mt-1 p-2 rounded-lg text-gray-400 hover:text-[#B91C1C] hover:bg-red-50 cursor-pointer"
             >
               <Trash2 size={14} />
             </button>
           </div>
         ))}
-        {items.length === 0 && <p className="text-[11px] text-gray-400 italic">No entries.</p>}
+        {local.length === 0 && <p className="text-[11px] text-gray-400 italic">No entries.</p>}
       </div>
     </div>
   );
@@ -920,9 +839,12 @@ function EditorListField({
 /** Editor for the "Prepared by" / "Noted by" / "Approved by" signatory blocks. */
 function SignatoryGroupsEditor({
   groups,
+  commissionerNames,
   onChange,
 }: {
   groups: ReportSignatoryGroup[];
+  /** { dropdown title -> acting commissioner's name } for Name prefilling. */
+  commissionerNames: Record<string, string>;
   onChange: (next: ReportSignatoryGroup[]) => void;
 }) {
   const patchGroup = (index: number, patch: Partial<ReportSignatoryGroup>) =>
@@ -931,7 +853,7 @@ function SignatoryGroupsEditor({
   const patchSignatory = (
     groupIndex: number,
     signatoryIndex: number,
-    patch: Partial<ReportSignatoryGroup["signatories"][number]>
+    patch: Partial<ReportSignatory>
   ) => {
     const group = groups[groupIndex];
     patchGroup(groupIndex, {
@@ -950,7 +872,7 @@ function SignatoryGroupsEditor({
               <EditorTextField
                 label="Heading"
                 value={group.heading}
-                onChange={(value) => patchGroup(groupIndex, { heading: value })}
+                onCommit={(value) => patchGroup(groupIndex, { heading: value })}
               />
             </div>
             <button
@@ -965,32 +887,17 @@ function SignatoryGroupsEditor({
 
           <div className="mt-2 space-y-2">
             {group.signatories.map((signatory, signatoryIndex) => (
-              <div key={signatoryIndex} className="flex items-end gap-2">
-                <div className="flex-1 grid sm:grid-cols-2 gap-2">
-                  <EditorTextField
-                    label="Name"
-                    value={signatory.name}
-                    onChange={(value) => patchSignatory(groupIndex, signatoryIndex, { name: value })}
-                  />
-                  <EditorTextField
-                    label="Position / role"
-                    value={signatory.role}
-                    onChange={(value) => patchSignatory(groupIndex, signatoryIndex, { role: value })}
-                  />
-                </div>
-                <button
-                  type="button"
-                  title="Remove signatory"
-                  onClick={() =>
-                    patchGroup(groupIndex, {
-                      signatories: group.signatories.filter((_, i) => i !== signatoryIndex),
-                    })
-                  }
-                  className="mb-1 p-2 rounded-lg text-gray-400 hover:text-[#B91C1C] hover:bg-red-50 cursor-pointer"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
+              <SignatoryRowEditor
+                key={signatoryIndex}
+                signatory={signatory}
+                commissionerNames={commissionerNames}
+                onCommit={(patch) => patchSignatory(groupIndex, signatoryIndex, patch)}
+                onRemove={() =>
+                  patchGroup(groupIndex, {
+                    signatories: group.signatories.filter((_, i) => i !== signatoryIndex),
+                  })
+                }
+              />
             ))}
           </div>
 
@@ -1019,7 +926,141 @@ function SignatoryGroupsEditor({
   );
 }
 
-/** Turnout estimate kept for the printable accomplishment report only. */
-function electionPeriodIsActiveGuard(ballots: number): number {
-  return ballots;
+/**
+ * One signatory row: name + "Position / role" dropdown.  The dropdown offers
+ * the official LG-COMEA titles; choosing a commissioner title prefills the
+ * Name with that acting commissioner's name (from the staff roster) — the
+ * Name stays fully editable afterwards.  "Others" (and titles without a
+ * system record, e.g. Appointed Commissioner) reveal/keep a free-text role
+ * field and never touch the Name.  Name and role commit together through the
+ * row's Save button.
+ */
+function SignatoryRowEditor({
+  signatory,
+  commissionerNames,
+  onCommit,
+  onRemove,
+}: {
+  signatory: ReportSignatory;
+  /** { dropdown title -> acting commissioner's name } for Name prefilling. */
+  commissionerNames: Record<string, string>;
+  onCommit: (patch: Partial<ReportSignatory>) => void;
+  onRemove: () => void;
+}) {
+  const [name, setName] = useState(signatory.name);
+  const [roleOption, setRoleOption] = useState(
+    () => resolveSignatoryRoleSelection(signatory.role).option
+  );
+  const [customRole, setCustomRole] = useState(
+    () => resolveSignatoryRoleSelection(signatory.role).customText
+  );
+  const [justSaved, setJustSaved] = useState(false);
+  const savedTimer = useRef<number | null>(null);
+
+  // Re-sync when the committed signatory changes underneath the row (after a
+  // Save, or after "Reset to default text", or when rows are removed/shifted).
+  useEffect(() => {
+    const selection = resolveSignatoryRoleSelection(signatory.role);
+    setName(signatory.name);
+    setRoleOption(selection.option);
+    setCustomRole(selection.customText);
+  }, [signatory]);
+
+  useEffect(
+    () => () => {
+      if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
+    },
+    []
+  );
+
+  const effectiveRole = roleOption === SIGNATORY_ROLE_OTHER ? customRole : roleOption;
+  const dirty = name !== signatory.name || effectiveRole !== signatory.role;
+
+  /** Choosing a commissioner title drops that commissioner's name into the
+   *  (still editable) Name field; other choices leave the Name untouched. */
+  const handleRoleOptionChange = (nextOption: string) => {
+    setRoleOption(nextOption);
+    const commissionerName = commissionerNames[nextOption];
+    if (commissionerName) setName(commissionerName);
+  };
+
+  const save = () => {
+    onCommit({ name, role: effectiveRole });
+    setJustSaved(true);
+    if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
+    savedTimer.current = window.setTimeout(() => setJustSaved(false), 1800);
+  };
+
+  return (
+    <div className="flex items-start gap-2">
+      <div className="flex-1 grid sm:grid-cols-2 gap-2">
+        <label className="block">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Name</span>
+          <input
+            type="text"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-red-100"
+          />
+        </label>
+        <div>
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+            Position / role
+          </span>
+          <div className="mt-1 flex flex-col sm:flex-row gap-2">
+            <select
+              value={roleOption}
+              onChange={(event) => handleRoleOptionChange(event.target.value)}
+              className="w-full sm:flex-1 rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-red-100 cursor-pointer"
+            >
+              {SIGNATORY_ROLE_OPTIONS.map((role) => (
+                <option key={role} value={role}>
+                  {role}
+                </option>
+              ))}
+              <option value={SIGNATORY_ROLE_OTHER}>{SIGNATORY_ROLE_OTHER}</option>
+            </select>
+            {roleOption === SIGNATORY_ROLE_OTHER && (
+              <input
+                type="text"
+                value={customRole}
+                onChange={(event) => setCustomRole(event.target.value)}
+                placeholder="Specify position / role"
+                className="w-full sm:flex-1 rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-red-100"
+              />
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center gap-1 shrink-0 pt-4">
+        {justSaved ? (
+          <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-600">
+            <Check size={11} /> Saved
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={save}
+            disabled={!dirty}
+            title={dirty ? "Save this signatory" : "No changes to save"}
+            className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-[10px] font-semibold transition-colors ${
+              dirty
+                ? "bg-[#5C0102] text-white hover:opacity-90 cursor-pointer"
+                : "bg-gray-100 text-gray-400 cursor-not-allowed"
+            }`}
+          >
+            <Save size={11} /> Save
+          </button>
+        )}
+        <button
+          type="button"
+          title="Remove signatory"
+          onClick={onRemove}
+          className="p-2 rounded-lg text-gray-400 hover:text-[#B91C1C] hover:bg-red-50 cursor-pointer"
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
+    </div>
+  );
 }

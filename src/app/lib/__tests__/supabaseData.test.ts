@@ -1,7 +1,47 @@
 import { describe, it, expect } from "vitest";
-import { isUuid, normalize, parseCsv, toDate, toTime } from "../supabaseData";
+import { isUuid, normalize, parseCsv, toDate, toTime, buildStudentSyncPayload } from "../supabaseData";
 import { mapStaffLoginRow } from "../supabaseData";
-import type { CurrentUser } from "../../context/AppContext";
+import type { CurrentUser, Student } from "../../context/AppContext";
+
+const baseStudent: Student = {
+  id: "123e4567-e89b-12d3-a456-426614174000",
+  firstName: "Juan",
+  lastName: "Dela Cruz",
+  gradeLevel: "Grade 7",
+  gender: "Male",
+  birthdate: "2009-05-14",
+  lrn: "123456789012",
+  status: "approved",
+  registeredAt: "2026-06-01",
+};
+
+describe("buildStudentSyncPayload", () => {
+  it("includes verification when the state knows the verdict", () => {
+    for (const verificationStatus of ["automatic", "manual"] as const) {
+      const payload = buildStudentSyncPayload({ ...baseStudent, verificationStatus });
+      expect(payload.verification).toBe(verificationStatus);
+    }
+  });
+
+  it("omits verification when the state row never carried a verdict", () => {
+    // Must not blank out what the registration/review flow persisted —
+    // an auto-approved student has to keep 'automatic' in the DB.
+    const payload = buildStudentSyncPayload(baseStudent);
+    expect("verification" in payload).toBe(false);
+  });
+
+  it("always writes the surviving student columns", () => {
+    const payload = buildStudentSyncPayload({ ...baseStudent, verificationStatus: "automatic" });
+    expect(payload).toMatchObject({
+      first_name: "Juan",
+      last_name: "Dela Cruz",
+      grade_level: "Grade 7",
+      gender: "Male",
+      status: "approved",
+      lrn: "123456789012",
+    });
+  });
+});
 
 describe("toDate", () => {
   it("returns the YYYY-MM-DD slice of a datetime string", () => {

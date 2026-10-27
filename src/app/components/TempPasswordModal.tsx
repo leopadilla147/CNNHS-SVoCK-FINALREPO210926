@@ -11,15 +11,19 @@ export interface TempPasswordModalProps {
 }
 
 /**
- * D-03 one-time temp-password display (05-01 T3 / consumed by ChiefAppointments).
+ * D-03 one-time credential display (consumed by ChiefAppointments).
  *
- * The temp password is shown EXACTLY once:
+ * 104: the credential shown is the account's ROLE DEFAULT password
+ * (electoral123 / grievance123 / screening123 / sslg123 — chief123 seed
+ * precedent).  It is shown EXACTLY once per creation:
  *   * masked by default with a reveal toggle (never visible on first paint);
  *   * a copy button moves it to the clipboard;
  *   * only the acknowledgement button closes the modal — the password
  *     state lives purely in this component's memory, so closing (or
  *     navigating away) loses it forever.  It is never persisted to
  *     localStorage, never written to the audit trail, never logged.
+ * There is deliberately no forced first-login change (104 capstone
+ * decision): the default stays valid until the officer changes it.
  */
 export function TempPasswordModal({ name, email, password, onClose }: TempPasswordModalProps) {
   const [revealed, setRevealed] = useState(false);
@@ -48,7 +52,7 @@ export function TempPasswordModal({ name, email, password, onClose }: TempPasswo
           <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center mx-auto mb-3">
             <KeyRound size={22} />
           </div>
-          <h3 className="text-white mb-1">Temporary Password</h3>
+          <h3 className="text-white mb-1">Default Password</h3>
           <p className="text-white/70 text-xs">Shown once — copy it now</p>
         </div>
 
@@ -60,7 +64,8 @@ export function TempPasswordModal({ name, email, password, onClose }: TempPasswo
 
           <div className="bg-amber-50 border border-amber-100 rounded-lg p-3 mb-4 flex items-start gap-2 text-xs text-amber-700">
             <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
-            This password will not be shown again. The account must change it on the next login (D-04).
+            This is the account's default password — it stays valid until the officer changes it. Share it securely
+            and advise changing it after the first login.
           </div>
 
           <div className="flex items-stretch gap-2 mb-5">

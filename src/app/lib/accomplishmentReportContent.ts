@@ -84,12 +84,18 @@ export const DEFAULT_EVENT_VENUE = defaultVenueLine();
 /**
  * The LG-COMEA position/role titles offered in the signatory editor's
  * dropdown.  The chosen title is what gets saved and printed on the report.
+ * 103 adds the co-commissioner titles (one per serving role) and the SSLG
+ * Adviser.
  */
 export const SIGNATORY_ROLE_OPTIONS = [
   "LG-COMEA Electoral Commissioner",
   "LG-COMEA Screening and Validation Commissioner",
   "LG-COMEA Grievance Commissioner",
+  "LG-COMEA Electoral Co-commissioner",
+  "LG-COMEA Screening and Validation Co-commissioner",
+  "LG-COMEA Grievance Co-commissioner",
   "LG-COMEA Appointed Commissioner",
+  "SSLG Adviser",
   "School Head / LG-COMEA Chief Commissioner",
 ] as const;
 
@@ -98,16 +104,19 @@ export const SIGNATORY_ROLE_OTHER = "Others";
 
 /**
  * Dropdown titles that map onto a system commissioner role (the 035
- * commissioner_role CHECK set).  The signatory editor uses this, together
- * with the chief-gated staff roster, to prefill a signatory's Name when a
- * commissioner title is chosen.  "LG-COMEA Appointed Commissioner" has no
- * system role (the 'appointment' role was retired in Phase 3 REMOVE-08), so
- * it never prefills — its Name stays fully manual.
+ * commissioner_role CHECK set, widened by 103 with 'appointment').  The
+ * signatory editor uses this, together with the chief-gated staff roster,
+ * to prefill a signatory's Name when a commissioner title is chosen.
+ * "LG-COMEA Appointed Commissioner" resolves from the records-only
+ * 'appointment' designation row (103) when one is active.
  */
 export const SIGNATORY_ROLE_SYSTEM_ROLES: Record<string, string> = {
   "LG-COMEA Electoral Commissioner": "electoral_board",
   "LG-COMEA Screening and Validation Commissioner": "screening_validation",
   "LG-COMEA Grievance Commissioner": "grievance",
+  // 103: the records-only Commissioner of Appointment (an adminprofiles
+  // row with no login) now prefills from the designation when present.
+  "LG-COMEA Appointed Commissioner": "appointment",
   "School Head / LG-COMEA Chief Commissioner": "chief",
 };
 
@@ -122,14 +131,21 @@ export interface StaffRosterEntry {
 /** Dropdown titles resolved from a CO-commissioner roster row (the role they co-serve). */
 const SIGNATORY_ROLE_CO_ROLES: Record<string, string> = {
   "LG-COMEA Electoral Co-commissioner": "electoral_board",
+  "LG-COMEA Screening and Validation Co-commissioner": "screening_validation",
+  "LG-COMEA Grievance Co-commissioner": "grievance",
 };
+
+/** Dropdown title resolved from an active SSLG Adviser roster row (103). */
+export const SIGNATORY_ROLE_SSLG_ADVISER = "SSLG Adviser";
 
 /**
  * Build the { dropdown title -> full name } prefill map from the staff
  * roster.  Only ACTIVE staff count; the chief comes from role_type='chief',
  * each commissioner title from the PRIMARY commissioner
- * (role_type='commissioner') holding that commissioner_role, and the
- * co-commissioner title from an active co_commissioner of that role.
+ * (role_type='commissioner') holding that commissioner_role (including the
+ * records-only 'appointment' designation), the co-commissioner titles from
+ * an active co_commissioner of that role, and the SSLG Adviser title from
+ * an active sslg_adviser row.
  */
 export function resolveCommissionerNames(
   roster: StaffRosterEntry[]
@@ -141,10 +157,16 @@ export function resolveCommissionerNames(
 
   const primaryByRole = new Map<string, string>();
   const coByRole = new Map<string, string>();
+  let adviserName: string | undefined;
   roster.forEach((row) => {
     if (row.status !== "active") return;
     const name = row.full_name?.trim();
-    if (!name || !row.commissioner_role) return;
+    if (!name) return;
+    if (row.role_type === "sslg_adviser") {
+      adviserName = adviserName || name;
+      return;
+    }
+    if (!row.commissioner_role) return;
     if (row.role_type === "commissioner") {
       if (!primaryByRole.has(row.commissioner_role)) {
         primaryByRole.set(row.commissioner_role, name);
@@ -165,6 +187,7 @@ export function resolveCommissionerNames(
     const name = coByRole.get(systemRole);
     if (name) names[label] = name;
   });
+  if (adviserName) names[SIGNATORY_ROLE_SSLG_ADVISER] = adviserName;
   return names;
 }
 
@@ -198,6 +221,20 @@ function defaultSignatoryGroups(
   const name = (role: string, bundled: string): string =>
     officerNames?.[role]?.trim() || bundled;
 
+  // 103: these officers have no bundled template line — they join the
+  // "Noted by:" block only when the roster resolves an active officer,
+  // keeping the official template unchanged otherwise.
+  const conditionalNotedBy: ReportSignatory[] = [
+    "LG-COMEA Screening and Validation Co-commissioner",
+    "LG-COMEA Grievance Co-commissioner",
+    SIGNATORY_ROLE_SSLG_ADVISER,
+  ]
+    .map((role) => {
+      const resolved = officerNames?.[role]?.trim();
+      return resolved ? { name: resolved, role } : null;
+    })
+    .filter((row): row is ReportSignatory => row !== null);
+
   return [
     {
       heading: "Prepared by:",
@@ -229,6 +266,7 @@ function defaultSignatoryGroups(
           name: name("LG-COMEA Appointed Commissioner", "WILSON ANGEL H. VILLARIN, ASP-II"),
           role: "LG-COMEA Appointed Commissioner",
         },
+        ...conditionalNotedBy,
       ],
     },
     {

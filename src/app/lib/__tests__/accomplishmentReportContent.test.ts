@@ -131,8 +131,20 @@ describe("resolveCommissionerNames", () => {
       "LG-COMEA Screening and Validation Commissioner": "PEDRO REYES",
       "LG-COMEA Grievance Commissioner": "ANA LIM",
       "LG-COMEA Electoral Co-commissioner": "CO CO-GO",
+      "SSLG Adviser": "SSLG ADVISER",
       "School Head / LG-COMEA Chief Commissioner": "JUAN DELA CRUZ",
     });
+  });
+
+  // 103: every serving role's co-commissioner is a selectable signatory.
+  it("maps each co-commissioner title from the co-commissioner rows", () => {
+    const names = resolveCommissionerNames([
+      ...roster,
+      { full_name: "CO SCREENING", role_type: "co_commissioner", commissioner_role: "screening_validation", status: "active" },
+      { full_name: "CO GRIEVANCE", role_type: "co_commissioner", commissioner_role: "grievance", status: "active" },
+    ]);
+    expect(names["LG-COMEA Screening and Validation Co-commissioner"]).toBe("CO SCREENING");
+    expect(names["LG-COMEA Grievance Co-commissioner"]).toBe("CO GRIEVANCE");
   });
 
   it("prefers the primary commissioner over a co-commissioner of the same role", () => {
@@ -144,14 +156,58 @@ describe("resolveCommissionerNames", () => {
     const names = resolveCommissionerNames([
       { full_name: "INACTIVE CHIEF", role_type: "chief", commissioner_role: "chief", status: "inactive" },
       { full_name: null, role_type: "commissioner", commissioner_role: "grievance", status: "active" },
+      { full_name: "AWOL ADVISER", role_type: "sslg_adviser", commissioner_role: null, status: "on_leave" },
     ]);
     expect(names).toEqual({});
   });
 
-  it("never maps a title for Appointed Commissioner (no system role)", () => {
+  it("leaves Appointed Commissioner unmapped until a designation exists", () => {
     const names = resolveCommissionerNames(roster);
     expect(names["LG-COMEA Appointed Commissioner"]).toBeUndefined();
     expect(Object.keys(names)).not.toContain(SIGNATORY_ROLE_OTHER);
+  });
+
+  // 103: the records-only 'appointment' designation row now prefills.
+  it("maps Appointed Commissioner from an active appointment designation", () => {
+    const names = resolveCommissionerNames([
+      ...roster,
+      { full_name: "GRACE LOPEZ", role_type: "commissioner", commissioner_role: "appointment", status: "active" },
+    ]);
+    expect(names["LG-COMEA Appointed Commissioner"]).toBe("GRACE LOPEZ");
+  });
+});
+
+// 103: the co-commissioners and the SSLG Adviser join the "Noted by:" block
+// only when the roster resolves an active officer for them.
+describe("defaultAccomplishmentReportDraft additional officer lines", () => {
+  it("keeps the bundled template untouched when they are unresolved", () => {
+    const draft = defaultAccomplishmentReportDraft();
+    const notedRoles = draft.signatoryGroups[1].signatories.map((s) => s.role);
+    expect(notedRoles).not.toContain("LG-COMEA Screening and Validation Co-commissioner");
+    expect(notedRoles).not.toContain("LG-COMEA Grievance Co-commissioner");
+    expect(notedRoles).not.toContain("SSLG Adviser");
+  });
+
+  it("appends the resolved officers after the bundled Noted-by lines", () => {
+    const draft = defaultAccomplishmentReportDraft({
+      officerNames: {
+        "LG-COMEA Screening and Validation Co-commissioner": "CO SCREENING",
+        "LG-COMEA Grievance Co-commissioner": "CO GRIEVANCE",
+        "SSLG Adviser": "ADVISER C",
+      },
+    });
+    const noted = draft.signatoryGroups[1].signatories;
+    expect(noted.map((s) => s.role)).toEqual([
+      "LG-COMEA Electoral Commissioner",
+      "LG-COMEA Screening and Validation Commissioner",
+      "LG-COMEA Electoral Co-commissioner",
+      "LG-COMEA Grievance Commissioner",
+      "LG-COMEA Appointed Commissioner",
+      "LG-COMEA Screening and Validation Co-commissioner",
+      "LG-COMEA Grievance Co-commissioner",
+      "SSLG Adviser",
+    ]);
+    expect(noted.at(-1)?.name).toBe("ADVISER C");
   });
 });
 

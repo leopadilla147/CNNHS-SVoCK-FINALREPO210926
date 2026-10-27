@@ -9,6 +9,7 @@ import type {
   ElectionPeriod,
   KioskStatus,
   LogEntry,
+  OfficerStatus,
   PartySummary,
   ReportTemplate,
   Student,
@@ -1360,66 +1361,103 @@ export async function fetchCandidateGate(pCandidateId: string): Promise<Candidat
   return data ? mapCandidate(data) : null;
 }
 
-export async function createSslgAdviser(
-  name: string,
-  email: string
-): Promise<{ email: string; password: string }> {
-  if (!supabase) throw new Error("Supabase is not configured.");
-  const { data, error } = await supabase.functions.invoke("create_sslg_adviser", {
-    body: { name, email },
-  });
-  if (error) throw new Error(error.message);
-  if (data?.error) throw new Error(data.error);
-  return { email: data.adviser.email, password: data.password };
-}
+/**
+ * 103 — officer creation moved from the legacy create_commissioner /
+ * create_sslg_adviser edge functions (which still wrote the
+ * commissioners/sslg_advisers tables 037 dropped, plus auth.users rows
+ * staff login never reads) to chief-gated SECURITY DEFINER RPCs over
+ * adminprofiles — the single staff identity table since 035.  Each RPC
+ * generates a one-time temp password, stores only its bcrypt hash, and
+ * returns the plaintext exactly once (D-03 modal contract).
+ */
+
+/** Serving commissioner roles — 'appointment' is records-only (103). */
+export const SERVING_COMMISSIONER_ROLES: CommissionerRole[] = [
+  "screening_validation",
+  "electoral_board",
+  "grievance",
+];
 
 export async function createCommissioner(
   name: string,
   email: string,
   role: CommissionerRole
-): Promise<{ email: string; password: string }> {
-  if (!supabase) throw new Error("Supabase is not configured.");
-  const { data, error } = await supabase.functions.invoke("create_commissioner", {
-    body: { name, email, role },
+): Promise<{ name: string; email: string; password: string }> {
+  const client = requireSupabase();
+  const { data, error } = await client.rpc("create_commissioner_rpc", {
+    p_name: name,
+    p_email: email,
+    p_commissioner_role: role,
   });
   if (error) throw new Error(error.message);
-  if (data?.error) throw new Error(data.error);
-  return { email: data.commissioner.email, password: data.password };
+  return { name, email, password: String(data) };
 }
-
-/** D-05 target roles the reset_password edge fn accepts. */
-export type ResetTargetRole = "commissioner" | "co_commissioner" | "student";
 
 /**
- * 05-02 (D-05 / ACCT-04): admin/adviser-initiated password reset.
- * Invokes the reset_password edge function; the transport interceptor
- * attaches the stored x-session-token to /functions/v1/ calls (same as
- * createCommissioner/createSslgAdviser).  The edge fn enforces the reset
- * scope (admin -> commissioners/co-commissioners; sslg_adviser -> approved
- * students) and returns the one-time temp password — displayed exactly once
- * via the D-03 modal.  On success the target's must_change_password flag is
- * set and every existing session is dead (D-04/D-14).
+ * 103 — a Co-commissioner can only be created for a role that currently
+ * has an ACTIVE primary commissioner; the RPC re-checks server-side (the
+ * UI gate is convenience, not security).  Multiple co-commissioners per
+ * role are allowed.  104: the 'appointment' role is accepted too — its
+ * co-commissioner is RECORDS-ONLY (no account) and the RPC returns a
+ * null password, so no credential modal is shown.
  */
-export async function resetPassword(
-  targetRole: ResetTargetRole,
-  targetId: string
-): Promise<{ name: string; email: string; password: string }> {
-  if (!supabase) throw new Error("Supabase is not configured.");
-  const { data, error } = await supabase.functions.invoke("reset_password", {
-    body: { targetRole, targetId },
+export async function createCoCommissioner(
+  name: string,
+  email: string,
+  role: CommissionerRole
+): Promise<{ name: string; email: string; password: string | null }> {
+  const client = requireSupabase();
+  const { data, error } = await client.rpc("create_co_commissioner_rpc", {
+    p_name: name,
+    p_email: email,
+    p_commissioner_role: role,
   });
   if (error) throw new Error(error.message);
-  if (data?.error) throw new Error(data.error);
-  return { name: data.name, email: data.email, password: data.password };
+  return { name, email, password: data == null ? null : String(data) };
 }
 
-export async function updateCommissionerStatus(
-  commissionerId: string,
-  status: "active" | "inactive"
+export async function createSslgAdviser(
+  name: string,
+  email: string
+): Promise<{ name: string; email: string; password: string }> {
+  const client = requireSupabase();
+  const { data, error } = await client.rpc("create_sslg_adviser_rpc", {
+    p_name: name,
+    p_email: email,
+  });
+  if (error) throw new Error(error.message);
+  return { name, email, password: String(data) };
+}
+
+/**
+ * 103 — records-only Commissioner of Appointment: upserts the single
+ * 'appointment' adminprofiles row (no auth_id, no password_hash) — it
+ * fills the appointment vacancy and prefills report signatories but can
+ * never log in.  Call again with new values to update the record.
+ */
+export async function setAppointmentCommissioner(
+  name: string,
+  email: string
 ): Promise<void> {
-  if (!supabase) throw new Error("Supabase is not configured.");
-  const { error } = await supabase.rpc("update_commissioner_status", {
-    p_commissioner_id: commissionerId,
+  const client = requireSupabase();
+  const { error } = await client.rpc("set_appointment_commissioner_rpc", {
+    p_name: name,
+    p_email: email,
+  });
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * 103 — Active / On Leave / Retired / Resigned.  The RPC refuses the
+ * chief row and purges the officer's sessions on retired/resigned.
+ */
+export async function setOfficerStatus(
+  officerId: string,
+  status: OfficerStatus
+): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client.rpc("set_officer_status_rpc", {
+    p_officer_id: officerId,
     p_status: status,
   });
   if (error) throw new Error(error.message);
@@ -1462,6 +1500,9 @@ export interface StaffRosterRow {
   commissioner_role: string | null;
   status: string;
   appointed_at: string | null;
+  /** 104: the co-commissioner's primary — null for non-co rows (and for
+   *  co rows whose primary was removed: the FK is ON DELETE SET NULL). */
+  co_commissioner_of: string | null;
 }
 
 export async function listStaffRosterRpc(): Promise<StaffRosterRow[]> {

@@ -1,5 +1,14 @@
 // create_commissioner/index.ts
 // =============================================================
+// DEPRECATED (103) — no longer called by the client.  Officer creation
+// moved to the chief-gated create_commissioner_rpc /
+// create_co_commissioner_rpc SECURITY DEFINER RPCs (migration 103):
+// this function still wrote the commissioners table 037 dropped, plus
+// auth.users/profiles rows that staff login (login_staff_direct_v2,
+// adminprofiles.password_hash since 035) never reads.  Kept for
+// reference only.
+//
+// =============================================================
 // Chief appointment endpoint (03-01 port, ROLE-01).
 //
 // Port change (T-03-03): identity comes from the 02-02 session

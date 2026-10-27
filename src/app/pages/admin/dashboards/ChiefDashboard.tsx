@@ -13,8 +13,9 @@ import {
   Sparkles,
   FileText,
 } from "lucide-react";
-import { useApp, type CommissionerRole } from "../../../context/AppContext";
+import { useApp } from "../../../context/AppContext";
 import { listStaffRosterRpc, type StaffRosterRow } from "../../../lib/supabaseData";
+import { missingRequiredRoles } from "../../../lib/staffReadiness";
 import { complaintsForElection } from "../../../lib/complaints";
 import { useReportImages } from "../../../lib/reportImages";
 import ElectionStageBanner from "../../../components/ElectionStageBanner";
@@ -57,24 +58,15 @@ export default function ChiefDashboard() {
     return () => { cancelled = true; };
   }, []);
 
-  const allCommissionerRoles: CommissionerRole[] = [
-    "screening_validation",
-    "electoral_board",
-    "grievance",
-  ];
   const activeCommissioners = roster.filter(
     (r) => (r.role_type === "commissioner" || r.role_type === "co_commissioner") && r.status === "active"
   );
-  const appointedRoles = new Set(
-    activeCommissioners
-      .map((r) => r.commissioner_role)
-      .filter((role): role is CommissionerRole => role != null)
-  );
-  // Held at zero until the roster resolves so the callout never flashes
-  // "unappointed" on a fresh load.
-  const missingCommissioners = rosterLoaded
-    ? allCommissionerRoles.filter((r) => !appointedRoles.has(r)).length
-    : 0;
+  // 103: staffing readiness across ALL five required roles (the three
+  // serving commissioner roles + the records-only Commissioner of
+  // Appointment + SSLG Adviser).  Only ACTIVE primaries fill a role —
+  // co-commissioners, On Leave, Retired and Resigned never do.
+  const missingRoles = rosterLoaded ? missingRequiredRoles(roster) : [];
+  const missingCommissioners = missingRoles.length;
   // The Chief's own row is always present, so it counts toward the
   // appointed officer total once the roster has resolved.
   const appointedOfficerCount = activeCommissioners.length + (rosterLoaded ? 1 : 0);
@@ -152,6 +144,35 @@ export default function ChiefDashboard() {
 
       {/* Election Stage announcement */}
       <ElectionStageBanner />
+
+      {/* 103 staffing readiness — the five roles the system needs to run */}
+      {missingRoles.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: -6 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-amber-50 border border-amber-300 rounded-2xl p-5 shadow-xs"
+        >
+          <div className="flex items-start gap-3">
+            <AlertCircle size={18} className="text-amber-700 shrink-0 mt-0.5" />
+            <div className="text-sm">
+              <p className="font-bold text-amber-900">
+                Required officers missing — the system cannot run elections yet
+              </p>
+              <p className="text-amber-800 mt-1">
+                These roles must have an active officer before elections can be
+                administered: <span className="font-semibold">{missingRoles.join(", ")}</span>.
+              </p>
+              <Link
+                to="/admin/officers"
+                className="inline-flex items-center gap-1.5 mt-2 bg-amber-100 hover:bg-amber-200 text-amber-900 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors"
+              >
+                Appoint them in Officer Management
+                <ArrowUpRight size={13} />
+              </Link>
+            </div>
+          </div>
+        </motion.div>
+      )}
 
       {/* Primary KPI Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -264,7 +285,7 @@ export default function ChiefDashboard() {
                 className="inline-flex items-center gap-1.5 bg-amber-100/90 hover:bg-amber-200/90 text-amber-900 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors"
               >
                 <AlertCircle size={13} />
-                <span>{missingCommissioners} commissioner role{missingCommissioners !== 1 ? "s" : ""} unappointed</span>
+                <span>{missingCommissioners} required role{missingCommissioners !== 1 ? "s" : ""} unstaffed</span>
               </Link>
             )}
             {pendingStudents > 0 && (

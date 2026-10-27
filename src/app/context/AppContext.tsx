@@ -16,7 +16,17 @@ export type CommissionerRole =
   | "chief"
   | "screening_validation"
   | "electoral_board"
-  | "grievance";
+  | "grievance"
+  /** 103: records-only designation — name + email, no login account. */
+  | "appointment";
+
+/**
+ * 103 officer lifecycle.  Only `active` counts as serving the role
+ * (vacancy checks, report signatories).  `on_leave` can still log in
+ * (temporary absence); `retired`/`resigned` are signed out and refuse
+ * login (migration 103's login gate).
+ */
+export type OfficerStatus = "active" | "on_leave" | "retired" | "resigned";
 
 export interface CurrentUser {
   id: string;
@@ -133,7 +143,7 @@ export interface Commissioner {
   name: string;
   email: string;
   role: CommissionerRole;
-  status: "active" | "inactive";
+  status: OfficerStatus;
   appointedAt: string;
 }
 

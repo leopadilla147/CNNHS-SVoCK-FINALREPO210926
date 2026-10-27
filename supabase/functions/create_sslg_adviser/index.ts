@@ -1,5 +1,13 @@
 // create_sslg_adviser/index.ts
 // =============================================================
+// DEPRECATED (103) — no longer called by the client.  Adviser creation
+// moved to the chief-gated create_sslg_adviser_rpc SECURITY DEFINER RPC
+// (migration 103): this function still wrote the sslg_advisers table
+// 037 dropped, plus auth.users/profiles rows that staff login
+// (login_staff_direct_v2, adminprofiles.password_hash since 035) never
+// reads.  Kept for reference only.
+//
+// =============================================================
 // SSLG Adviser appointment endpoint (D-02, ROADMAP step 1/2).
 //
 // Rewrite (05-01 T2): the previous implementation resolved the requester

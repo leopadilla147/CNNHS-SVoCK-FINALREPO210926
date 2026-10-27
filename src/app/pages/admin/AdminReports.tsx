@@ -930,10 +930,9 @@ function SignatoryGroupsEditor({
  * One signatory row: name + "Position / role" dropdown.  The dropdown offers
  * the official LG-COMEA titles; choosing a commissioner title prefills the
  * Name with that acting commissioner's name (from the staff roster) — the
- * Name stays fully editable afterwards.  "Others" (and titles without a
- * system record, e.g. Appointed Commissioner) reveal/keep a free-text role
- * field and never touch the Name.  Name and role commit together through the
- * row's Save button.
+ * Name stays fully editable afterwards.  "Others" (and any title without a
+ * roster match) reveal/keep a free-text role field and never touch the Name.
+ * Name and role commit together through the row's Save button.
  */
 function SignatoryRowEditor({
   signatory,

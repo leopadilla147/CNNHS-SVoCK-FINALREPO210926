@@ -74,11 +74,14 @@ const roleConfig: Record<NonNullable<UserRole>, { items: NavItem[]; label: strin
   sslg_adviser: { items: [], label: "SSLG Adviser Portal", color: "#5C0102" },
 };
 
+// 103: 'appointment' is a records-only designation (no login), so its nav
+// never renders — the entries below exist only to satisfy the Record type.
 const commissionerNavMap: Record<CommissionerRole, NavItem[]> = {
   chief: chiefTopItems,
   screening_validation: screeningNavItems,
   electoral_board: electoralNavItems,
   grievance: grievanceNavItems,
+  appointment: screeningNavItems,
 };
 
 const commissionerLabelMap: Record<CommissionerRole, string> = {
@@ -86,6 +89,7 @@ const commissionerLabelMap: Record<CommissionerRole, string> = {
   screening_validation: "Commissioner of Screening & Validation",
   electoral_board: "Commissioner of Electoral Board",
   grievance: "Commissioner of Grievance",
+  appointment: "Commissioner of Appointment",
 };
 
 export function DashboardSidebar() {

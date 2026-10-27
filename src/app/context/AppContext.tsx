@@ -65,6 +65,11 @@ export interface Student {
    *  Persisted in students.verification (migration 100). */
   verificationStatus?: "automatic" | "manual";
   mismatchCount?: number;
+  /** 107: the account was disabled by the SSLG Adviser (the learner
+   *  graduated or transferred to another school) — login is refused
+   *  server-side by login_student_direct_v2. */
+  disabled?: boolean;
+  disabledReason?: "graduated" | "transferred";
 }
 
 export interface StudentMasterlistEntry {

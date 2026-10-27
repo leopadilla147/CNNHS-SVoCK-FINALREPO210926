@@ -6,7 +6,7 @@ import { useApp } from "../../../context/AppContext";
 import ElectionStageBanner from "../../../components/ElectionStageBanner";
 
 export default function SslgAdviserDashboard() {
-  const { students, currentUser } = useApp();
+  const { students } = useApp();
   const navigate = useNavigate();
 
   const [gradeFilter, setGradeFilter] = useState<string>("all");
@@ -53,8 +53,6 @@ export default function SslgAdviserDashboard() {
     <div className="p-6 md:p-8 max-w-7xl mx-auto">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
         <h1 className="text-gray-900 mb-1">SSLG Adviser Dashboard</h1>
-        <p className="text-gray-800 text-sm font-semibold">{currentUser?.name}</p>
-        <p className="text-gray-500 text-sm">Student supervision and election oversight overview.</p>
       </motion.div>
 
       {/* Election Stage announcement */}

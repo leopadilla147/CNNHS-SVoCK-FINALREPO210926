@@ -1,14 +1,13 @@
 import { useState, useEffect, useMemo } from "react";
 import { useSearchParams } from "react-router";
-import { Search, CheckCircle, XCircle, Clock, Eye, AlertTriangle, Upload, Loader2, Download } from "lucide-react";
+import { Search, CheckCircle, XCircle, Clock, Eye, AlertTriangle, Upload, Loader2, Download, Ban, ShieldAlert, X } from "lucide-react";
 import { motion } from "motion/react";
 import { useApp, Student, StudentMasterlistEntry } from "../../context/AppContext";
-import { reviewStudentRpc, importStudentMasterlistDocx, findExistingLrns } from "../../lib/supabaseData";
+import { reviewStudentRpc, importStudentMasterlistDocx, findExistingLrns, verifyAdviserPasswordRpc, disableStudentAccountsRpc } from "../../lib/supabaseData";
 import {
   extractAndParseMasterlist,
   partitionMasterlistMatches,
-  findFirstLrnConflict,
-  describeLrnConflict,
+  describeSkippedLrn,
   extractSchoolYear,
   splitFullName,
   toIsoBirthdate,
@@ -42,18 +41,178 @@ export default function AdminStudents() {
   const logRole = isSslgAdviser ? "SSLG Adviser" : "Admin";
   const [searchParams] = useSearchParams();
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState(searchParams.get("filter") || "all");
+  // "rejected" was removed from the surface (107) — a deep link to it
+  // falls back to "all".
+  const FILTERS = ["all", "awaiting", "pending", "approved"];
+  const [filter, setFilter] = useState(() => {
+    const urlFilter = searchParams.get("filter");
+    return urlFilter && FILTERS.includes(urlFilter) ? urlFilter : "all";
+  });
 
   useEffect(() => {
     const urlFilter = searchParams.get("filter");
-    if (urlFilter) setFilter(urlFilter);
+    if (urlFilter && FILTERS.includes(urlFilter)) setFilter(urlFilter);
   }, [searchParams]);
   const [selected, setSelected] = useState<Student | null>(null);
   const [processing, setProcessing] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [uploadBanner, setUploadBanner] = useState<{ inserted: number; awaiting: number; autoApproved: number; forReview: number; skipped: number; problems: string[]; failures?: string[]; stoppedAtRow?: number } | null>(null);
+  const [uploadBanner, setUploadBanner] = useState<{
+    /** Rows written to student_masterlist this upload. */
+    inserted: number;
+    /** Valid rows with no registered account yet (system state). */
+    awaiting: number;
+    autoApproved: number;
+    /** Valid rows NOT re-uploaded because the LRN already exists. */
+    duplicateRows: number;
+    duplicateMessages: string[];
+    /** Rows rejected by the 5-column validation (whole row invalid). */
+    invalidRows: number;
+    invalidMessages: string[];
+    failures?: string[];
+  } | null>(null);
   const approveConfirm = useConfirm({ title: "Approve Student?", description: "This will approve the student's registration and grant them access to the election system.", confirmText: "Approve", destructive: false });
   const rejectConfirm = useConfirm({ title: "Reject Student?", description: "This will reject the student's registration. They will not be able to participate in the election.", confirmText: "Reject", destructive: true });
+
+  // 107 — Disable Student Accounts: a password-gated dialog behind the
+  // upload row.  Step "gate" verifies the acting adviser's OWN password
+  // (verify_adviser_password_rpc) BEFORE the panel is shown; the panel
+  // collects the reason (Graduated / Transferring to Another School) and
+  // the accounts to disable, and the RPC re-verifies the password when
+  // the consequential move happens.
+  const [disableOpen, setDisableOpen] = useState(false);
+  const [disableStep, setDisableStep] = useState<"gate" | "panel">("gate");
+  const [disablePassword, setDisablePassword] = useState("");
+  const [disableError, setDisableError] = useState<string | null>(null);
+  const [disableReason, setDisableReason] = useState<"graduated" | "transferred">("graduated");
+  const [disableSelection, setDisableSelection] = useState<Set<string>>(new Set());
+  const [disableSearch, setDisableSearch] = useState("");
+  const [disabling, setDisabling] = useState(false);
+  // Graduated mode: upload a CNNHS-format masterlist and auto-select every
+  // parsed LRN that matches an approved account.
+  const [parsingGraduated, setParsingGraduated] = useState(false);
+  const [graduatedReport, setGraduatedReport] = useState<{ matched: number; unknownLrns: string[]; invalidRows: number } | null>(null);
+
+  // Only APPROVED, not-yet-disabled accounts can be disabled.
+  const disableCandidates = useMemo(
+    () => students.filter((s) => s.status === "approved" && !s.disabled),
+    [students]
+  );
+  const selectedDisableStudents = useMemo(
+    () => disableCandidates.filter((s) => disableSelection.has(s.id)),
+    [disableCandidates, disableSelection]
+  );
+  const filteredDisableCandidates = useMemo(
+    () =>
+      disableCandidates.filter((s) =>
+        `${s.firstName} ${s.lastName} ${s.lrn}`.toLowerCase().includes(disableSearch.toLowerCase())
+      ),
+    [disableCandidates, disableSearch]
+  );
+
+  const openDisableDialog = () => {
+    setDisableStep("gate");
+    setDisablePassword("");
+    setDisableError(null);
+    setDisableReason("graduated");
+    setDisableSelection(new Set());
+    setDisableSearch("");
+    setGraduatedReport(null);
+    setDisableOpen(true);
+  };
+
+  /**
+   * Graduated mode: parse the uploaded CNNHS-format masterlist (same parser
+   * as the enrollment upload — 5-column validation, title/header rows
+   * excluded) and auto-select every LRN that matches an APPROVED account.
+   * LRNs with no approved account are reported, not selected.
+   */
+  const handleGraduatedUpload = async (file: File | null) => {
+    if (!file) return;
+    setParsingGraduated(true);
+    setDisableError(null);
+    try {
+      const {
+        parsed: { rows, skipped },
+      } = await extractAndParseMasterlist(file);
+      const candidateByLrn = new Map(disableCandidates.map((s) => [s.lrn, s] as const));
+      const matched = rows.filter((r) => candidateByLrn.has(r.lrn));
+      const unknownLrns = rows.filter((r) => !candidateByLrn.has(r.lrn)).map((r) => r.lrn);
+      setDisableSelection(new Set(matched.map((m) => candidateByLrn.get(m.lrn)!.id)));
+      setGraduatedReport({ matched: matched.length, unknownLrns, invalidRows: skipped });
+    } catch (err: any) {
+      setDisableError(err.message || "Could not read the masterlist file.");
+    } finally {
+      setParsingGraduated(false);
+    }
+  };
+
+  const submitDisableGate = async () => {
+    if (!disablePassword) {
+      setDisableError("Enter the SSLG Adviser password to continue.");
+      return;
+    }
+    setDisabling(true);
+    setDisableError(null);
+    try {
+      if (isSupabaseConfigured) {
+        await verifyAdviserPasswordRpc(disablePassword);
+      }
+      setDisableStep("panel");
+    } catch (err: any) {
+      setDisableError(err.message || "The SSLG Adviser password was not accepted.");
+    } finally {
+      setDisabling(false);
+    }
+  };
+
+  const toggleDisableSelection = (id: string) => {
+    setDisableSelection((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const submitDisableAccounts = async () => {
+    if (disableSelection.size === 0) {
+      setDisableError("Select at least one student account to disable.");
+      return;
+    }
+    setDisabling(true);
+    setDisableError(null);
+    try {
+      const ids = Array.from(disableSelection);
+      let disabledCount = ids.length;
+      if (isSupabaseConfigured) {
+        // The RPC re-verifies the password server-side and writes the
+        // audit entry (107).
+        const { disabled } = await disableStudentAccountsRpc(ids, disableReason, disablePassword);
+        disabledCount = disabled;
+      }
+      const reasonLabel = disableReason === "graduated" ? "Graduated" : "Transferred to another school";
+      addLog({
+        user: logUser,
+        role: logRole,
+        action: "Student Accounts Disabled",
+        details: `Disabled ${disabledCount} student account(s) — reason: ${reasonLabel}.`,
+        type: "warning",
+      });
+      setStudents(
+        students.map((s) =>
+          disableSelection.has(s.id)
+            ? { ...s, disabled: true, disabledReason: disableReason }
+            : s
+        )
+      );
+      setDisableOpen(false);
+    } catch (err: any) {
+      // Keep the dialog open so the adviser can correct the password and retry.
+      setDisableError(err.message || "Failed to disable the selected student accounts.");
+    } finally {
+      setDisabling(false);
+    }
+  };
 
   // MASTER-01 display flow: masterlist rows whose LRN has no registered
   // account yet surface in this tab as "awaiting student registration".
@@ -85,7 +244,7 @@ export default function AdminStudents() {
     setUploadBanner(null);
     try {
       const {
-        parsed: { rows, skipped, errors, stoppedAtRow },
+        parsed: { rows, skipped, errors },
         text,
       } = await extractAndParseMasterlist(file);
       const schoolYear = extractSchoolYear(text) || electionPeriod?.schoolYear || "";
@@ -94,56 +253,50 @@ export default function AdminStudents() {
           'Could not determine the school year. Keep the "SY: 2026-2027" header line in the document, or set up the election period first.'
         );
       }
-      // Fail fast (all-or-nothing): a validation error imports nothing.
-      if (errors.length > 0 || rows.length === 0) {
+      // Partial import (MASTER-01): every row is validated independently.
+      // Invalid rows are reported below and skipped — the valid rows around
+      // them still import.
+      if (rows.length === 0) {
         setUploadBanner({
           inserted: 0,
           awaiting: 0,
           autoApproved: 0,
-          forReview: 0,
-          skipped,
-          problems: errors,
-          stoppedAtRow,
+          duplicateRows: 0,
+          duplicateMessages: [],
+          invalidRows: skipped,
+          invalidMessages: errors,
         });
         return;
       }
 
-      // System-wide LRN uniqueness (no school-year scope): a sheet may not
-      // re-introduce an LRN that is already registered or already listed on
-      // the Student Masterlist.  Nothing is imported on a clash.
+      // Which rows already exist in the system?  An LRN may not be
+      // re-uploaded (school year is ignored — an LRN identifies one
+      // learner), but a clash now only SKIPS that row: the rest of the
+      // sheet still imports, so re-uploading the same masterlist works.
+      let duplicateRows = 0;
+      let duplicateMessages: string[] = [];
+      let importRows = rows;
       if (isSupabaseConfigured) {
         const conflicts = await findExistingLrns(rows.map((r) => r.lrn));
-        const clash = findFirstLrnConflict(rows, conflicts);
-        if (clash) {
-          const message = describeLrnConflict(clash.row, clash.info);
-          setUploadBanner({
-            inserted: 0,
-            awaiting: 0,
-            autoApproved: 0,
-            forReview: 0,
-            skipped: 1,
-            problems: [message],
-            stoppedAtRow: clash.row.sheetRow,
-          });
-          addLog({
-            user: logUser,
-            role: logRole,
-            action: "Masterlist Import Blocked",
-            details: message,
-            type: "warning",
-          });
-          return;
-        }
+        const skippedRows = rows.filter((r) => conflicts.has(r.lrn));
+        importRows = rows.filter((r) => !conflicts.has(r.lrn));
+        duplicateRows = skippedRows.length;
+        duplicateMessages = skippedRows.map((r) => describeSkippedLrn(r, conflicts.get(r.lrn)!));
       }
 
-      // MASTER-01 insert flow: persist every readable row so students who
+      // MASTER-01 insert flow: persist every NEW row so students who
       // register LATER are matched against this sheet (upsert on
       // lrn + school_year — re-uploads update instead of duplicate).
-      const { imported } = await importStudentMasterlistDocx(rows, schoolYear);
+      const { imported, errors: importErrors } = await importStudentMasterlistDocx(
+        importRows,
+        schoolYear
+      );
 
       // Refresh the local masterlist copy so "awaiting registration" rows
-      // render immediately (optimistic; the next boot load re-syncs ids).
-      const importedEntries: StudentMasterlistEntry[] = rows.map((row) => {
+      // render immediately — merged by LRN so the skipped (already
+      // existing) rows stay in the list (optimistic; the next boot load
+      // re-syncs ids).
+      const importedEntries: StudentMasterlistEntry[] = importRows.map((row) => {
         const parts = splitFullName(row.fullName);
         return {
           id: row.lrn,
@@ -158,15 +311,21 @@ export default function AdminStudents() {
           importedAt: new Date().toISOString().slice(0, 10),
         };
       });
+      const yearEntries = new Map(
+        studentMasterlist.filter((e) => e.schoolYear === schoolYear).map((e) => [e.lrn, e as StudentMasterlistEntry])
+      );
+      for (const entry of importedEntries) yearEntries.set(entry.lrn, entry);
       setStudentMasterlist([
         ...studentMasterlist.filter((e) => e.schoolYear !== schoolYear),
-        ...importedEntries,
+        ...yearEntries.values(),
       ]);
 
       // Locked flow: LRN + full name + birthdate + sex + grade must ALL match
-      // the sheet for an automatic approval.  Already-approved students are
-      // re-checked too (the RPC stamps the verdict instead of raising), so
-      // one such row can never abort the batch.
+      // the sheet for an automatic approval.  Runs over EVERY valid row —
+      // including the ones skipped as duplicates — so re-uploading the same
+      // masterlist after students register approves matched pending
+      // accounts.  Already-approved students are only re-stamped (no
+      // duplicate notification); an explicit rejection is never overturned.
       const { pendingIds, alreadyApprovedIds, forReview, awaiting, alreadyRejected } =
         partitionMasterlistMatches(rows, students);
       const autoApproveIds = [...pendingIds, ...alreadyApprovedIds];
@@ -176,27 +335,30 @@ export default function AdminStudents() {
 
       for (const id of autoApproveIds) {
         const student = students.find((s) => s.id === id);
+        const wasPending = student?.status === "pending";
         try {
           if (isSupabaseConfigured) {
             await reviewStudentRpc(id, "approve", currentUser?.id, "automatic");
           }
           appliedIds.add(id);
-          addLog({
-            user: logUser,
-            role: logRole,
-            action: "Approved Student Registration",
-            details: `Auto-approved ${student?.firstName || ""} ${student?.lastName || ""} (LRN: ${student?.lrn || id}) — full masterlist match (name + LRN + birthdate + sex + grade level)`,
-            type: "success",
-          });
-          insertNotification({
-            userId: id,
-            role: "student",
-            type: "student_approved",
-            title: "Registration Approved",
-            message:
-              "You have been automatically approved through the Student Masterlist match. You can now log in and access the election system.",
-            link: "/student/dashboard",
-          });
+          if (wasPending) {
+            addLog({
+              user: logUser,
+              role: logRole,
+              action: "Approved Student Registration",
+              details: `Auto-approved ${student?.firstName || ""} ${student?.lastName || ""} (LRN: ${student?.lrn || id}) — full masterlist match (name + LRN + birthdate + sex + grade level)`,
+              type: "success",
+            });
+            insertNotification({
+              userId: id,
+              role: "student",
+              type: "student_approved",
+              title: "Registration Approved",
+              message:
+                "You have been automatically approved through the Student Masterlist match. You can now log in and access the election system.",
+              link: "/student/dashboard",
+            });
+          }
         } catch (err: any) {
           // Isolated: one failed stamp must not abort the rest of the sheet.
           failures.push(
@@ -219,17 +381,18 @@ export default function AdminStudents() {
         inserted: imported,
         awaiting,
         autoApproved: appliedIds.size,
-        forReview,
-        skipped,
-        problems: errors,
+        duplicateRows,
+        duplicateMessages,
+        invalidRows: skipped,
+        invalidMessages: [...errors, ...importErrors],
         failures,
       });
       addLog({
         user: logUser,
         role: logRole,
         action: "Masterlist Imported",
-        details: `Imported ${imported} masterlist row(s) for SY ${schoolYear}: ${appliedIds.size} auto-approved, ${awaiting} awaiting registration, ${forReview} for review, ${alreadyRejected} matching-rejected left unchanged, ${skipped} skipped, ${failures.length} failed.`,
-        type: failures.length > 0 ? "warning" : "info",
+        details: `Imported ${imported} new masterlist row(s) for SY ${schoolYear}: ${duplicateRows} skipped (LRN already exists), ${skipped} invalid, ${appliedIds.size} auto-approved, ${awaiting} awaiting registration, ${forReview} for review, ${alreadyRejected} matching-rejected left unchanged, ${failures.length} failed.`,
+        type: failures.length > 0 || skipped > 0 ? "warning" : "info",
       });
     } catch (err: any) {
       toast.error(err.message || "Could not read the masterlist file. Make sure it is a valid .docx in the CNNHS masterlist format.");
@@ -387,11 +550,22 @@ export default function AdminStudents() {
             <span className="text-sm font-medium text-gray-700">Download Masterlist Format</span>
             <span className="text-xs text-gray-400">Blank .docx copy of the official template</span>
           </a>
+          {/* 107 — Disable Student Accounts (SSLG Adviser password gate). */}
+          <button
+            type="button"
+            onClick={openDisableDialog}
+            className="flex flex-col items-center justify-center gap-2 sm:w-56 bg-white border border-gray-200 rounded-xl p-6 text-center hover:border-red-300 hover:bg-red-50 transition-colors"
+            title="Disable approved student accounts — Graduated / Transferred (SSLG Adviser password required)"
+          >
+            <Ban size={20} className="flex-shrink-0" style={{ color: "#DC2626" }} />
+            <span className="text-sm font-medium text-gray-700">Disable Student Accounts</span>
+            <span className="text-xs text-gray-400">Graduated / Transferred (password required)</span>
+          </button>
         </div>
 
         {uploadBanner && (
           <div className="mt-3 space-y-2">
-            {(uploadBanner.inserted > 0 || uploadBanner.autoApproved > 0 || uploadBanner.forReview > 0 || uploadBanner.awaiting > 0 || uploadBanner.problems.length > 0 || (uploadBanner.failures?.length ?? 0) > 0) ? (
+            {(uploadBanner.inserted > 0 || uploadBanner.autoApproved > 0 || uploadBanner.awaiting > 0 || uploadBanner.invalidRows > 0 || uploadBanner.duplicateRows > 0 || (uploadBanner.failures?.length ?? 0) > 0) ? (
               <>
                 {uploadBanner.inserted > 0 && (
                   <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-sm text-green-700 flex items-start gap-2">
@@ -411,27 +585,47 @@ export default function AdminStudents() {
                     <span>{uploadBanner.autoApproved} registered student{uploadBanner.autoApproved === 1 ? "" : "s"} auto-approved via the masterlist match.</span>
                   </div>
                 )}
-                {uploadBanner.forReview > 0 && (
-                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-700 flex items-start gap-2">
+                {uploadBanner.duplicateRows > 0 && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm text-blue-700 flex items-start gap-2">
                     <Clock size={15} className="flex-shrink-0 mt-0.5" />
-                    <span>{uploadBanner.forReview} student{uploadBanner.forReview === 1 ? "" : "s"} need manual review.</span>
+                    <div>
+                      <div>
+                        {uploadBanner.duplicateRows} row{uploadBanner.duplicateRows === 1 ? "" : "s"} skipped — their LRN{uploadBanner.duplicateRows === 1 ? "" : "s"} already exist{uploadBanner.duplicateRows === 1 ? "s" : ""} in the system, so {uploadBanner.duplicateRows === 1 ? "it was" : "they were"} not re-uploaded:
+                      </div>
+                      <ul className="mt-1.5 ml-1 list-disc list-inside space-y-0.5 text-xs">
+                        {uploadBanner.duplicateMessages.slice(0, 8).map((message, i) => (
+                          <li key={i}>{message}</li>
+                        ))}
+                      </ul>
+                      {uploadBanner.duplicateMessages.length > 8 && (
+                        <div className="mt-1 text-xs">...and {uploadBanner.duplicateMessages.length - 8} more.</div>
+                      )}
+                    </div>
                   </div>
                 )}
-                {uploadBanner.problems.length > 0 && (
+                {uploadBanner.invalidRows > 0 && (
                   <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700 flex items-start gap-2">
                     <AlertTriangle size={15} className="flex-shrink-0 mt-0.5" />
                     <div>
                       <div>
-                        {uploadBanner.stoppedAtRow
-                          ? `Reading stopped at Row ${uploadBanner.stoppedAtRow} — nothing was imported.`
-                          : "The sheet could not be read — nothing was imported."}{" "}
-                        Fix the issue below and upload the sheet again:
+                        {uploadBanner.invalidRows} row{uploadBanner.invalidRows === 1 ? "" : "s"} could not be imported —{" "}
+                        {uploadBanner.inserted > 0
+                          ? "the valid rows were still imported. "
+                          : "nothing was imported. "}
+                        Fix the highlighted rows and upload the sheet again:
                       </div>
                       <ul className="mt-1.5 ml-1 list-disc list-inside space-y-0.5 text-xs">
-                        {uploadBanner.problems.map((problem, i) => (
-                          <li key={i}>{problem}</li>
+                        {uploadBanner.invalidMessages.slice(0, 8).map((message, i) => (
+                          <li key={i}>{message}</li>
                         ))}
                       </ul>
+                      {uploadBanner.invalidMessages.length > 8 && (
+                        <div className="mt-1 text-xs">...and {uploadBanner.invalidMessages.length - 8} more.</div>
+                      )}
+                      <div className="mt-1.5 text-xs">
+                        Each row needs: a 12-digit LRN (numbers only); a "Last Name, First Name, Middle Initial"
+                        name; Sex as Male/Female; Birthdate as MM/DD/YYYY; and Grade Level as Grade 7–12.
+                      </div>
                     </div>
                   </div>
                 )}
@@ -462,14 +656,266 @@ export default function AdminStudents() {
       </div>
       )}
 
+      {/* 107 — Disable Student Accounts dialog: password gate first, then
+          the reason + selection panel.  The RPC re-verifies the password
+          when the accounts are actually disabled. */}
+      {disableOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" onClick={() => !disabling && setDisableOpen(false)} />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="disable-dialog-title"
+            className={`relative bg-white rounded-2xl shadow-xl border border-gray-100 p-6 w-full ${
+              disableStep === "panel" ? "max-w-3xl" : "max-w-md"
+            } max-h-[85vh] overflow-y-auto`}
+          >
+            <button
+              onClick={() => !disabling && setDisableOpen(false)}
+              disabled={disabling}
+              aria-label="Close"
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 disabled:opacity-50"
+            >
+              <X size={18} />
+            </button>
+
+            <div className="flex items-center gap-2 mb-1">
+              <Ban size={18} style={{ color: "#DC2626" }} />
+              <h3 id="disable-dialog-title" className="text-gray-900 text-sm font-semibold">
+                Disable Student Accounts
+              </h3>
+            </div>
+
+            {disableStep === "gate" ? (
+              <>
+                <p className="text-xs text-gray-500 mb-4">
+                  This action disables approved student accounts so they can no longer log in.
+                  Enter the SSLG Adviser password to continue.
+                </p>
+                <label className="block text-xs text-gray-600 mb-1" htmlFor="disable-gate-password">
+                  SSLG Adviser Password
+                </label>
+                <input
+                  id="disable-gate-password"
+                  type="password"
+                  value={disablePassword}
+                  onChange={(e) => setDisablePassword(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") submitDisableGate(); }}
+                  disabled={disabling}
+                  autoComplete="current-password"
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 disabled:opacity-50"
+                />
+                {disableError && (
+                  <p className="text-xs text-red-600 mt-2" role="alert">{disableError}</p>
+                )}
+                <div className="flex justify-end gap-2 mt-4">
+                  <button
+                    onClick={() => setDisableOpen(false)}
+                    disabled={disabling}
+                    className="px-4 py-2 bg-gray-100 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={submitDisableGate}
+                    disabled={disabling}
+                    className="px-4 py-2 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:opacity-90 disabled:opacity-50"
+                    style={{ backgroundColor: "#5C0102" }}
+                  >
+                    {disabling ? <Loader2 size={15} className="animate-spin" /> : <ShieldAlert size={15} />}
+                    Continue
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex flex-col lg:flex-row gap-4">
+                <div className="flex-1 min-w-0">
+                <p className="text-xs text-gray-500 mb-3">
+                  Choose a reason and select the approved accounts to disable. Disabled
+                  students can no longer log in.
+                </p>
+
+                {/* Reason */}
+                <span className="block text-xs text-gray-600 mb-1.5">Reason</span>
+                <div className="flex gap-2 flex-wrap mb-3">
+                  {([["graduated", "Graduated"], ["transferred", "Transferring to Another School"]] as const).map(
+                    ([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => {
+                          setDisableReason(value);
+                          setGraduatedReport(null);
+                        }}
+                        className={`px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                          disableReason === value ? "text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                        }`}
+                        style={disableReason === value ? { backgroundColor: "#5C0102" } : {}}
+                      >
+                        {label}
+                      </button>
+                    )
+                  )}
+                </div>
+
+                {/* Graduated mode: upload a CNNHS-format masterlist (the same
+                    format used for registration) to auto-select every LRN
+                    that matches an approved account. */}
+                {disableReason === "graduated" && (
+                  <div className="mb-3 space-y-2">
+                    <label className="flex items-center justify-center gap-2 border-2 border-dashed border-gray-200 rounded-lg p-3 text-center hover:border-[#5C0102] cursor-pointer bg-white text-xs text-gray-600">
+                      <input
+                        type="file"
+                        accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        className="hidden"
+                        disabled={parsingGraduated}
+                        onChange={(e) => {
+                          handleGraduatedUpload(e.target.files?.[0] ?? null);
+                          e.target.value = "";
+                        }}
+                      />
+                      {parsingGraduated ? (
+                        <Loader2 size={14} className="animate-spin text-[#5C0102]" />
+                      ) : (
+                        <Upload size={14} className="text-gray-400 flex-shrink-0" />
+                      )}
+                      {parsingGraduated
+                        ? "Reading masterlist..."
+                        : "Upload Graduated Masterlist (.docx) — auto-selects matching students"}
+                    </label>
+                    {graduatedReport && (
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-2.5 text-xs text-blue-700">
+                        {graduatedReport.matched} student{graduatedReport.matched === 1 ? "" : "s"} matched and selected.
+                        {graduatedReport.unknownLrns.length > 0 && (
+                          <>
+                            {" "}
+                            {graduatedReport.unknownLrns.length} LRN{graduatedReport.unknownLrns.length === 1 ? "" : "s"} in the
+                            sheet have no approved account — skipped: {graduatedReport.unknownLrns.slice(0, 5).join(", ")}
+                            {graduatedReport.unknownLrns.length > 5 && ", ..."}.
+                          </>
+                        )}
+                        {graduatedReport.invalidRows > 0 && (
+                          <> {graduatedReport.invalidRows} invalid row{graduatedReport.invalidRows === 1 ? "" : "s"} ignored.</>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Search + selection */}
+                <div className="relative mb-2">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Search approved students..."
+                    value={disableSearch}
+                    onChange={(e) => setDisableSearch(e.target.value)}
+                    className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-xs bg-gray-50"
+                  />
+                </div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs text-gray-500">{disableSelection.size} selected</span>
+                  <button
+                    type="button"
+                    onClick={() => setDisableSelection(new Set(filteredDisableCandidates.map((s) => s.id)))}
+                    className="text-xs text-gray-500 hover:text-gray-700 underline"
+                  >
+                    Select all shown
+                  </button>
+                </div>
+                <div className="border border-gray-100 rounded-lg divide-y divide-gray-50 max-h-64 overflow-y-auto">
+                  {filteredDisableCandidates.length === 0 && (
+                    <div className="p-4 text-xs text-gray-400 text-center">No approved student accounts available.</div>
+                  )}
+                  {filteredDisableCandidates.map((s) => (
+                    <label key={s.id} className="flex items-center gap-3 p-2.5 hover:bg-gray-50 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={disableSelection.has(s.id)}
+                        onChange={() => toggleDisableSelection(s.id)}
+                        className="w-4 h-4 accent-[#5C0102]"
+                      />
+                      <span className="flex-1 text-sm text-gray-700">{s.firstName} {s.lastName}</span>
+                      <span className="text-xs text-gray-500 font-mono">{s.lrn}</span>
+                      <span className="text-xs text-gray-400">{s.gradeLevel}</span>
+                    </label>
+                  ))}
+                </div>
+                </div>
+
+                {/* Summary of the list beside the selection — the adviser's
+                    "check" list of exactly what will be disabled. */}
+                <div className="lg:w-64 shrink-0">
+                  <div className="border border-gray-100 rounded-lg bg-gray-50 p-3 h-full flex flex-col">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-medium text-gray-700">Selected for Disable</span>
+                      <span className="text-xs text-gray-500">{selectedDisableStudents.length}</span>
+                    </div>
+                    {selectedDisableStudents.length === 0 ? (
+                      <div className="text-xs text-gray-400 py-6 text-center flex-1 flex items-center justify-center">
+                        No students selected yet.
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5 overflow-y-auto max-h-72 flex-1">
+                        {selectedDisableStudents.map((s) => (
+                          <div key={s.id} className="flex items-center gap-2 bg-white border border-gray-100 rounded-lg px-2 py-1.5">
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-medium text-gray-700 truncate">{s.firstName} {s.lastName}</div>
+                              <div className="text-[11px] text-gray-400 font-mono">{s.lrn}</div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => toggleDisableSelection(s.id)}
+                              className="text-gray-300 hover:text-red-500 flex-shrink-0"
+                              title={`Remove ${s.firstName} ${s.lastName} from the list`}
+                            >
+                              <X size={13} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="text-[11px] text-gray-400 mt-2">
+                      Reason: {disableReason === "graduated" ? "Graduated" : "Transferred to another school"}
+                    </div>
+                  </div>
+                </div>
+                </div>
+
+                {disableError && (
+                  <p className="text-xs text-red-600 mt-2" role="alert">{disableError}</p>
+                )}
+                <div className="flex justify-end gap-2 mt-4">
+                  <button
+                    onClick={() => setDisableOpen(false)}
+                    disabled={disabling}
+                    className="px-4 py-2 bg-gray-100 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={submitDisableAccounts}
+                    disabled={disabling || disableSelection.size === 0}
+                    className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {disabling ? <Loader2 size={15} className="animate-spin" /> : <Ban size={15} />}
+                    Disable{disableSelection.size > 0 ? ` ${disableSelection.size}` : ""} Account{disableSelection.size === 1 ? "" : "s"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
         {[
           { label: "Total", count: students.length + awaitingEntries.length, color: "#5C0102" },
           { label: "Awaiting Registration", count: awaitingEntries.length, color: "#3B82F6" },
           { label: "Pending", count: students.filter((s) => s.status === "pending").length, color: "#F59E0B" },
           { label: "Approved", count: students.filter((s) => s.status === "approved").length, color: "#10B981" },
-          { label: "Rejected", count: students.filter((s) => s.status === "rejected").length, color: "#EF4444" },
         ].map((s) => (
           <div key={s.label} className="bg-white rounded-xl p-4 shadow-sm border border-gray-100 text-center">
             <div className="text-2xl font-bold mb-0.5" style={{ color: s.color }}>{s.count}</div>
@@ -492,7 +938,7 @@ export default function AdminStudents() {
             />
           </div>
           <div className="flex gap-2 flex-wrap">
-            {["all", "awaiting", "pending", "approved", "rejected"].map((f) => (
+            {FILTERS.map((f) => (
               <button
                 key={f}
                 onClick={() => setFilter(f)}
@@ -586,7 +1032,15 @@ export default function AdminStudents() {
                       <span className="text-gray-500">Manual</span>
                     )}
                   </td>
-                  <td className="py-3 px-4">{getStatusBadge(student.status)}</td>
+                  <td className="py-3 px-4">
+                    {student.disabled ? (
+                      <span className="text-xs px-2.5 py-1 rounded-full bg-gray-200 text-gray-600 font-medium flex items-center gap-1 w-fit">
+                        <Ban size={11} /> Disabled ({student.disabledReason === "transferred" ? "Transferred" : "Graduated"})
+                      </span>
+                    ) : (
+                      getStatusBadge(student.status)
+                    )}
+                  </td>
                   <td className="py-3 px-4">
                     <div className="flex items-center gap-1.5">
                       <button onClick={() => setSelected(student)} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors text-gray-500" title="View">

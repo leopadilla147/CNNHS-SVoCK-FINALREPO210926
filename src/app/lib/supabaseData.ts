@@ -40,7 +40,7 @@ export const toTime = (value?: string) => {
   return new Date(value).toTimeString().slice(0, 5);
 };
 export const isUuid = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-export const normalize = (value?: string) => (value || "").trim().toLowerCase().replace(/\s+/g, " ");
+export const normalize = (value?: string | null) => (value || "").trim().toLowerCase().replace(/\s+/g, " ");
 
 const requireSupabase = () => {
   if (!supabase) throw new Error("Supabase is not configured.");
@@ -128,6 +128,113 @@ export async function signInWithSupabase(email: string, password: string): Promi
   return user;
 }
 
+/**
+ * Shape returned by the 106 RPC `check_registration_lrn` — booleans plus the
+ * students.status only, never any PII (names, emails, hashes).
+ */
+export interface LrnRegistrationCheck {
+  /** A students row already exists for this LRN (any status). */
+  inStudents: boolean;
+  /** students.status when inStudents, else null. */
+  studentStatus: "approved" | "pending" | "rejected" | null;
+  /** An enrolled student_masterlist row exists for this LRN. */
+  inMasterlist: boolean;
+}
+
+/**
+ * LRN-first registration pre-check (REG-LRN-01).  Anonymous visitors cannot
+ * read `students` (insert-only RLS), so the live "already registered?" gate
+ * is the 106 SECURITY DEFINER RPC.  If the RPC is not deployed yet, the
+ * masterlist half still works through the public "masterlist registration
+ * lookup" policy while the students half stays unknown (false) — the
+ * insert-time duplicate-key guard in registerStudentDirect remains the last
+ * line of defence.
+ */
+export async function checkLrnRegistration(lrn: string): Promise<LrnRegistrationCheck> {
+  const client = requireSupabase();
+  const value = lrn.trim();
+
+  const { data, error } = await client.rpc("check_registration_lrn", { p_lrn: value });
+  if (!error && data) {
+    // Older supabase-js builds hand back a raw JSON string for scalar json
+    // returns — parse before mapping.
+    const raw = typeof data === "string" ? (JSON.parse(data) as unknown) : data;
+    const row = (Array.isArray(raw) ? raw[0] : raw) as Partial<LrnRegistrationCheck> & {
+      in_students?: boolean;
+      student_status?: LrnRegistrationCheck["studentStatus"];
+      in_masterlist?: boolean;
+    } | null;
+    if (row) {
+      return {
+        inStudents: Boolean(row.in_students ?? row.inStudents),
+        studentStatus: row.student_status ?? row.studentStatus ?? null,
+        inMasterlist: Boolean(row.in_masterlist ?? row.inMasterlist),
+      };
+    }
+  }
+
+  // Fallback (RPC 106 not applied yet): the masterlist is publicly readable
+  // for enrolled rows, so inMasterlist stays accurate.
+  const { data: master } = await client
+    .from("student_masterlist")
+    .select("id")
+    .eq("lrn", value)
+    .eq("enrollment_status", "enrolled")
+    .maybeSingle();
+  return { inStudents: false, studentStatus: null, inMasterlist: Boolean(master) };
+}
+
+/** The masterlist columns the registration form verifies against. */
+export interface MasterlistMatchRecord {
+  id: string;
+  first_name: string;
+  middle_name: string | null;
+  last_name: string;
+  birthdate: string;
+  grade_level: string;
+  gender: string | null;
+}
+
+/**
+ * Fetch the enrolled masterlist row for an LRN (public read policy
+ * "masterlist registration lookup").  Used by the registration form to
+ * enforce the locked MASTER-02 rule: when the LRN is in the masterlist, the
+ * typed details must match it exactly — any mismatch blocks registration.
+ * The middle_name column (036) also tells the form whether the Middle Name
+ * input should be offered at all.
+ */
+export async function getMasterlistRecord(lrn: string): Promise<MasterlistMatchRecord | null> {
+  const client = requireSupabase();
+  const { data, error } = await client
+    .from("student_masterlist")
+    .select("id, first_name, middle_name, last_name, birthdate, grade_level, gender")
+    .eq("lrn", lrn.trim())
+    .eq("enrollment_status", "enrolled")
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as MasterlistMatchRecord | null) ?? null;
+}
+
+/**
+ * The locked MASTER-02 rule: a registration whose LRN exists in the
+ * masterlist must match the record EXACTLY — first name, last name,
+ * birthdate, grade level, and gender (LRN is the lookup key).  Single source
+ * of truth for the comparison, shared by the RegisterPage pre-check and
+ * registerStudentDirect.
+ */
+export function matchesMasterlistRecord(
+  input: { firstName: string; lastName: string; birthdate: string; gradeLevel: string; gender: string },
+  master: MasterlistMatchRecord,
+): boolean {
+  return ![
+    normalize(master.first_name) !== normalize(input.firstName),
+    normalize(master.last_name) !== normalize(input.lastName),
+    toDate(master.birthdate) !== input.birthdate,
+    normalize(master.grade_level) !== normalize(input.gradeLevel),
+    normalize(master.gender) !== normalize(input.gender),
+  ].some(Boolean);
+}
+
 async function hashPassword(password: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(password);
@@ -161,35 +268,45 @@ export async function registerStudentDirect(input: {
 
   const { data: master, error: masterError } = await client
     .from("student_masterlist")
-    .select("id, first_name, last_name, birthdate, grade_level, gender")
+    .select("id, first_name, middle_name, last_name, birthdate, grade_level, gender")
     .eq("lrn", lrn)
     .eq("enrollment_status", "enrolled")
     .maybeSingle();
 
   if (masterError) throw new Error(masterError.message);
 
-  let status: "pending" | "approved" | "rejected";
-  let verificationStatus: "automatic" | "manual" | undefined;
+  let status: "pending" | "approved";
+  let verificationStatus: "automatic" | "manual";
   let mismatchCount: number;
   let masterlistId: string | null;
 
   if (master) {
-    const mismatchChecks = [
-      normalize(master.first_name) !== normalize(firstName),
-      normalize(master.last_name) !== normalize(lastName),
-      toDate(master.birthdate) !== input.birthdate,
-      normalize(master.grade_level) !== normalize(input.gradeLevel),
-      normalize(master.gender) !== normalize(input.gender),
-    ];
-    mismatchCount = mismatchChecks.filter(Boolean).length;
-
-    // Locked flow (MASTER-02): a full match (first name, last name,
-    // birthdate, grade level, gender — LRN is the lookup key) approves the
-    // registration automatically; ANY mismatch leaves it pending for the
-    // SSLG Adviser's manual review.  The former 2+-mismatch hard block was
-    // retired — the adviser decides, never a client-side rejection.
-    status = mismatchCount === 0 ? "approved" : "pending";
-    verificationStatus = mismatchCount === 0 ? "automatic" : "manual";
+    // Locked flow (MASTER-02, hardened): a full match (first name, last
+    // name, birthdate, grade level, gender — LRN is the lookup key) approves
+    // the registration automatically.  ANY mismatch is a hard block: the
+    // registration is rejected BEFORE the insert, no pending row is created
+    // and nothing reaches the adviser queue.  Only LRNs that are NOT in the
+    // masterlist at all can land in pending for SSLG Adviser review.  The
+    // mismatch error stays generic — the form never reveals which field is
+    // wrong.
+    if (!matchesMasterlistRecord(
+      {
+        firstName,
+        lastName,
+        birthdate: input.birthdate,
+        gradeLevel: input.gradeLevel,
+        gender: input.gender,
+      },
+      master,
+    )) {
+      throw new Error(
+        "Your registration details do not match the Student Masterlist record for this LRN. " +
+        "Registration cannot continue until all details match.",
+      );
+    }
+    status = "approved";
+    verificationStatus = "automatic";
+    mismatchCount = 0;
     masterlistId = master.id;
   } else {
     status = "pending";
@@ -427,7 +544,7 @@ export async function importStudentMasterlistDocx(
     const birthdate = toIsoBirthdate(row.birthdate);
     if (!firstName || !lastName || !gradeLevel || !/^\d{4}-\d{2}-\d{2}$/.test(birthdate)) {
       skipped += 1;
-      errors.push(`Row ${index + 2}: unreadable name, grade level, or birthdate — skipped.`);
+      errors.push(`Row ${row.sheetRow ?? index + 2}: unreadable name, grade level, or birthdate — skipped.`);
       return;
     }
     payload.push({
@@ -813,6 +930,9 @@ function mapStudent(row: any): Student {
     // 100: persisted 'automatic' | 'manual' verdict (was client-derived
     // after 036 dropped verification_status).
     verificationStatus: row.verification || undefined,
+    // 107: account disabled by the SSLG Adviser (graduated / transferred).
+    disabled: row.disabled_at != null,
+    disabledReason: row.disabled_reason || undefined,
   };
 }
 
@@ -1153,6 +1273,43 @@ export async function reviewStudentRpc(
     throw new Error(msg);
   }
   return data;
+}
+
+/** 107 — the password gate in front of the "Disable Student Accounts"
+ *  panel.  The RPC verifies the SESSION adviser's own password
+ *  (bcrypt via crypt); the actor derives from the session spine. */
+export async function verifyAdviserPasswordRpc(p_password: string): Promise<boolean> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("verify_adviser_password_rpc", {
+    p_password,
+  });
+  if (error) {
+    const msg = [error.message, error.details, error.hint].filter(Boolean).join(" | ");
+    throw new Error(msg);
+  }
+  return Boolean(data);
+}
+
+/** 107 — the consequential move: disable approved student accounts
+ *  (graduated / transferred).  The RPC re-verifies the password
+ *  server-side and writes the audit entry.  Returns the disabled count. */
+export async function disableStudentAccountsRpc(
+  p_student_ids: string[],
+  p_reason: "graduated" | "transferred",
+  p_password: string
+): Promise<{ disabled: number }> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("disable_student_accounts_rpc", {
+    p_student_ids,
+    p_reason,
+    p_password,
+  });
+  if (error) {
+    const msg = [error.message, error.details, error.hint].filter(Boolean).join(" | ");
+    throw new Error(msg);
+  }
+  const row = (Array.isArray(data) ? data[0] : data) as { disabled?: number } | null;
+  return { disabled: Number(row?.disabled ?? 0) };
 }
 
 export async function reviewCandidacyRpc(

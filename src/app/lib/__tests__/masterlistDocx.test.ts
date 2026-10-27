@@ -12,8 +12,7 @@ import {
   extractAndParseMasterlist,
   isFullMasterlistMatch,
   partitionMasterlistMatches,
-  findFirstLrnConflict,
-  describeLrnConflict,
+  describeSkippedLrn,
   splitFullName,
   toTitleCase,
   normalizeSex,
@@ -107,7 +106,6 @@ describe("parseMasterlist", () => {
     expect(result.rows[1].strand).toBe("GAS");
     expect(result.skipped).toBe(0);
     expect(result.errors).toHaveLength(0);
-    expect(result.stoppedAtRow).toBeUndefined();
   });
 
   it("silently skips rows with an empty LRN cell and keeps reading", () => {
@@ -123,10 +121,9 @@ describe("parseMasterlist", () => {
     expect(result.rows).toHaveLength(2);
     expect(result.skipped).toBe(0);
     expect(result.errors).toHaveLength(0);
-    expect(result.stoppedAtRow).toBeUndefined();
   });
 
-  it("stops at the first invalid row and imports nothing", () => {
+  it("collects every invalid row and keeps the valid ones (partial import)", () => {
     const text = [
       HEADER,
       "123456789012\tDELA CRUZ, JUAN A.\tM\t05/14/2009\t15\tDELA CRUZ, MARIA\t7\tSTEM\tSAMPAGUITA\tMS. SANTOS",
@@ -136,16 +133,17 @@ describe("parseMasterlist", () => {
     ].join("\n");
 
     const result = parseMasterlist(text);
-    // Even though rows 2 and 3 were valid, a later error clears the result.
-    expect(result.rows).toHaveLength(0);
+    // The invalid row is rejected as a whole; the valid rows around it survive.
+    expect(result.rows).toHaveLength(3);
+    expect(result.rows.map((r) => r.lrn)).toEqual(["123456789012", "987654321098", "111111111111"]);
     expect(result.skipped).toBe(1);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("Row 4");
     expect(result.errors[0]).toContain("invalid LRN");
-    expect(result.stoppedAtRow).toBe(4);
+    expect(result.errors[0]).toContain("not imported");
   });
 
-  it("rejects a duplicated LRN in the text path too", () => {
+  it("keeps the first occurrence of an LRN and rejects later copies as rows", () => {
     const text = [
       HEADER,
       "123456789012\tDELA CRUZ, JUAN A.\tM\t05/14/2009\t15\tDELA CRUZ, MARIA\t7\tSTEM\tSAMPAGUITA\tMS. SANTOS",
@@ -153,14 +151,15 @@ describe("parseMasterlist", () => {
     ].join("\n");
 
     const result = parseMasterlist(text);
-    expect(result.rows).toHaveLength(0);
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].lrn).toBe("123456789012");
     expect(result.skipped).toBe(1);
     expect(result.errors[0]).toContain("Row 3");
     expect(result.errors[0]).toContain("duplicate LRN 123456789012");
-    expect(result.stoppedAtRow).toBe(3);
+    expect(result.errors[0]).toContain("not imported");
   });
 
-  it("fails fast on a present-but-incomplete row (missing required details)", () => {
+  it("reports a present-but-incomplete row (missing required details)", () => {
     const text = [
       HEADER,
       "123456789013\t\tF\t02/22/2010\t14\tSANTOS, PEDRO\t8\tGAS\tROSAL\tMR. REYES",
@@ -171,7 +170,68 @@ describe("parseMasterlist", () => {
     expect(result.skipped).toBe(1);
     expect(result.errors[0]).toContain("Row 2");
     expect(result.errors[0]).toContain("missing Full Name");
-    expect(result.stoppedAtRow).toBe(2);
+  });
+
+  it("drops title rows that sit inside the table above the header (never counted)", () => {
+    // Filled sheets often carry the document title and school-year label as
+    // merged rows INSIDE the table, above the real column headers.  They
+    // carry no LRN, so they must be dropped — not counted, not reported as
+    // "invalid LRN", and row numbering must still start at Row 2 for the
+    // first data row.
+    const title = ["STUDENT MASTER LIST", "", "", "", "", "", "", "", "", ""];
+    const syLabel = ["SY: 2026-2027", "", "", "", "", "", "", "", "", ""];
+    const header = ["LRN", "FULL NAME (LAST, FIRST, MIDDLE)", "SEX", "BIRTHDATE (MM/DD/YYYY)", "AGE", "PARENT", "GRADE LEVEL", "STRAND", "SECTION", "ADVISER"];
+    const a = ["123456789012", "DELA CRUZ, JUAN A.", "M", "05/14/2009", "15", "", "7", "STEM", "SAMPAGUITA", "MS. SANTOS"];
+    const b = ["987654321098", "SANTOS, MARIA L.", "F", "02/22/2010", "14", "", "8", "GAS", "ROSAL", "MR. REYES"];
+
+    const result = parseMasterlistRows([title, syLabel, header, a, b]);
+    expect(result.rows).toHaveLength(2);
+    expect(result.rows.map((r) => r.lrn)).toEqual(["123456789012", "987654321098"]);
+    expect(result.skipped).toBe(0);
+    expect(result.errors).toHaveLength(0);
+    expect(result.rows[0].sheetRow).toBe(2);
+  });
+
+  it("drops tab-formatted title lines in the text path too", () => {
+    const text = [
+      "STUDENT MASTER LIST\t\t\t",
+      "SY: 2026-2027\t\t\t",
+      HEADER,
+      "123456789012\tDELA CRUZ, JUAN A.\tM\t05/14/2009\t15\tDELA CRUZ, MARIA\t7\tSTEM\tSAMPAGUITA\tMS. SANTOS",
+    ].join("\n");
+
+    const result = parseMasterlist(text);
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].lrn).toBe("123456789012");
+    expect(result.rows[0].sheetRow).toBe(2);
+    expect(result.skipped).toBe(0);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("counts a mixed sheet correctly: valid, invalid, duplicated and empty rows", () => {
+    const text = [
+      "STUDENT MASTER LIST",
+      "SY: 2026-2027",
+      HEADER, // header row (sheet row 1) is consumed, never counted
+      "123456789012\tDELA CRUZ, JUAN A.\tM\t05/14/2009\t15\tDELA CRUZ, MARIA\t7\tSTEM\tSAMPAGUITA\tMS. SANTOS", // Row 2 valid
+      "", // blank line between table rows
+      "987654321098\tSANTOS, MARIA L.\tF\t02/22/2010\t14\tSANTOS, PEDRO\t8\tGAS\tROSAL\tMR. REYES", // Row 3 valid
+      "555555555555\tREYES, ANA B.\tX\t13/45/2011\t13\tREYES, LUIS\tGrade 13\tSTEM\tILANG\tMS. CRUZ", // Row 4 invalid (3 bad columns, one row error)
+      "123456789012\tDELA CRUZ, JUAN A.\tM\t05/14/2009\t15\tDELA CRUZ, MARIA\t7\tSTEM\tSAMPAGUITA\tMS. SANTOS", // Row 5 duplicate LRN
+      "222222222222\tCRUZ, KENNETH M.\tM\t07/07/2010\t14\tCRUZ, ANNA\t9\tSTEM\tILANG\tMS. CRUZ", // Row 6 valid
+    ].join("\n");
+
+    const result = parseMasterlist(text);
+    expect(result.rows).toHaveLength(3);
+    expect(result.rows.map((r) => r.lrn)).toEqual(["123456789012", "987654321098", "222222222222"]);
+    expect(result.skipped).toBe(2);
+    expect(result.errors).toHaveLength(2);
+    expect(result.errors[0]).toContain("Row 4");
+    expect(result.errors[0]).toContain("invalid Sex/Gender");
+    expect(result.errors[1]).toContain("Row 5");
+    expect(result.errors[1]).toContain("duplicate LRN 123456789012");
+    // Row numbering counts the header as row 1 — the first data row is Row 2.
+    expect(result.rows[0].sheetRow).toBe(2);
   });
 
   it("handles newline-separated (multi-space) rows without a header index", () => {
@@ -201,22 +261,20 @@ describe("extractMasterlistText", () => {
     expect(result.rows).toHaveLength(0);
     expect(result.skipped).toBe(0);
     expect(result.errors).toHaveLength(0);
-    expect(result.stoppedAtRow).toBeUndefined();
   });
 
-  it("rejects a duplicated LRN and reports both row numbers", () => {
+  it("keeps the first occurrence of an LRN and reports both row numbers", () => {
     const header = ["LRN", "FULL NAME (LAST, FIRST, MIDDLE)", "SEX", "BIRTHDATE (MM/DD/YYYY)", "AGE", "PARENT", "GRADE LEVEL", "STRAND", "SECTION", "ADVISER"];
     const rowA = ["123456789012", "DELA CRUZ, JUAN A.", "M", "05/14/2009", "15", "", "7", "STEM", "SAMPAGUITA", "MS. SANTOS"];
     const rowB = ["123456789012", "DELA CRUZ, JUAN A.", "M", "05/14/2009", "15", "", "7", "STEM", "SAMPAGUITA", "MS. SANTOS"];
 
     const result = parseMasterlistRows([header, rowA, rowB]);
-    expect(result.rows).toHaveLength(0);
+    expect(result.rows).toHaveLength(1);
     expect(result.skipped).toBe(1);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("Row 3");
     expect(result.errors[0]).toContain("duplicate LRN 123456789012");
     expect(result.errors[0]).toContain("Row 2");
-    expect(result.stoppedAtRow).toBe(3);
   });
 
   it("allows distinct LRNs and re-uploads of the same LRN set", () => {
@@ -228,18 +286,19 @@ describe("extractMasterlistText", () => {
     expect(result.errors).toHaveLength(0);
   });
 
-  it("stops at the first invalid row and clears the valid prefix (all-or-nothing)", () => {
+  it("rejects only the invalid row and keeps the valid prefix and suffix", () => {
     const header = ["LRN", "FULL NAME (LAST, FIRST, MIDDLE)", "SEX", "BIRTHDATE (MM/DD/YYYY)", "AGE", "PARENT", "GRADE LEVEL", "STRAND", "SECTION", "ADVISER"];
     const good = ["123456789012", "DELA CRUZ, JUAN A.", "M", "05/14/2009", "15", "DELA CRUZ, MARIA", "7", "STEM", "SAMPAGUITA", "MS. SANTOS"];
-    const bad = ["987654321098", "SANTOS, MARIA L.", "", "02/22/2010", "14", "SANTOS, PEDRO", "8", "GAS", "ROSAL", "MR. REYES"];
+    const good2 = ["987654321098", "SANTOS, MARIA L.", "F", "02/22/2010", "14", "SANTOS, PEDRO", "8", "GAS", "ROSAL", "MR. REYES"];
+    const bad = ["555555555555", "REYES, ANA B.", "", "02/22/2010", "14", "SANTOS, PEDRO", "8", "GAS", "ROSAL", "MR. REYES"];
 
-    const result = parseMasterlistRows([header, good, bad, good]);
-    expect(result.rows).toHaveLength(0);
+    const result = parseMasterlistRows([header, good, bad, good2]);
+    expect(result.rows).toHaveLength(2);
+    expect(result.rows.map((r) => r.lrn)).toEqual(["123456789012", "987654321098"]);
     expect(result.skipped).toBe(1);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("Row 3");
     expect(result.errors[0]).toContain("missing Sex/Gender");
-    expect(result.stoppedAtRow).toBe(3);
   });
 });
 
@@ -445,6 +504,17 @@ describe("isFullMasterlistMatch (D-10)", () => {
     expect(isFullMasterlistMatch(row, student)).toBe(true);
   });
 
+  it("matches the sheet's MM/DD/YYYY against the DB's ISO birthdate", () => {
+    // The students table stores YYYY-MM-DD; a digit collapse would compare
+    // "05142009" with "20090514" and reject every real match.
+    expect(
+      isFullMasterlistMatch(row, { ...student, birthdate: "2009-05-14" })
+    ).toBe(true);
+    expect(
+      isFullMasterlistMatch(row, { ...student, birthdate: "2009-05-15" })
+    ).toBe(false);
+  });
+
   it("matches first-name-last order too", () => {
     expect(
       isFullMasterlistMatch({ ...row, fullName: "JUAN A. DELA CRUZ" }, student)
@@ -587,7 +657,7 @@ describe("partitionMasterlistMatches (upload flow)", () => {
   });
 });
 
-describe("findFirstLrnConflict / describeLrnConflict", () => {
+describe("describeSkippedLrn (partial import skips)", () => {
   const row = (lrn: string, sheetRow: number): MasterlistRow => ({
     lrn,
     fullName: "Dela Cruz, Juan A.",
@@ -602,36 +672,19 @@ describe("findFirstLrnConflict / describeLrnConflict", () => {
     sheetRow,
   });
 
-  it("returns null when no LRN is known to the system", () => {
-    expect(findFirstLrnConflict([row("111111111111", 2)], new Map())).toBeNull();
-  });
-
-  it("reports the topmost conflicting row in sheet order", () => {
-    const conflicts = new Map([
-      ["333333333333", { reason: "registered" as const, detail: "approved" }],
-      ["222222222222", { reason: "listed" as const, detail: "enrolled" }],
-    ]);
-    const clash = findFirstLrnConflict(
-      [row("111111111111", 2), row("222222222222", 3), row("333333333333", 4)],
-      conflicts
-    );
-    expect(clash?.row.lrn).toBe("222222222222");
-    expect(clash?.row.sheetRow).toBe(3);
-  });
-
-  it("words a registered clash with the account status", () => {
+  it("words a registered LRN as skipped, not re-uploaded", () => {
     expect(
-      describeLrnConflict(row("123456789012", 5), { reason: "registered", detail: "approved" })
+      describeSkippedLrn(row("123456789012", 5), { reason: "registered", detail: "approved" })
     ).toBe(
-      "Row 5: LRN 123456789012 is already registered (approved account). No LRN may be reused — nothing was imported."
+      "Row 5: LRN 123456789012 already registered (approved account) — skipped, not re-uploaded."
     );
   });
 
-  it("words a masterlist clash as awaiting registration", () => {
+  it("words a masterlist LRN as skipped, not re-uploaded", () => {
     expect(
-      describeLrnConflict(row("987654321098", 7), { reason: "listed", detail: "enrolled" })
+      describeSkippedLrn(row("987654321098", 7), { reason: "listed", detail: "enrolled" })
     ).toBe(
-      "Row 7: LRN 987654321098 is already on the Student Masterlist list (awaiting registration). No LRN may be reused — nothing was imported."
+      "Row 7: LRN 987654321098 already on the Student Masterlist (awaiting registration) — skipped, not re-uploaded."
     );
   });
 });

@@ -29,7 +29,6 @@ export default function ChiefDashboard() {
     candidates,
     complaints,
     electionPeriod,
-    currentUser,
   } = useApp();
 
   const approvedStudents = students.filter((s) => s.status === "approved").length;
@@ -122,10 +121,6 @@ export default function ChiefDashboard() {
           <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight">
             Commission Command Center
           </h1>
-          <p className="text-sm font-semibold text-gray-800 mt-1">{currentUser?.name}</p>
-          <p className="text-gray-500 text-xs sm:text-sm mt-1">
-            System overview and supervisory controls for the CNNHS Online Voting & Election System.
-          </p>
         </div>
 
         <div className="flex items-center gap-3">

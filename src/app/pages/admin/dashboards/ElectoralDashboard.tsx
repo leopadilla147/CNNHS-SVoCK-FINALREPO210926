@@ -104,7 +104,7 @@ interface VoteRow {
 }
 
 export default function ElectoralDashboard() {
-  const { electionPeriod, currentUser, students } = useApp();
+  const { electionPeriod, students } = useApp();
 
   const fp = fingerprintStatus(electionPeriod.fingerprintRegistrationStartAt, electionPeriod.fingerprintRegistrationEndAt);
 
@@ -165,8 +165,6 @@ export default function ElectoralDashboard() {
     <div className="p-6 md:p-8 max-w-7xl mx-auto">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
         <h1 className="text-gray-900 mb-1">Electoral Board Dashboard</h1>
-        <p className="text-gray-800 text-sm font-semibold">{currentUser?.name}</p>
-        <p className="text-gray-500 text-sm">Manage election periods and oversee the voting process.</p>
       </motion.div>
 
       {/* Election Stage announcement */}

@@ -6,7 +6,7 @@ import { AlertCircle, CheckCircle, HelpCircle, Activity, Clock, ArrowRight } fro
 import ElectionStageBanner from "../../../components/ElectionStageBanner";
 
 export default function GrievanceDashboard() {
-  const { complaints, currentUser, electionPeriod } = useApp();
+  const { complaints, electionPeriod } = useApp();
 
   // 089: complaints stay with the election they were filed under — the
   // dashboard counts only the current election's rows.
@@ -32,8 +32,6 @@ export default function GrievanceDashboard() {
     <div className="p-6 md:p-8 max-w-7xl mx-auto">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
         <h1 className="text-gray-900 mb-1">Commissioner of Grievance Dashboard</h1>
-        <p className="text-gray-800 text-sm font-semibold">{currentUser?.name}</p>
-        <p className="text-gray-500 text-sm">Handle complaints and the election help desk.</p>
       </motion.div>
 
       {/* Election Stage announcement */}

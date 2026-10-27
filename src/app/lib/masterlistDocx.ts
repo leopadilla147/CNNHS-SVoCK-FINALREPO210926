@@ -89,14 +89,13 @@ export function normalizeGradeLevel(value: string): string {
 }
 
 export interface MasterlistParseResult {
-  /** Valid rows. EMPTIED when reading stopped at an error (all-or-nothing). */
+  /** Every valid row — reading CONTINUES past invalid ones (partial import). */
   rows: MasterlistRow[];
-  /** Number of invalid rows encountered — 0, or 1 once reading stopped. */
+  /** Number of rejected rows: invalid details, or a repeated LRN in the sheet. */
   skipped: number;
-  /** A single entry when reading stopped at an error. */
+  /** One message per rejected row, each starting with "Row N:" and saying
+   *  what is wrong and how to fix it. */
   errors: string[];
-  /** Sheet row number (2 = first data row) where reading stopped, if any. */
-  stoppedAtRow?: number;
 }
 
 /** 5MB hard cap on uploaded masterlist files (R3 DoS mitigation). */
@@ -170,6 +169,18 @@ export function buildHeaderIndexFromCells(cells: string[]): Record<string, numbe
 /** Tab-line variant of `buildHeaderIndexFromCells` (mammoth text path). */
 export function buildHeaderIndex(line: string): Record<string, number> | null {
   return buildHeaderIndexFromCells(line.split(/\t+/).filter((c) => c.trim() !== ""));
+}
+
+/**
+ * True when any cell carries a 12-digit LRN (a "1)" row-marker prefix is
+ * tolerated).  Title/label rows above the column headers — "STUDENT MASTER
+ * LIST", "SY: 2026-2027", the school name — never carry one, so they are
+ * dropped before the header is found instead of being counted (and
+ * mis-reported) as data rows.  Requirement: the title/header must never
+ * count as a row.
+ */
+function rowLooksLikeData(cells: string[]): boolean {
+  return cells.some((c) => /\d{12}/.test(c.replace(/^\s*\d{1,3}[).]\s*/, "")));
 }
 
 const POSITIONAL_DEFAULTS: Record<ColumnKey, number> = {
@@ -324,13 +335,17 @@ export function toMasterlistRow(
 }
 
 /**
- * Shared body reader for both parse paths: validates each row, rejects
- * duplicates, and stops at the first problem (fail fast, all-or-nothing).
+ * Shared body reader for both parse paths (MASTER-01, partial import):
+ * validates each row against the 5 required columns and COLLECTS every
+ * problem instead of stopping at the first one.  A row is rejected as a
+ * whole when ANY of its required details is missing or malformed — the
+ * valid rows around it still import.
  *
- * An LRN may appear only ONCE per sheet — a repeated LRN is reported with
- * both row numbers, and nothing is imported.  (The same LRN in a DIFFERENT
- * school year is legitimate, and re-uploading a corrected sheet still
- * updates the existing row via the (lrn, school_year) upsert.)
+ * An LRN may appear only ONCE per sheet: the FIRST occurrence stays valid
+ * and every later copy is rejected as a row (the sheet's other rows still
+ * import, and the import's upsert guard stays satisfied).  The same LRN in
+ * a DIFFERENT school year is legitimate, and re-uploading a corrected sheet
+ * updates the existing row via the (lrn, school_year) upsert.
  */
 function readBodyRows(
   body: string[][],
@@ -344,26 +359,23 @@ function readBodyRows(
     const sheetRow = i + 2;
     const outcome = validateMasterlistRow(fields, headerIndex);
 
-    if (outcome.kind === "invalid") {
-      return {
-        rows: [],
-        skipped: 1,
-        errors: [`Row ${sheetRow}: ${outcome.problems.join("; ")}.`],
-        stoppedAtRow: sheetRow,
-      };
-    }
     if (outcome.kind === "ignored") continue; // unfilled template row
+
+    if (outcome.kind === "invalid") {
+      result.skipped += 1;
+      result.errors.push(
+        `Row ${sheetRow}: ${outcome.problems.join("; ")} — this row was not imported. Fix the highlighted details and upload the sheet again.`
+      );
+      continue;
+    }
 
     const firstSeen = seenLrn.get(outcome.row.lrn);
     if (firstSeen !== undefined) {
-      return {
-        rows: [],
-        skipped: 1,
-        errors: [
-          `Row ${sheetRow}: duplicate LRN ${outcome.row.lrn} — it already appears in Row ${firstSeen}. No LRN may appear twice in the sheet.`,
-        ],
-        stoppedAtRow: sheetRow,
-      };
+      result.skipped += 1;
+      result.errors.push(
+        `Row ${sheetRow}: duplicate LRN ${outcome.row.lrn} — it already appears in Row ${firstSeen}. This row was not imported; keep each LRN to a single row.`
+      );
+      continue;
     }
     seenLrn.set(outcome.row.lrn, sheetRow);
     result.rows.push({ ...outcome.row, sheetRow });
@@ -382,35 +394,24 @@ export interface LrnConflictInfo {
 }
 
 /**
- * First sheet row whose LRN already exists in the system (MASTER-01 upload).
- * School year is deliberately ignored — an LRN identifies one learner — and
- * rows are scanned in sheet order so the report points at the topmost clash.
+ * Pointed skip message for a sheet row whose LRN already exists in the
+ * system (MASTER-01 partial import): the row is NOT re-uploaded, the rest
+ * of the sheet still imports.
  */
-export function findFirstLrnConflict(
-  rows: MasterlistRow[],
-  conflicts: Map<string, LrnConflictInfo>
-): { row: MasterlistRow; info: LrnConflictInfo } | null {
-  for (const row of rows) {
-    const info = conflicts.get(row.lrn);
-    if (info) return { row, info };
-  }
-  return null;
-}
-
-/** Pointed message for a conflicting LRN (nothing is imported on a clash). */
-export function describeLrnConflict(row: MasterlistRow, info: LrnConflictInfo): string {
+export function describeSkippedLrn(row: MasterlistRow, info: LrnConflictInfo): string {
   const where =
     info.reason === "registered"
-      ? `is already registered (${info.detail} account)`
-      : "is already on the Student Masterlist list (awaiting registration)";
-  return `Row ${row.sheetRow ?? "?"}: LRN ${row.lrn} ${where}. No LRN may be reused — nothing was imported.`;
+      ? `already registered (${info.detail} account)`
+      : "already on the Student Masterlist (awaiting registration)";
+  return `Row ${row.sheetRow ?? "?"}: LRN ${row.lrn} ${where} — skipped, not re-uploaded.`;
 }
 
 /**
  * Parse mammoth raw text into masterlist rows. Rows are recovered by
  * splitting on newlines (tables render one row per paragraph); cells are
  * recovered from tabs, with a multi-space fallback for hand-built files.
- * Reading stops at the first invalid or duplicated row (all-or-nothing).
+ * Every row is validated and ALL problem rows are reported (partial
+ * import — valid rows are never discarded because of a bad neighbour).
  */
 export function parseMasterlist(text: string): MasterlistParseResult {
   // Lines are NOT trimmed wholesale: a leading tab is a real empty first
@@ -430,13 +431,23 @@ export function parseMasterlist(text: string): MasterlistParseResult {
         headerIndex = index;
         continue;
       }
+      // Before the header is found, a multi-cell line that carries no LRN is
+      // a title/label line (often tab-formatted in exported sheets) — drop
+      // it so it never counts as a row.  After the header, everything is
+      // data and is validated as usual.
+      if (!headerIndex && !rowLooksLikeData(cells)) continue;
       body.push(cells);
     } else {
       // Multi-space fallback for non-tabular files (leading spacing is
-      // meaningless here, so trim before splitting).
+      // meaningless here, so trim before splitting).  A SINGLE-cell line is
+      // a document title/heading — never a data row (a real row carries the
+      // LRN plus at least one more column) — so it is dropped entirely:
+      // titles are neither counted (requirement: header/title rows stay out
+      // of every count) nor mis-reported as "invalid LRN", and the first
+      // tabular data line keeps its Row 2 numbering after the header.
       const trimmed = line.trim();
       const spaced = trimmed.split(/ {2,}/);
-      body.push(spaced.length > 1 ? spaced : [trimmed]);
+      if (spaced.length > 1) body.push(spaced);
     }
   }
 
@@ -461,6 +472,11 @@ export function parseMasterlistRows(tableRows: string[][]): MasterlistParseResul
         headerIndex = index;
         continue;
       }
+      // Not the header yet: filled sheets often carry title/label rows
+      // INSIDE the table above the column headers ("STUDENT MASTER LIST",
+      // "SY: 2026-2027").  They carry no LRN, so drop them here — they must
+      // not be counted as rows or rejected as "invalid LRN".
+      if (!rowLooksLikeData(cells)) continue;
     }
     body.push(cells);
   }
@@ -541,8 +557,8 @@ export async function extractAndParseMasterlist(
   if (docx) {
     const parsed = parseMasterlistRows(docx.rows);
     // A real table with at least one body row wins — falling back would only
-    // re-parse the same sheet (and would turn a fail-fast error into a second,
-    // differently-worded one).
+    // re-parse the same sheet (and would report the same problem rows a
+    // second time, differently worded).
     if (parsed.rows.length > 0 || parsed.errors.length > 0 || docx.rows.length > 1) {
       return { parsed, text: docx.text };
     }
@@ -570,8 +586,9 @@ export async function extractMasterlistText(file: File): Promise<string> {
 /**
  * D-10 full-match predicate: LRN AND normalized full name AND birthdate
  * AND sex AND grade level all match the registered student. Comparisons
- * are whitespace-collapsed and case-insensitive; masterlist birthdates
- * (MM/DD/YYYY) are compared digit-by-digit so either date format resolves.
+ * are whitespace-collapsed and case-insensitive; birthdates are compared
+ * by calendar component so the sheet's MM/DD/YYYY agrees with the DB's
+ * YYYY-MM-DD regardless of digit order.
  * Sex/grade are only decisive when BOTH sides carry a value — a blank
  * masterlist cell never fails an otherwise-exact student.
  */
@@ -602,8 +619,27 @@ export function isFullMasterlistMatch(
   const studentName = nameTokenKey(`${student.lastName} ${student.firstName}`);
   if (rowName !== studentName || !rowName) return false;
 
-  const collapseDate = (s: string) => s.replace(/[^0-9]/g, "");
-  if (collapseDate(row.birthdate) !== collapseDate(student.birthdate)) return false;
+  // Calendar-component comparison: the sheet stores MM/DD/YYYY while the
+  // students table stores YYYY-MM-DD — a raw digit collapse would compare
+  // "05142009" with "20090514" and reject every real match.
+  const dateParts = (value: string): [string, string, string] | null => {
+    const trimmed = value.trim();
+    const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(trimmed);
+    if (iso) return [iso[1], iso[2].padStart(2, "0"), iso[3].padStart(2, "0")];
+    const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trimmed);
+    if (us) return [us[3], us[1].padStart(2, "0"), us[2].padStart(2, "0")];
+    return null;
+  };
+  const rowDate = dateParts(row.birthdate);
+  const studentDate = dateParts(student.birthdate);
+  if (
+    !rowDate || !studentDate ||
+    rowDate[0] !== studentDate[0] ||
+    rowDate[1] !== studentDate[1] ||
+    rowDate[2] !== studentDate[2]
+  ) {
+    return false;
+  }
 
   if (row.sex && student.gender && row.sex !== student.gender) return false;
   if (row.gradeLevel && student.gradeLevel && row.gradeLevel !== student.gradeLevel) return false;

@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, UserCheck, FileText, BarChart2,
   AlertCircle, LogOut, Menu, X,
   Shield, GraduationCap, ChevronRight, Activity, UserPlus, Trophy,
-  HelpCircle, UserCog, Archive, FolderArchive, Settings, Eye,
+  HelpCircle, UserCog, Archive, FolderArchive, Settings, Eye, Home,
 } from "lucide-react";
 import { useApp, UserRole, CommissionerRole } from "../../context/AppContext";
 import { useConfirm } from "../../lib/useConfirm";
@@ -31,6 +31,7 @@ const chiefTopItems: NavItem[] = [
   { label: "Officer Management", href: "/admin/officers", icon: <UserPlus size={18} /> },
   { label: "Election Reports", href: "/admin/reports", icon: <FileText size={18} /> },
   { label: "Live Results", href: "/admin/live-results", icon: <Eye size={18} /> },
+  { label: "Homepage Setting", href: "/admin/homepage-settings", icon: <Home size={18} /> },
   { label: "All System Logs", href: "/admin/logs", icon: <Activity size={18} /> },
   { label: "Admin Profile", href: "/admin/profile", icon: <UserCheck size={18} /> },
 ];

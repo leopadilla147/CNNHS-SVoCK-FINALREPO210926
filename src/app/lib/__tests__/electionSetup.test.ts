@@ -102,6 +102,16 @@ describe("buildElectionPeriodSyncPayload", () => {
     }
   });
 
+  it("leaves the 113 voting_ended_at stamp to its own RPCs too", () => {
+    // Same reasoning as lifecycle_stage: the End Voting Stage stamp belongs
+    // to end_voting_stage_rpc, and a schedule save must never clear or fake
+    // it — it is what lights the Stage 4 check and unlocks publishing.
+    const payload = buildElectionPeriodSyncPayload(
+      basePeriod({ votingEndedAt: "2026-11-02T17:30:00.000Z" }),
+    );
+    expect("voting_ended_at" in payload).toBe(false);
+  });
+
   it("leaves the 060 Fingerprint Registration window to its own RPCs", () => {
     // Same reasoning as lifecycle_stage: the enrolment window is opened and
     // closed by start/close_fingerprint_registration_rpc, so a plain

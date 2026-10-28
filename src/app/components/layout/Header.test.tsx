@@ -38,46 +38,83 @@ describe("Header dropdowns", () => {
   it("closes the other menu when a second one is opened", () => {
     renderHeader();
 
-    fireEvent.click(desktop().getByRole("button", { name: /Voter Registration/ }));
-    expect(panelLink(/Register to Vote/)).toBeTruthy();
+    fireEvent.click(desktop().getByRole("button", { name: /Results/ }));
+    expect(panelLink(/Official Results/)).toBeTruthy();
 
-    fireEvent.click(desktop().getByRole("button", { name: /Elections/ }));
+    fireEvent.click(desktop().getByRole("button", { name: /Resources/ }));
 
-    // Opening Elections must have closed Voter Registration.
-    expect(panelLink(/Register to Vote/)).toBeNull();
-    expect(panelLink(/Current Election/)).toBeTruthy();
+    // Opening Resources must have closed Results.
+    expect(panelLink(/Official Results/)).toBeNull();
+    expect(panelLink(/Election Calendar/)).toBeTruthy();
+  });
+
+  it("shows Student Registration and Current Election as direct tabs, not dropdowns", () => {
+    renderHeader();
+
+    expect(desktop().getByRole("link", { name: "Student Registration" })).toBeTruthy();
+    expect(desktop().getByRole("link", { name: "Current Election" })).toBeTruthy();
   });
 
   it("closes the open menu when its own button is clicked again", () => {
     renderHeader();
 
-    fireEvent.click(desktop().getByRole("button", { name: /Elections/ }));
-    expect(panelLink(/Current Election/)).toBeTruthy();
+    fireEvent.click(desktop().getByRole("button", { name: /Results/ }));
+    expect(panelLink(/Official Results/)).toBeTruthy();
 
-    fireEvent.click(desktop().getByRole("button", { name: /Elections/ }));
-    expect(panelLink(/Current Election/)).toBeNull();
+    fireEvent.click(desktop().getByRole("button", { name: /Results/ }));
+    expect(panelLink(/Official Results/)).toBeNull();
   });
 
   it("closes the open menu on outside click", () => {
     renderHeader();
 
-    fireEvent.click(desktop().getByRole("button", { name: /Elections/ }));
-    expect(panelLink(/Current Election/)).toBeTruthy();
+    fireEvent.click(desktop().getByRole("button", { name: /Results/ }));
+    expect(panelLink(/Official Results/)).toBeTruthy();
 
     fireEvent.mouseDown(document.body);
 
-    expect(panelLink(/Current Election/)).toBeNull();
+    expect(panelLink(/Official Results/)).toBeNull();
   });
 
   it("closes the open menu on Escape", () => {
     renderHeader();
 
-    fireEvent.click(desktop().getByRole("button", { name: /Elections/ }));
-    expect(panelLink(/Current Election/)).toBeTruthy();
+    fireEvent.click(desktop().getByRole("button", { name: /Results/ }));
+    expect(panelLink(/Official Results/)).toBeTruthy();
 
     fireEvent.keyDown(document, { key: "Escape" });
 
-    expect(panelLink(/Current Election/)).toBeNull();
+    expect(panelLink(/Official Results/)).toBeNull();
+  });
+});
+
+describe("Header nav visibility", () => {
+  beforeEach(() => {
+    mockUseApp.mockReturnValue({ currentUser: null, setCurrentUser: vi.fn() });
+  });
+
+  it("shows Student Registration to guests", () => {
+    renderHeader();
+
+    expect(desktop().getByRole("link", { name: "Student Registration" })).toBeTruthy();
+  });
+
+  it("hides Student Registration once any user is signed in", () => {
+    mockUseApp.mockReturnValue({
+      currentUser: {
+        id: "s1",
+        name: "Ana Reyes",
+        role: "student" as const,
+        email: "ana@cnnhs.edu",
+        mustChangePassword: false,
+      },
+      setCurrentUser: vi.fn(),
+    });
+    renderHeader();
+
+    expect(desktop().queryByRole("link", { name: "Student Registration" })).toBeNull();
+    expect(desktop().getByRole("link", { name: "Current Election" })).toBeTruthy();
+    expect(desktop().getByRole("link", { name: "About CNNHS" })).toBeTruthy();
   });
 });
 

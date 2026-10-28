@@ -16,6 +16,11 @@ interface ConfirmOptions {
   /** Rich body rendered below the header, e.g. a summary of what is about
    *  to happen (the proclamation summary in the final proclaim confirm). */
   content?: ReactNode;
+  /** Extra classes for the dialog panel — e.g. a wider max width when the
+   *  content is a rich summary (the proclamation final confirm lists every
+   *  winner with their full name and position).  Merged over the default
+   *  sm:max-w-lg, so later utility classes win. */
+  className?: string;
   confirmText?: string;
   cancelText?: string;
   destructive?: boolean;
@@ -65,7 +70,7 @@ export function useConfirm(options: ConfirmOptions = {}) {
 
   const dialog = (
     <AlertDialog open={open} onOpenChange={(o) => { if (!o) handleCancel(); }}>
-      <AlertDialogContent>
+      <AlertDialogContent className={effective.className}>
         <AlertDialogHeader>
           <AlertDialogTitle>{effective.title}</AlertDialogTitle>
           <AlertDialogDescription>{effective.description}</AlertDialogDescription>

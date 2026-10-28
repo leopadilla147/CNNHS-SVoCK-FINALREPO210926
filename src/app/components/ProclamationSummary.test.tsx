@@ -33,8 +33,14 @@ const substantiated = [
   { id: "c1", subject: "Vote buying", findings: "Ballot receipts confirmed a proxy vote." },
 ];
 
+const otherResolved = [
+  { id: "c2", subject: "Late filing", decisionLabel: "Unsubstantiated Grievance" },
+];
+
 describe("ProclamationSummary", () => {
-  it("lists every position with its winner and flags decisions not yet made", () => {
+  it("shows only the number of selected winners at the bottom of the review", () => {
+    // 113b — the review dialog's bottom summary is a count, not a name
+    // list: the tally sections above already name every candidate.
     render(
       <ProclamationSummary
         positions={positions}
@@ -44,24 +50,27 @@ describe("ProclamationSummary", () => {
         complaintReason=""
         complaintSubjects={[]}
         substantiated={substantiated}
+        otherResolved={[]}
       />,
     );
 
     expect(screen.getByText("Proclamation Summary")).toBeInTheDocument();
-    // Clean win straight from the tally.
-    expect(screen.getByText("President:")).toBeInTheDocument();
-    expect(screen.getByText("Ada Leader")).toBeInTheDocument();
-    // The tie has no pick yet — flagged, not hidden.
-    expect(screen.getByText("Tie — no winner chosen yet")).toBeInTheDocument();
-    expect(screen.getByText("Tie resolution:")).toBeInTheDocument();
+    // The clean win counts; the tie without a pick does not yet.
+    expect(screen.getByText("Winners to proclaim — 1 of 2 selected")).toBeInTheDocument();
+    expect(screen.getByText("1 of 2 winners selected")).toBeInTheDocument();
+    // No names and no per-position decisions on the compact summary.
+    expect(screen.queryByText("Ada Leader")).not.toBeInTheDocument();
+    expect(screen.queryByText("Tie — no winner chosen yet")).not.toBeInTheDocument();
+    expect(screen.queryByText("Tie — board choice")).not.toBeInTheDocument();
+    // The other recorded rows stay.
+    expect(screen.getByText(/Tie resolution:/)).toBeInTheDocument();
     expect(screen.getAllByText("Not recorded yet").length).toBeGreaterThan(0);
-    // 097 — the owed Complaint Reason is on the summary too.
-    expect(screen.getByText("Complaint Reason:")).toBeInTheDocument();
+    expect(screen.getByText(/Complaint Resolution and Justification:/)).toBeInTheDocument();
     expect(screen.getByText(/Substantiated grievance on record:/)).toBeInTheDocument();
     expect(screen.getByText(/Vote buying/)).toBeInTheDocument();
   });
 
-  it("reflects the board's recorded decisions once they are made", () => {
+  it("counts the board's resolved ties once they are made", () => {
     render(
       <ProclamationSummary
         positions={positions}
@@ -71,15 +80,54 @@ describe("ProclamationSummary", () => {
         complaintReason="The grievance did not change the outcome."
         complaintSubjects={["Campaigning inside the precinct"]}
         substantiated={substantiated}
+        otherResolved={otherResolved}
       />,
     );
 
-    expect(screen.getByText("Tie — board choice")).toBeInTheDocument();
-    expect(screen.getByText("Cara One")).toBeInTheDocument();
+    expect(screen.getByText("Winners to proclaim — 2 of 2 selected")).toBeInTheDocument();
+    expect(screen.getByText("2 of 2 winners selected")).toBeInTheDocument();
     expect(screen.getByText("Coin Toss")).toBeInTheDocument();
     expect(screen.getByText(/The grievance did not change the outcome\./)).toBeInTheDocument();
     expect(screen.getByText(/Weighed against the turnout record\./)).toBeInTheDocument();
+    // 114 — the Unsubstantiated / Dismissed decisions are on the summary too.
+    expect(screen.getByText(/Complaint decisions? on record:/)).toBeInTheDocument();
+    expect(screen.getByText(/Late filing \(Unsubstantiated Grievance\)/)).toBeInTheDocument();
     expect(screen.queryByText("Not recorded yet")).not.toBeInTheDocument();
-    expect(screen.queryByText("Tie — no winner chosen yet")).not.toBeInTheDocument();
+  });
+
+  it("lists each selected winner with picture, name and position in the final confirmation", () => {
+    // 113b — the final confirmation spells out exactly who is about to be
+    // proclaimed: picture, name and position, tie picks flagged.
+    render(
+      <ProclamationSummary
+        winnersDetail
+        profiles={{
+          p1: { picture: "http://example.com/ada.png", gradeLevel: "Grade 12" },
+        }}
+        positions={positions}
+        resolutions={{ Secretary: { method: "manual", candidateId: "s1" } }}
+        tieBreakLabel="Coin Toss"
+        complaintNote=""
+        complaintReason=""
+        complaintSubjects={[]}
+        substantiated={[]}
+        otherResolved={[]}
+      />,
+    );
+
+    // Ada's submitted photo joins her card; Cara without a profile falls
+    // back to the generic avatar (no image element).
+    expect(screen.getByRole("img", { name: "Ada Leader" })).toHaveAttribute(
+      "src",
+      "http://example.com/ada.png",
+    );
+    expect(screen.queryByRole("img", { name: "Cara One" })).not.toBeInTheDocument();
+    expect(screen.getByText("Ada Leader")).toBeInTheDocument();
+    expect(screen.getByText("Cara One")).toBeInTheDocument();
+    // Each card names its position.
+    expect(screen.getByText("President")).toBeInTheDocument();
+    expect(screen.getByText("Secretary")).toBeInTheDocument();
+    // Only the board's tie pick carries the badge; the clean win does not.
+    expect(screen.getAllByText("Tie — board choice").length).toBe(1);
   });
 });

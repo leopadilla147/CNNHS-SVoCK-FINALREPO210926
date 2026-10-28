@@ -214,9 +214,11 @@ export function buildSubmitPayload(input: SubmitComplaintInput, studentId: strin
 }
 
 /**
- * 097: the Grievance Commissioner's resolution classification.  A
- * Substantiated grievance taints the election and forces a Complaint Reason
- * before winners are proclaimed; the other two are recorded only.
+ * 097: the Grievance Commissioner's resolution classification.  114: ANY of
+ * the three forces the Board's one-time Complaint Resolution and
+ * Justification before winners are proclaimed — a Substantiated grievance
+ * taints the election, while Unsubstantiated / Dismissed still owe the
+ * public an explanation of how they were resolved.
  */
 export const COMPLAINT_DECISION_VALUES = ["substantiated", "unsubstantiated", "dismissed"] as const;
 

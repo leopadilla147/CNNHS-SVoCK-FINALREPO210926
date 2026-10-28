@@ -4,7 +4,7 @@ import {
   Calendar, Clock, MapPin, Save, Play, Square, Trophy,
   CheckCircle2, Lock, AlertCircle, Loader2, Eye, FileCheck2,
   Megaphone, Users, KeyRound, RotateCcw, ShieldAlert, X, Fingerprint,
-  Gavel, ChevronDown, ChevronLeft, ChevronRight, Pencil,
+  Gavel, ChevronDown, ChevronLeft, ChevronRight, Pencil, XCircle,
 } from "lucide-react";
 import { useApp } from "../../context/AppContext";
 import type { ElectionStage, ElectionPeriod } from "../../context/AppContext";
@@ -17,6 +17,7 @@ import {
   closeElectionRpc,
   reopenVotingRpc,
   endVotingStageRpc,
+  voidElectionRpc,
   publishResultsRpc,
   proclaimWinnersRpc,
   getProclaimedWinners,
@@ -41,7 +42,7 @@ import { ProclamationDialog, groupTally } from "../../components/ProclamationDia
 import type { ProclamationDecision, CandidateProfile } from "../../components/ProclamationDialog";
 import { FindingsDisclosure } from "../../components/FindingsDisclosure";
 import { ProclamationSummary } from "../../components/ProclamationSummary";
-import type { SubstantiatedGrievance } from "../../components/ProclamationSummary";
+import type { SubstantiatedGrievance, OtherResolvedComplaint } from "../../components/ProclamationSummary";
 
 interface StageConfig {
   id: Stage;
@@ -93,7 +94,25 @@ export function initialViewStage(electionPeriod: ElectionPeriod): Stage {
   if (stage === "fingerprint_registration" && electionPeriod.fingerprintRegistrationStartAt) {
     return "voting";
   }
+  // 113 — a merely-closed vote (Close Voting) stays on the Voting view: the
+  // page only moves on to Stage 5 once the stage was formally ENDED.
+  if (stage === "results" && !votingStageEnded(electionPeriod)) {
+    return "voting";
+  }
   return stage;
+}
+
+/**
+ * 113 — whether the Voting Stage was formally ENDED (end_voting_stage_rpc).
+ *
+ * Close Voting and End Voting Stage both leave the row at 'results', so the
+ * stage alone cannot tell them apart: the voting_ended_at stamp does.  It is
+ * what lights the Stage 4 check, unlocks Stage 5, and gates publishing.
+ * resultsPublished / proclaimed are accepted as legacy evidence of an ended
+ * stage (results only ever come out of an ended one).
+ */
+export function votingStageEnded(electionPeriod: ElectionPeriod): boolean {
+  return !!(electionPeriod.votingEndedAt || electionPeriod.resultsPublished || electionPeriod.proclaimed);
 }
 
 function isStageComplete(stage: Stage, electionPeriod: ElectionPeriod, currentStage: Stage): boolean {
@@ -116,7 +135,10 @@ function isStageComplete(stage: Stage, electionPeriod: ElectionPeriod, currentSt
       return !!electionPeriod.fingerprintRegistrationStartAt
         || currentStage === "voting" || currentStage === "results";
     case "voting":
-      return currentStage === "results";
+      // 113 — Close Voting and End Voting Stage both leave the stage at
+      // 'results', so the stage alone can no longer be the check: the mark
+      // waits for the formal End (voting_ended_at).  See votingStageEnded.
+      return currentStage === "results" && votingStageEnded(electionPeriod);
     case "results":
       return !!electionPeriod.proclaimed;
   }
@@ -148,7 +170,10 @@ function isStageAccessible(
     case "voting":
       return !!electionPeriod.rulesDiscussionAt;
     case "results":
-      return currentStage === "results";
+      // 113 — Stage 5 opens only when the Voting Stage was formally ENDED
+      // (the password action), not while the vote is merely closed after
+      // Close Voting.  See votingStageEnded.
+      return currentStage === "results" && votingStageEnded(electionPeriod);
   }
 }
 
@@ -186,6 +211,14 @@ const FIXED_VOTING_END = "17:00";
 function tomorrowDateStr(): string {
   const d = new Date();
   d.setDate(d.getDate() + 1);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** 113 — n days after a YYYY-MM-DD day (local time), as YYYY-MM-DD. */
+function addDaysStr(day: string, days: number): string {
+  const d = new Date(`${day}T00:00:00`);
+  d.setDate(d.getDate() + days);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
@@ -322,10 +355,10 @@ export default function AdminElectionSetup() {
   const [resetOpen, setResetOpen] = useState(false);
   const [resetPassword, setResetPassword] = useState("");
   const [resetError, setResetError] = useState<string | null>(null);
-  // 084 — password gate for the two consequential voting moves (reopen /
-  // end stage). Mirrors the reset-dialog flow: the password is verified
-  // server-side by the RPC, never stored.
-  const [voteGate, setVoteGate] = useState<null | "reopen" | "end">(null);
+  // 084 — password gate for the consequential voting moves (reopen /
+  // end stage / void election). Mirrors the reset-dialog flow: the
+  // password is verified server-side by the RPC, never stored.
+  const [voteGate, setVoteGate] = useState<null | "reopen" | "end" | "void">(null);
   const [gatePassword, setGatePassword] = useState("");
   const [gateError, setGateError] = useState<string | null>(null);
   const [votingScheduleSaved, setVotingScheduleSaved] = useState(false);
@@ -344,9 +377,13 @@ export default function AdminElectionSetup() {
 
   // When the election's active stage moves, the view follows it — and on a
   // reload it opens on the stage that still has work (see initialViewStage).
+  // 113 — votingEndedAt is a dependency on purpose: End Voting Stage does
+  // NOT change the lifecycle stage (Close Voting already moved the row to
+  // 'results'), so the stamp flipping is what finally moves the view on to
+  // Stage 5.  Until then the page stays on the Voting view.
   useEffect(() => {
     setViewStage(initialViewStage(electionPeriod));
-  }, [currentStage]);
+  }, [currentStage, electionPeriod.votingEndedAt]);
 
   // 093 — the Campaign window unlocks only while the campaign stage is
   // current.  Once the stage moves on (End Campaign Early, Open Voting) the
@@ -358,19 +395,23 @@ export default function AdminElectionSetup() {
     if (currentStage !== "fingerprint_registration") setFpEditing(false);
   }, [currentStage]);
 
-  // 094 — the voting schedule can only be edited while the vote has not
-  // started: once it is running (or results are out) the saved row is final.
+  // 094/113 — the voting schedule can only be edited while it is still
+  // plan-able: before the vote ever opens, and after a Void put the election
+  // back into a paused Voting Stage for a re-run. Once it is running, closed
+  // (stage 'results') or ended, the saved row is final.
   useEffect(() => {
-    if (electionPeriod.isActive || currentStage === "results") setVotingEditing(false);
+    if (
+      electionPeriod.isActive
+      || (currentStage !== "fingerprint_registration" && currentStage !== "voting")
+    ) setVotingEditing(false);
   }, [electionPeriod.isActive, currentStage]);
 
-  // Results unlock only after the vote was actually opened (stage voting /
-  // results) and then closed: saving the schedule alone leaves the period at
-  // campaign / fingerprint_registration.  publish_results_rpc is itself what
-  // moves the stage to 'results', so that stage cannot be the gate.
-  // 084 — Stage 5 unlocks only when the Voting Stage was ENDED (the
-  // password action), not while the vote is merely paused after a close.
-  const votingConcluded = currentStage === "results";
+  // 113 — Stage 5 becomes reachable only once the vote was closed AND the
+  // stage was formally ENDED (the End Voting Stage password action).  Both
+  // leave the row at 'results', so the voting_ended_at stamp is the gate;
+  // the stage alone cannot be it.  The stepper lock keeps the card
+  // unreachable until then — this flag additionally dims it if ever shown.
+  const votingConcluded = currentStage === "results" && votingStageEnded(electionPeriod);
 
   const [form, setForm] = useState({
     startDate: electionPeriod.startDate || tomorrowDateStr(),
@@ -383,7 +424,7 @@ export default function AdminElectionSetup() {
   // 082 follow-up — there is no separate Save button in Stage 4: Open Voting
   // commits the schedule (dates, modality, venue) and then opens the election.
   const openConfirm = useConfirm({ title: "Open Voting?", description: "This saves the voting schedule (dates, modality and venue), starts the Voting Period, and enables kiosk voting.", confirmText: "Open Voting" });
-  const closeConfirm = useConfirm({ title: "Close Voting?", description: "This pauses the voting period. Students will no longer be able to cast votes. Reopen Voting or End Voting Stage (Electoral Board password) afterwards.", confirmText: "Close Voting", destructive: true });
+  const closeConfirm = useConfirm({ title: "Close Voting?", description: "This closes the voting period and moves the election to the Results stage. Students will no longer be able to cast votes. Reopen Voting or End Voting Stage (Electoral Board password) afterwards.", confirmText: "Close Voting", destructive: true });
   const startCandidacyConfirm = useConfirm({ title: "Start the Candidate Application Period?", description: "Students will be able to apply for candidacy. Applications are sent to the Screening and Validation Commissioner.", confirmText: "Start Application Period" });
   // 082 — the meeting is saved from Stage 1 and no longer ends candidacy;
   // "End Application Stage" is the separate, one-way transition.
@@ -426,16 +467,25 @@ export default function AdminElectionSetup() {
     .filter((c) => c.status === "filed")
     .map((c) => c.subject);
 
-  // 097 — already-resolved complaints, classified by the Grievance
-  // Commissioner.  A substantiated grievance forces a Complaint Reason in
-  // the proclamation dialog; the rest are only noted in Stage 5.  Each
-  // substantiated grievance also shows its read-only Findings.
+  // 097/114 — already-resolved complaints, classified by the Grievance
+  // Commissioner.  ANY Findings decision (Substantiated, Unsubstantiated, or
+  // Dismissed) forces a Complaint Resolution and Justification in the
+  // proclamation dialog.  Each substantiated grievance also shows its
+  // read-only Findings.
   const resolvedComplaints = electionComplaints.filter((c) => c.status === "accepted");
   const substantiatedGrievances: SubstantiatedGrievance[] = substantiatedComplaints(electionComplaints)
     .map((c) => ({ id: c.id, subject: c.subject, findings: c.findings ?? null }));
   // Substantiated grievances have their own red section below — this list
   // only notes the classifications that do not block proclamation.
   const otherResolvedComplaints = resolvedComplaints.filter((c) => c.decision !== "substantiated");
+  // 114 — the Unsubstantiated / Dismissed resolutions, with their display
+  // labels.  (Legacy rows resolved before 097 carry no classification and
+  // impose nothing.)  They share the substantiated grievances' one-time
+  // Complaint Resolution and Justification in the proclamation dialog, and
+  // get the same click-to-reveal Findings.
+  const otherResolvedDecisions: OtherResolvedComplaint[] = otherResolvedComplaints
+    .filter((c) => c.decision != null)
+    .map((c) => ({ id: c.id, subject: c.subject, decisionLabel: complaintDecisionLabel(c.decision), findings: c.findings ?? null }));
 
   // The proclamation tally carries only names — join each candidate's
   // profile details (photo, grade level) by id so the review dialog shows
@@ -849,6 +899,17 @@ export default function AdminElectionSetup() {
       showFieldError("campaign", "The campaign end date must be tomorrow or later.", ["campaignEnd"]);
       return;
     }
+    // 113 — spacing: the Campaign Period opens two days after the Rules
+    // Discussion Meeting and runs at least one full day — again binding
+    // only when a date is being moved.
+    if (campaignStart !== savedStart && campaignStartMin && campaignStart < campaignStartMin) {
+      showFieldError("campaign", "The Campaign Period must start at least two days after the Rules Discussion Meeting.", ["campaignStart"]);
+      return;
+    }
+    if ((campaignEnd !== savedEnd || campaignStart !== savedStart) && campaignEnd < addDaysStr(campaignStart, 1)) {
+      showFieldError("campaign", "The Campaign Period must end at least one day after it starts.", ["campaignEnd"]);
+      return;
+    }
     const isUpdate = hasCampaignWindow;
     const ok = isUpdate
       ? await updateCampaignConfirm.confirm()
@@ -1014,7 +1075,9 @@ export default function AdminElectionSetup() {
       showError("Schedule the campaign meeting before saving voting schedule.", "voting");
       return;
     }
-    if (!votingSequenced) {
+    // 113 — a voided run sits paused in the Voting Stage with the schedule
+    // editable again for the re-run; sequencing is long since done there.
+    if (!votingSequenced && !(currentStage === "voting" && !electionPeriod.isActive)) {
       showError("End the Campaign Period and start Fingerprint Registration before saving voting schedule.", "voting");
       return;
     }
@@ -1029,6 +1092,17 @@ export default function AdminElectionSetup() {
     }
     if (form.startDate !== electionPeriod.startDate && form.startDate < tomorrowDateStr()) {
       showFieldError("voting", "The voting start date must be tomorrow or later.", ["votingStart"]);
+      return;
+    }
+    // 113 — spacing: voting opens two days after the Campaign Period ends —
+    // only when the start date is being moved (keeping the saved day is
+    // never blocked, matching the calendar rule above).
+    if (
+      form.startDate !== electionPeriod.startDate
+      && campaignEndAnchor
+      && form.startDate < addDaysStr(campaignEndAnchor, 2)
+    ) {
+      showFieldError("voting", "Voting must start at least two days after the Campaign Period ends.", ["votingStart"]);
       return;
     }
     if (venueChoice === "classroom" && !venueDetail.trim()) {
@@ -1126,6 +1200,17 @@ export default function AdminElectionSetup() {
       showFieldError("voting", "The voting start date must be tomorrow or later.", ["votingStart"]);
       return;
     }
+    // 113 — spacing: voting opens two days after the Campaign Period ends —
+    // only when the start date is being moved (keeping the saved day is
+    // never blocked, matching the calendar rule above).
+    if (
+      form.startDate !== electionPeriod.startDate
+      && campaignEndAnchor
+      && form.startDate < addDaysStr(campaignEndAnchor, 2)
+    ) {
+      showFieldError("voting", "Voting must start at least two days after the Campaign Period ends.", ["votingStart"]);
+      return;
+    }
     // The venue dropdown needs its detail filled in for the composite
     // choices; the covered court needs nothing.
     if (venueChoice === "classroom" && !venueDetail.trim()) {
@@ -1193,14 +1278,14 @@ export default function AdminElectionSetup() {
         await closeElectionRpc(id);
         await refreshPeriod();
       } else {
-        // 084 — closing only pauses the vote; Reopen/End Voting Stage
-        // (password) do the consequential moves.
-        applyElectionPeriod({ ...electionPeriod, isActive: false });
+        // 113 — closing moves the election to the Results stage; Reopen /
+        // End Voting Stage (password) do the consequential moves.
+        applyElectionPeriod({ ...electionPeriod, isActive: false, lifecycleStage: "results" });
       }
       addLog({
         user: logUser, role: "Admin",
         action: "Election Closed",
-        details: "The voting period was paused. Reopen Voting or End Voting Stage (Electoral Board password) to continue.",
+        details: "The voting period was closed and the election moved to the Results stage. Reopen Voting or End Voting Stage (Electoral Board password) to continue.",
         type: "warning",
       });
       showSuccess("Voting is now closed. Reopen it or end the Voting Stage below.");
@@ -1211,9 +1296,9 @@ export default function AdminElectionSetup() {
     }
   };
 
-  /** 084 — the password gate behind "Reopen Voting" / "End Voting Stage".
-   *  The RPC verifies the Electoral Board password server-side; the
-   *  refreshed row is what moves the stage. */
+  /** 084/113 — the password gate behind "Reopen Voting" / "End Voting
+   *  Stage" / "Void Election".  The RPC verifies the Electoral Board
+   *  password server-side; the refreshed row is what moves the stage. */
   const submitVoteGate = async () => {
     setGateError(null);
     if (!gatePassword) {
@@ -1228,26 +1313,34 @@ export default function AdminElectionSetup() {
         const id = electionPeriod.id || electionId;
         if (!id) throw new Error("There is no election period to update.");
         if (action === "reopen") await reopenVotingRpc(id, gatePassword);
-        else await endVotingStageRpc(id, gatePassword);
+        else if (action === "end") await endVotingStageRpc(id, gatePassword);
+        else await voidElectionRpc(id, gatePassword);
         await refreshPeriod();
       } else if (action === "reopen") {
         // Mock mode has no server to verify against — mirror the reset.
-        applyElectionPeriod({ ...electionPeriod, isActive: true });
+        applyElectionPeriod({ ...electionPeriod, isActive: true, lifecycleStage: "voting", votingEndedAt: null });
+      } else if (action === "end") {
+        applyElectionPeriod({ ...electionPeriod, isActive: false, lifecycleStage: "results", votingEndedAt: new Date().toISOString() });
       } else {
-        applyElectionPeriod({ ...electionPeriod, isActive: false, lifecycleStage: "results" });
+        // Void: the same period back to the Voting Stage, paused, votes gone.
+        applyElectionPeriod({ ...electionPeriod, isActive: false, lifecycleStage: "voting", votingEndedAt: null });
       }
       addLog({
         user: logUser, role: "Admin",
-        action: action === "reopen" ? "Voting Period Reopened" : "Voting Stage Ended",
+        action: action === "reopen" ? "Voting Period Reopened" : action === "end" ? "Voting Stage Ended" : "Election Voided",
         details: action === "reopen"
           ? "The voting period was reopened with the Electoral Board password. Students can cast votes again."
-          : "The Voting Stage was ended with the Electoral Board password. The election moved to the Results stage.",
+          : action === "end"
+            ? "The Voting Stage was ended with the Electoral Board password. The election stays at the Results stage and publishing is unlocked."
+            : "The election was voided with the Electoral Board password. All recorded votes were discarded and the same election period returned to the Voting Stage (paused). Stage 1-3 records are unchanged.",
         type: "warning",
       });
       showSuccess(
         action === "reopen"
           ? "Voting has been reopened. Students can cast votes again."
-          : "The Voting Stage has ended. The election moved to the Results stage.",
+          : action === "end"
+            ? "The Voting Stage has ended. Publishing results is now unlocked."
+            : "The election has been voided. All votes were discarded and the period is back in the Voting Stage (paused).",
       );
       setVoteGate(null);
       setGatePassword("");
@@ -1315,8 +1408,16 @@ export default function AdminElectionSetup() {
   ) => {
     setTallyError(null);
     const ok = await proclaimConfirm.confirm({
+      // 113b — the final confirmation lists every selected winner with their
+      // full name and position, so it opens as wide as the review dialog.
+      className: "sm:max-w-3xl",
       content: (
+        // 113b — the final confirmation lists every selected winner with
+        // their picture, name and position; the bottom summary inside the
+        // review dialog stays a compact count.
         <ProclamationSummary
+          winnersDetail
+          profiles={candidateProfiles}
           positions={groupTally(tally)}
           resolutions={resolutions}
           tieBreakLabel={decision.tieBreak}
@@ -1324,6 +1425,7 @@ export default function AdminElectionSetup() {
           complaintReason={decision.complaintReason}
           complaintSubjects={filedComplaintSubjects}
           substantiated={substantiatedGrievances}
+          otherResolved={otherResolvedDecisions}
         />
       ),
     });
@@ -1347,7 +1449,7 @@ export default function AdminElectionSetup() {
         action: "Results Published & Winners Proclaimed",
         details: `Results published and winners proclaimed for ${winners.length} positions.`
           + (decision.tieBreak ? ` Tie resolution: ${decision.tieBreak}.` : "")
-          + (decision.complaintReason ? ` Complaint reason: ${decision.complaintReason}.` : "")
+          + (decision.complaintReason ? ` Complaint resolution and justification: ${decision.complaintReason}.` : "")
           + (decision.complaintNote ? ` Complaint note: ${decision.complaintNote}.` : ""),
         type: "success",
       });
@@ -1409,9 +1511,17 @@ export default function AdminElectionSetup() {
     }
   };
 
+  // 113 — the stage the board is working in, for the stepper's "current"
+  // mark.  Between Close Voting and End Voting Stage the row already sits
+  // at 'results', but Stage 5 stays locked and the work (Reopen / End)
+  // still happens in Stage 4 — so the stepper reads Stage 4 as current
+  // until the stage was formally ended.
+  const workStage: Stage =
+    currentStage === "results" && !votingStageEnded(electionPeriod) ? "voting" : currentStage;
+
   const stageStatus = (stage: Stage) => {
     const complete = isStageComplete(stage, electionPeriod, currentStage);
-    const current = currentStage === stage;
+    const current = workStage === stage;
     if (complete) return "complete";
     if (current) return "current";
     if (!isStageAccessible(stage, electionPeriod, currentStage, hasPeriod)) return "locked";
@@ -1429,6 +1539,27 @@ export default function AdminElectionSetup() {
   const scheduleLocked =
     electionPeriod.isActive || currentStage === "results" || votingScheduleLocked;
   const hasMeeting = !!electionPeriod.rulesDiscussionAt;
+  // 113 — spacing rule: no two stage boundaries share a day. The Rules
+  // Discussion Meeting anchors the plan — the Campaign Period opens TWO
+  // days after it, runs at least ONE full day, and Voting opens TWO days
+  // after the campaign ends (the voting end day may share its start day).
+  // These floors feed both the pickers' min attributes and the save guards.
+  const savedMeetingDay = toLocalInput(electionPeriod.rulesDiscussionAt).slice(0, 10);
+  const campaignStartMin = savedMeetingDay ? addDaysStr(savedMeetingDay, 2) : undefined;
+  const campaignEndMin = (() => {
+    const anchor = campaignStart || campaignStartMin;
+    return anchor ? addDaysStr(anchor, 1) : undefined;
+  })();
+  // The voting floor hangs off the campaign end — the picker's live value
+  // first (it mirrors the saved row), then the saved end, then the minimum
+  // implied by the meeting — and never earlier than tomorrow.
+  const campaignEndAnchor =
+    campaignEnd || toLocalInput(electionPeriod.campaignEndDate).slice(0, 10) || campaignEndMin;
+  const votingStartMin = (() => {
+    const floors = [tomorrowDateStr()];
+    if (campaignEndAnchor) floors.push(addDaysStr(campaignEndAnchor, 2));
+    return floors.sort()[floors.length - 1];
+  })();
   // The Campaign window is committed by "Start Campaign"; once saved, the
   // button becomes "Update Campaign Window".
   const hasCampaignWindow = !!(electionPeriod.campaignStartDate && electionPeriod.campaignEndDate);
@@ -1441,8 +1572,9 @@ export default function AdminElectionSetup() {
   // Strict sequencing — only one stage is active at a time: the vote may only
   // open while Stage 3 is the current stage, and the enrolment window must
   // have actually started. A stage cannot end without starting — and once
-  // voting closes, the election moves to the Results stage: there is no
-  // re-opening the vote.
+  // voting closes, the election moves to the Results stage: the only ways
+  // back are the password-gated Reopen (a closed or voided vote) or a full
+  // plan reset.
   const hasFpWindow = !!electionPeriod.fingerprintRegistrationStartAt;
   // 094 — the saved enrolment window is a locked record: the pickers go
   // disabled and the "Update Registration Window" button goes dead until the
@@ -1450,9 +1582,11 @@ export default function AdminElectionSetup() {
   const fpWindowLocked = hasFpWindow && !fpEditing;
   const votingReachable = currentStage === "fingerprint_registration";
   const votingSequenced = votingReachable && hasFpWindow;
-  // The vote exists as an openable action only before it concludes: Close
-  // Voting moves the election to the Results stage, after which the Stage 4
-  // card is read-only and the publish flow takes over.
+  // The vote exists as an openable action only before it ever opens: Close
+  // Voting moves the election to the Results stage and Void rewinds a
+  // closed run to a paused Voting Stage — from both states the schedule is
+  // final and resuming goes through the password-gated Reopen, never this
+  // button.
   const votingOpenable = !electionPeriod.isActive && !electionPeriod.resultsPublished && !pastCampaign;
   // 095 — the open action is "Early Voting Activation" until the SAVED voting
   // start instant arrives; from the due time on it is the scheduled "Open
@@ -1513,9 +1647,10 @@ export default function AdminElectionSetup() {
                 <button
                   type="button"
                   onClick={() => setViewStage(stage.id)}
+                  disabled={status === "locked"}
                   aria-label={`View ${stage.label} stage`}
                   aria-current={viewed ? "step" : undefined}
-                  className="flex items-center gap-2 rounded-lg px-1 py-0.5 hover:bg-gray-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#5C0102]/40"
+                  className="flex items-center gap-2 rounded-lg px-1 py-0.5 hover:bg-gray-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#5C0102]/40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                 >
                   <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
                     viewed && status !== "current" ? "bg-white text-[#5C0102] ring-2 ring-[#5C0102]/40" :
@@ -1812,7 +1947,8 @@ export default function AdminElectionSetup() {
                 <input
                   id="campaign-start"
                   type="date"
-                  min={tomorrowDateStr()}
+                  /* 113 — at least two days after the Rules Discussion Meeting. */
+                  min={campaignStartMin ?? tomorrowDateStr()}
                   value={campaignStart}
                   disabled={campaignWindowLocked}
                   onChange={(e) => { setCampaignStart(e.target.value); clearFieldError("campaignStart"); }}
@@ -1825,7 +1961,8 @@ export default function AdminElectionSetup() {
                   <input
                     id="campaign-end"
                     type="date"
-                    min={tomorrowDateStr()}
+                    /* 113 — at least one day after the campaign start. */
+                    min={campaignEndMin ?? tomorrowDateStr()}
                     value={campaignEnd}
                     disabled={campaignWindowLocked}
                     onChange={(e) => { setCampaignEnd(e.target.value); clearFieldError("campaignEnd"); }}
@@ -2057,7 +2194,7 @@ export default function AdminElectionSetup() {
           )}
           {!electionPeriod.isActive && hasMeeting && (currentStage === "voting" || currentStage === "results") && (
             <span className="text-xs flex items-center gap-1 text-gray-400 font-medium">
-              <Square size={12} /> Voting Closed
+              <Square size={12} /> {electionPeriod.votingEndedAt ? "Voting Stage Ended" : "Voting Closed"}
             </span>
           )}
         </div>
@@ -2068,7 +2205,7 @@ export default function AdminElectionSetup() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label htmlFor="voting-start" className="block text-xs text-gray-600 mb-1">Start Date</label>
-                <input id="voting-start" type="date" value={form.startDate} min={tomorrowDateStr()}
+                <input id="voting-start" type="date" value={form.startDate} min={votingStartMin}
                   onChange={(e) => { setForm({ ...form, startDate: e.target.value }); clearFieldError("votingStart"); }}
                   disabled={scheduleLocked}
                   className={pickerClassName(fieldErrors.votingStart, "w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed")} />
@@ -2083,7 +2220,7 @@ export default function AdminElectionSetup() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label htmlFor="voting-end" className="block text-xs text-gray-600 mb-1">End Date</label>
-                <input id="voting-end" type="date" value={form.endDate} min={tomorrowDateStr()}
+                <input id="voting-end" type="date" value={form.endDate} min={form.startDate || tomorrowDateStr()}
                   onChange={(e) => { setForm({ ...form, endDate: e.target.value }); clearFieldError("votingEnd"); }}
                   disabled={scheduleLocked}
                   className={pickerClassName(fieldErrors.votingEnd, "w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed")} />
@@ -2165,10 +2302,15 @@ export default function AdminElectionSetup() {
               )}
             </div>
             <div className="shrink-0 sm:ml-8 flex items-center gap-3">
-              {/* 094 — the lock toggle for the whole saved schedule (dates,
+              {/* 113 — the lock toggle for the whole saved schedule (dates,
                   venue and modality). Only the Commissioner of Electoral
-                  Board is offered it. */}
-              {votingScheduleSaved && isElectoralBoard && !electionPeriod.isActive && currentStage !== "results" && (
+                  Board is offered it, and only while the schedule is still
+                  plan-able: before the vote ever opens, and after a Void
+                  returned the election to a paused Voting Stage for a
+                  re-run. Once voting is live, closed or ended, the schedule
+                  is final. */}
+              {votingScheduleSaved && isElectoralBoard && !electionPeriod.isActive
+                && (currentStage === "fingerprint_registration" || currentStage === "voting") && (
                 <button
                   type="button"
                   onClick={votingEditing
@@ -2186,7 +2328,10 @@ export default function AdminElectionSetup() {
                   {votingEditing ? <X size={16} /> : <Pencil size={16} />}
                 </button>
               )}
-              {!electionPeriod.isActive && !electionPeriod.resultsPublished && votingSequenced && hasMeeting && (currentStage === "fingerprint_registration" || currentStage === "voting") && (
+              {/* 113 — pre-open the save is gated on strict sequencing
+                  (votingSequenced); after a Void the election sits paused in
+                  the Voting Stage and the re-run schedule saves without it. */}
+              {!electionPeriod.isActive && !electionPeriod.resultsPublished && hasMeeting && (votingSequenced || currentStage === "voting") && (
                 <button onClick={handleSaveVotingSchedule}
                   disabled={loading || emptyPositions.length > 0 || votingScheduleLocked}
                   title={
@@ -2233,11 +2378,13 @@ export default function AdminElectionSetup() {
                 Close Voting
               </button>
             )}
-            {/* 084 — paused vote: the two consequential moves, both behind
-                the Electoral Board password. Offered whenever the vote is
-                paused (including after a reload), not only in the session
-                that closed it. */}
-            {currentStage === "voting" && !electionPeriod.isActive && !electionPeriod.resultsPublished && (
+            {/* 084/113 — the consequential moves, all behind the Electoral
+                Board password.  Offered whenever the vote is stopped but
+                the stage was not ENDED: after Close Voting (stage
+                'results') and after a Void (stage 'voting', paused).
+                Reopen rewinds to a live vote; End finalizes the stage and
+                is only offered from the closed state. */}
+            {(currentStage === "voting" || currentStage === "results") && !electionPeriod.isActive && !electionPeriod.resultsPublished && !electionPeriod.votingEndedAt && (
               <>
                 <button
                   onClick={() => { setGateError(null); setGatePassword(""); setVoteGate("reopen"); }}
@@ -2247,13 +2394,15 @@ export default function AdminElectionSetup() {
                   {loading ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
                   Reopen Voting
                 </button>
-                <button
-                  onClick={() => { setGateError(null); setGatePassword(""); setVoteGate("end"); }}
-                  disabled={loading}
-                  className="px-5 py-2.5 bg-red-100 text-red-700 border border-red-200 rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-red-200 disabled:opacity-50">
-                  {loading ? <Loader2 size={16} className="animate-spin" /> : <Square size={16} />}
-                  End Voting Stage
-                </button>
+                {currentStage === "results" && (
+                  <button
+                    onClick={() => { setGateError(null); setGatePassword(""); setVoteGate("end"); }}
+                    disabled={loading}
+                    className="px-5 py-2.5 bg-red-100 text-red-700 border border-red-200 rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-red-200 disabled:opacity-50">
+                    {loading ? <Loader2 size={16} className="animate-spin" /> : <Square size={16} />}
+                    End Voting Stage
+                  </button>
+                )}
               </>
             )}
             {electionPeriod.isActive && (
@@ -2322,39 +2471,47 @@ export default function AdminElectionSetup() {
             </div>
           )}
 
-          {/* 097 — how each resolved complaint was classified.  Substantiated
-              grievances never appear in this list — they have their own red
-              section below, since only they force a Complaint Reason. */}
+          {/* 097/114 — how each resolved complaint was classified.
+              Substantiated grievances never appear in this list — they have
+              their own red section below.  114: EVERY decision on record
+              (these included) now owes a Complaint Resolution and
+              Justification at proclamation. */}
           {otherResolvedComplaints.length > 0 && (
             <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-700">
               <div className="flex items-center gap-2 font-medium">
                 <CheckCircle2 size={16} className="shrink-0" />
                 Complaint decisions ({otherResolvedComplaints.length})
               </div>
-              <ul className="mt-1.5 space-y-0.5">
+              <ul className="mt-1.5 space-y-1.5">
                 {otherResolvedComplaints.map((c) => (
-                  <li key={c.id} className="text-xs flex items-center gap-1.5 flex-wrap">
-                    <span className="font-medium">{c.subject}</span>
-                    {c.complaintAgainst && (
-                      <span className="text-gray-500">(against {c.complaintAgainst})</span>
-                    )}
-                    <span className="text-gray-400">·</span>
-                    <span>{complaintDecisionLabel(c.decision)}</span>
-                  </li>
+                  <FindingsDisclosure
+                    key={c.id}
+                    id={`stage5-other-findings-${c.id}`}
+                    subject={c.subject}
+                    decisionLabel={complaintDecisionLabel(c.decision)}
+                    findings={c.findings}
+                  />
                 ))}
               </ul>
+              {otherResolvedDecisions.length > 0 && !electionPeriod.proclaimed && (
+                <div className="mt-1.5 text-xs font-medium">
+                  A Complaint Resolution and Justification is required when proclaiming winners — for every decision on record.
+                </div>
+              )}
             </div>
           )}
 
-          {/* 097 — the ONLY place a substantiated grievance appears on this
-              stage.  Each Nature of Complaint toggles its findings (text
-              only — no evidence files) at the bottom of the row. */}
+          {/* 097/114 — the ONLY place a substantiated grievance appears on
+              this stage.  Each Nature of Complaint toggles its findings (text
+              only — no evidence files) at the bottom of the row.  114: the
+              Unsubstantiated / Dismissed decisions above owe the same
+              one-time explanation. */}
           {substantiatedGrievances.length > 0 && (
             <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-800">
               {!electionPeriod.proclaimed ? (
                 <div className="flex items-start gap-2 text-xs font-medium">
                   <ShieldAlert size={14} className="mt-0.5 shrink-0" />
-                  <span>A Complaint Reason is required when proclaiming winners due to:</span>
+                  <span>A Complaint Resolution and Justification is required when proclaiming winners due to:</span>
                 </div>
               ) : (
                 <div className="flex items-center gap-2 text-xs font-medium">
@@ -2386,19 +2543,38 @@ export default function AdminElectionSetup() {
             {!electionPeriod.proclaimed && (
               <button
                 onClick={handlePublishAndProclaim}
-                disabled={loading || !votingConcluded || complaintsPending}
+                disabled={loading || !votingConcluded || !electionPeriod.votingEndedAt || complaintsPending}
                 title={
                   !votingConcluded
                     ? "Open and close the voting period first."
-                    : complaintsPending
-                      ? "Resolve all complaints before publishing results and proclaiming winners."
-                      : undefined
+                    : !electionPeriod.votingEndedAt
+                      ? "End the Voting Stage before publishing results."
+                      : complaintsPending
+                        ? "Resolve all complaints before publishing results and proclaiming winners."
+                        : undefined
                 }
                 className="px-5 py-2.5 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:opacity-90 disabled:opacity-50"
                 style={{ backgroundColor: "#5C0102" }}
               >
                 {loading ? <Loader2 size={16} className="animate-spin" /> : <Trophy size={16} />}
                 Publish & Proclaim Winners
+              </button>
+            )}
+            {/* 113 — Void Election: the escape hatch before the record is
+                committed.  Available from the moment the vote is closed
+                (or ended) until the results are published and the winners
+                proclaimed; afterwards the button is gone for good.  It
+                discards every recorded vote and returns the SAME period to
+                the Voting Stage, paused — Stage 1-3 records untouched.
+                Electoral Board password required. */}
+            {currentStage === "results" && !electionPeriod.resultsPublished && !electionPeriod.proclaimed && (
+              <button
+                onClick={() => { setGateError(null); setGatePassword(""); setVoteGate("void"); }}
+                disabled={loading}
+                title="Discard every recorded vote and restart the Voting Stage in this same election period."
+                className="px-5 py-2.5 bg-red-100 text-red-700 border border-red-200 rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-red-200 disabled:opacity-50">
+                {loading ? <Loader2 size={16} className="animate-spin" /> : <XCircle size={16} />}
+                Void Election
               </button>
             )}
           </div>
@@ -2451,12 +2627,14 @@ export default function AdminElectionSetup() {
       </div>
       )}
 
-      {/* Stage navigation — prev/next around the viewed card */}
+      {/* Stage navigation — prev/next around the viewed card.  113: a step
+          the stageStatus locks (Stage 5 before End Voting Stage) cannot be
+          navigated into from here either. */}
       <div className="flex items-center justify-between mb-6">
         <button
           type="button"
           onClick={() => setViewStage(STAGES[viewIndex - 1].id)}
-          disabled={viewIndex === 0}
+          disabled={viewIndex === 0 || stageStatus(STAGES[viewIndex - 1].id) === "locked"}
           title={viewIndex === 0 ? "This is the first stage." : undefined}
           className="px-4 py-2 bg-gray-100 text-gray-700 rounded-xl text-sm font-medium flex items-center gap-1.5 hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed"
         >
@@ -2465,7 +2643,7 @@ export default function AdminElectionSetup() {
         <button
           type="button"
           onClick={() => setViewStage(STAGES[viewIndex + 1].id)}
-          disabled={viewIndex === STAGES.length - 1}
+          disabled={viewIndex === STAGES.length - 1 || stageStatus(STAGES[viewIndex + 1].id) === "locked"}
           title={viewIndex === STAGES.length - 1 ? "This is the last stage." : undefined}
           className="px-4 py-2 bg-gray-100 text-gray-700 rounded-xl text-sm font-medium flex items-center gap-1.5 hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed"
         >
@@ -2520,6 +2698,7 @@ export default function AdminElectionSetup() {
         profiles={candidateProfiles}
         complaintSubjects={filedComplaintSubjects}
         substantiatedGrievances={substantiatedGrievances}
+        otherResolved={otherResolvedDecisions}
         onCancel={closeProclamation}
         onConfirm={commitProclaim}
       />
@@ -2617,13 +2796,19 @@ export default function AdminElectionSetup() {
             <div className="flex items-center gap-2 mb-1">
               <ShieldAlert size={18} style={{ color: "#DC2626" }} />
               <h3 id="vote-gate-title" className="text-gray-900 text-sm font-semibold">
-                {voteGate === "reopen" ? "Reopen the Voting Period?" : "End the Voting Stage?"}
+                {voteGate === "reopen"
+                  ? "Reopen the Voting Period?"
+                  : voteGate === "end"
+                    ? "End the Voting Stage?"
+                    : "Void the Election?"}
               </h3>
             </div>
             <p className="text-xs text-gray-500 mb-4">
               {voteGate === "reopen"
                 ? "The voting period resumes immediately: students can cast votes again. This requires the Electoral Board password."
-                : "The Voting Stage is finalized and the election moves to the Results stage. This requires the Electoral Board password."}
+                : voteGate === "end"
+                  ? "The Voting Stage is finalized and the election stays at the Results stage. This requires the Electoral Board password."
+                  : "Every recorded vote is permanently discarded and the same election period returns to the Voting Stage (paused). Stage 1-3 records are unchanged. This requires the Electoral Board password."}
             </p>
 
             <label className="block text-xs text-gray-600 mb-1" htmlFor="vote-gate-password">
@@ -2656,7 +2841,7 @@ export default function AdminElectionSetup() {
                 className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-red-700 disabled:opacity-50"
               >
                 {loading ? <Loader2 size={15} className="animate-spin" /> : <ShieldAlert size={15} />}
-                {voteGate === "reopen" ? "Reopen Voting" : "End Voting Stage"}
+                {voteGate === "reopen" ? "Reopen Voting" : voteGate === "end" ? "End Voting Stage" : "Void Election"}
               </button>
             </div>
           </div>

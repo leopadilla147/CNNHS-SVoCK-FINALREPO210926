@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  CheckCircle2,
   Gavel,
   Loader2,
   ShieldAlert,
@@ -22,7 +23,7 @@ import type { ProclamationTallyRow, TieResolution } from "../lib/supabaseData";
 import { FULL_POSITION_ORDER as POSITION_ORDER } from "../lib/partyScope";
 import { FindingsDisclosure } from "./FindingsDisclosure";
 import { ProclamationSummary } from "./ProclamationSummary";
-import type { SubstantiatedGrievance } from "./ProclamationSummary";
+import type { SubstantiatedGrievance, OtherResolvedComplaint } from "./ProclamationSummary";
 
 const POSITION_INDEX = new Map<string, number>(
   POSITION_ORDER.map((position, index) => [position, index]),
@@ -110,6 +111,9 @@ interface ProclamationDialogProps {
   /** 097 — the election's SUBSTANTIATED grievances (already resolved), each
    *  with its read-only findings shown beside the subject. */
   substantiatedGrievances: SubstantiatedGrievance[];
+  /** 114 — the election's Unsubstantiated / Dismissed resolutions.  Every
+   *  Findings decision now owes the Board's one-time explanation. */
+  otherResolved: OtherResolvedComplaint[];
   onCancel: () => void;
   onConfirm: (
     resolutions: Record<string, TieResolution>,
@@ -135,6 +139,7 @@ export function ProclamationDialog({
   profiles = {},
   complaintSubjects,
   substantiatedGrievances,
+  otherResolved,
   onCancel,
   onConfirm,
 }: ProclamationDialogProps) {
@@ -169,19 +174,24 @@ export function ProclamationDialog({
   const unresolvedTies = tiePositions.filter((p) => !isResolved(resolutions[p.position]));
   const complaintsPending = complaintSubjects.length > 0;
   const decisionReady = !complaintsPending || complaintNote.trim() !== "";
-  // 097 — a substantiated grievance requires the Board's one-time explanation.
+  // 097/114 — a substantiated grievance requires the Board's one-time
+  // explanation, and 114 widens the debt to EVERY Findings decision:
+  // Unsubstantiated and Dismissed resolutions owe it just the same.
   const substantiatedPending = substantiatedGrievances.length > 0;
-  const reasonReady = !substantiatedPending || complaintReason.trim() !== "";
+  const otherResolvedPending = otherResolved.length > 0;
+  const anyDecidedGrievance = substantiatedPending || otherResolvedPending;
+  const reasonReady = !anyDecidedGrievance || complaintReason.trim() !== "";
   // 085b — one method covers every tie; "Others" needs its text.
   const tieMethodReady =
     tiePositions.length === 0 ||
     (tieMethod !== "" && (tieMethod !== "others" || tieOther.trim() !== ""));
   // The board cannot pick a winner of a tied position until the Complaint
-  // Reason (097) and the shared tie resolution method are both recorded —
-  // the choice is only final once the reasoning behind it is on record.
+  // Resolution and Justification (097/114) and the shared tie resolution
+  // method are both recorded — the choice is only final once the reasoning
+  // behind it is on record.
   const picksLocked = !reasonReady || !tieMethodReady;
   const lockedBecause = [
-    !reasonReady ? "the Complaint Reason" : null,
+    !reasonReady ? "the Complaint Resolution and Justification" : null,
     !tieMethodReady ? "how the tie" + (tiePositions.length === 1 ? " was" : "s were") + " resolved" : null,
   ]
     .filter(Boolean)
@@ -309,40 +319,68 @@ export function ProclamationDialog({
                 </div>
               )}
 
-              {/* 097 — a substantiated grievance taints the election, so the
-                  Board must record a Complaint Reason (one-time explanation)
-                  before proclaiming.  Sits ABOVE the tie-break decision.
-                  Each grievance also shows its read-only Findings. */}
-              {substantiatedPending && (
-                <div className="rounded-xl border border-red-300 bg-red-50 p-4 space-y-3">
-                  <div className="flex items-start gap-2 text-xs text-red-800">
-                    <ShieldAlert size={14} className="mt-0.5 shrink-0" />
-                    <div>
-                      <div className="font-bold uppercase tracking-wider text-[11px]">
-                        {substantiatedGrievances.length} substantiated {substantiatedGrievances.length === 1 ? "grievance" : "grievances"} — a Complaint Reason is required
+              {/* 097/114 — a grievance decision taints (or at least closes)
+                  the election, so the Board must record a Complaint
+                  Resolution and Justification (one-time explanation) before
+                  proclaiming — for EVERY decision: Substantiated,
+                  Unsubstantiated, or Dismissed.  Sits ABOVE the tie-break
+                  decision.  Substantiated grievances also show their
+                  read-only Findings. */}
+              {anyDecidedGrievance && (
+                <div className={`rounded-xl border p-4 space-y-3 ${substantiatedPending ? "border-red-300 bg-red-50" : "border-gray-200 bg-gray-50"}`}>
+                  {substantiatedPending && (
+                    <div className="flex items-start gap-2 text-xs text-red-800">
+                      <ShieldAlert size={14} className="mt-0.5 shrink-0" />
+                      <div>
+                        <div className="font-bold uppercase tracking-wider text-[11px]">
+                          {substantiatedGrievances.length} substantiated {substantiatedGrievances.length === 1 ? "grievance" : "grievances"} — a Complaint Resolution and Justification is required
+                        </div>
+                        <ul className="mt-1 space-y-1.5">
+                          {substantiatedGrievances.map((g) => (
+                            <FindingsDisclosure
+                              key={g.id}
+                              id={`proclaim-findings-${g.id}`}
+                              subject={g.subject}
+                              findings={g.findings}
+                            />
+                          ))}
+                        </ul>
                       </div>
-                      <ul className="mt-1 space-y-1.5">
-                        {substantiatedGrievances.map((g) => (
-                          <FindingsDisclosure
-                            key={g.id}
-                            id={`proclaim-findings-${g.id}`}
-                            subject={g.subject}
-                            findings={g.findings}
-                          />
-                        ))}
-                      </ul>
                     </div>
-                  </div>
+                  )}
+                  {otherResolvedPending && (
+                    <div className="flex items-start gap-2 text-xs text-gray-700">
+                      <CheckCircle2 size={14} className="mt-0.5 shrink-0" />
+                      <div>
+                        <div className="font-bold uppercase tracking-wider text-[11px] text-gray-600">
+                          {otherResolved.length} complaint decision{otherResolved.length === 1 ? "" : "s"} on record
+                        </div>
+                        {/* 114 — the same click-to-reveal Findings a
+                            substantiated grievance gets. */}
+                        <ul className="mt-1 space-y-1.5">
+                          {otherResolved.map((c) => (
+                            <FindingsDisclosure
+                              key={c.id}
+                              id={`proclaim-other-findings-${c.id}`}
+                              subject={c.subject}
+                              decisionLabel={c.decisionLabel}
+                              findings={c.findings}
+                            />
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  )}
                   <div>
                     <label htmlFor="proclaim-complaint-reason" className="block text-xs font-medium text-gray-700 mb-1">
-                      Complaint Reason (one-time explanation)
+                      Complaint Resolution and Justification (one-time explanation)
                     </label>
                     <textarea
                       id="proclaim-complaint-reason"
                       value={complaintReason}
                       onChange={(e) => setComplaintReason(e.target.value)}
                       rows={2}
-                      placeholder="Explain how the substantiated grievance affected this proclamation."
+                      placeholder="Explain how the grievance decisions were weighed in this proclamation."
                       className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-[#5C0102]/20 focus:border-[#5C0102]/40"
                     />
                   </div>
@@ -431,12 +469,14 @@ export function ProclamationDialog({
                         // 081 — the tally rows ARE the choice: for a tied
                         // position every top-count candidate is a pick target,
                         // so no separate tie list is rendered below.  The
-                        // board can only pick once the Complaint Reason (097)
-                        // and the shared tie method are both recorded.
+                        // board can only pick once the Complaint Resolution
+                        // and Justification (097/114) and the shared tie
+                        // method are both recorded.
                         const selectable = p.isTie && isTop && !picksLocked;
-                        // Greyed out while the Complaint Reason (097) or the
-                        // shared tie method is still missing — the choice
-                        // exists but cannot be made yet.
+                        // Greyed out while the Complaint Resolution and
+                        // Justification (097/114) or the shared tie method is
+                        // still missing — the choice exists but cannot be
+                        // made yet.
                         const pickLockedRow = p.isTie && isTop && picksLocked;
                         // The trophy marks ONLY a winner: the clean-win leader,
                         // or the tied candidate the board actually chose.  The
@@ -584,6 +624,7 @@ export function ProclamationDialog({
               complaintReason={complaintReason}
               complaintSubjects={complaintSubjects}
               substantiated={substantiatedGrievances}
+              otherResolved={otherResolved}
             />
           )}
         </div>
@@ -605,7 +646,7 @@ export function ProclamationDialog({
                 : !tieMethodReady
                   ? "Record how the tie was resolved first."
                   : !reasonReady
-                    ? "Record the Complaint Reason first."
+                    ? "Record the Complaint Resolution and Justification first."
                     : !decisionReady
                       ? "Record the Board's decision reason and the complaint note first."
                       : undefined

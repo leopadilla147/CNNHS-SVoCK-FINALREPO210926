@@ -28,8 +28,10 @@ const {
   mockCloseElectionRpc,
   mockReopenVotingRpc,
   mockEndVotingStageRpc,
+  mockVoidElectionRpc,
   mockGetProclamationTallyRpc,
   mockProclaimWinnersRpc,
+  mockGetProclaimedWinners,
   mockInsertNotification,
   mockConfirm,
 } = vi.hoisted(() => ({
@@ -51,8 +53,10 @@ const {
   mockCloseElectionRpc: vi.fn(),
   mockReopenVotingRpc: vi.fn(),
   mockEndVotingStageRpc: vi.fn(),
+  mockVoidElectionRpc: vi.fn(),
   mockGetProclamationTallyRpc: vi.fn(),
   mockProclaimWinnersRpc: vi.fn(),
+  mockGetProclaimedWinners: vi.fn(() => Promise.resolve([])),
   mockInsertNotification: vi.fn(),
   mockConfirm: vi.fn(),
 }));
@@ -76,7 +80,9 @@ vi.mock("../../lib/supabaseData", () => ({
   closeElectionRpc: mockCloseElectionRpc,
   reopenVotingRpc: mockReopenVotingRpc,
   endVotingStageRpc: mockEndVotingStageRpc,
+  voidElectionRpc: mockVoidElectionRpc,
   publishResultsRpc: vi.fn(),
+  getProclaimedWinners: mockGetProclaimedWinners,
   getProclamationTallyRpc: mockGetProclamationTallyRpc,
   proclaimWinnersRpc: mockProclaimWinnersRpc,
 }));
@@ -152,6 +158,13 @@ function toLocalDate(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/** 113 — n days after a YYYY-MM-DD day, as YYYY-MM-DD (spacing-rule fixtures). */
+function plusDays(day: string, n: number): string {
+  const d = new Date(`${day}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function renderPage() {
   return render(
     <MemoryRouter>
@@ -218,6 +231,16 @@ describe("initialViewStage", () => {
     expect(initialViewStage(period({ lifecycleStage: "voting", isActive: true }))).toBe("voting");
     expect(initialViewStage(period({ lifecycleStage: "results", resultsPublished: true }))).toBe("results");
   });
+
+  it("does not jump to Stage 5 while the vote is merely closed (113)", () => {
+    // Close Voting moves the row to 'results' without ending the stage:
+    // the page stays on the Voting view, where Reopen / End are offered.
+    expect(initialViewStage(period({ lifecycleStage: "results", isActive: false }))).toBe("voting");
+    // The End stamp is what finally moves the view on to Stage 5.
+    expect(
+      initialViewStage(period({ lifecycleStage: "results", isActive: false, votingEndedAt: "2026-11-02T17:30:00.000Z" })),
+    ).toBe("results");
+  });
 });
 
 describe("AdminElectionSetup", () => {
@@ -257,13 +280,14 @@ describe("AdminElectionSetup", () => {
   });
 
   it("locks the campaign stage until a period exists to hang the meeting on", async () => {
-    const user = userEvent.setup();
     electionPeriod = period({ id: undefined, lifecycleStage: "application", candidacyOpen: false });
     mockGetCurrentElectionId.mockResolvedValue(null);
     renderPage();
 
-    await gotoStage(user, "Campaign");
-    expect(screen.getByText("Open the Candidate Application Period first.")).toBeInTheDocument();
+    // 113 — a locked step is a dead end, not a preview: the stepper step is
+    // disabled and the locked card never renders.
+    expect(screen.getByRole("button", { name: /View Campaign stage/ })).toBeDisabled();
+    expect(screen.queryByText("Stage 2: Campaign Period")).toBeNull();
   });
 
   it("keeps the campaign stage reachable while Stage 1 is still current", async () => {
@@ -297,7 +321,11 @@ describe("AdminElectionSetup", () => {
 
   it("navigates between stages with the stepper and the prev/next row", async () => {
     const user = userEvent.setup();
-    electionPeriod = period({ lifecycleStage: "application", candidacyOpen: true });
+    electionPeriod = period({
+      lifecycleStage: "application",
+      candidacyOpen: true,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+    });
     renderPage();
 
     // Prev is closed on the first stage; Next walks forward one stage.
@@ -305,26 +333,32 @@ describe("AdminElectionSetup", () => {
     await user.click(screen.getByRole("button", { name: /Next: Campaign/ }));
     expect(screen.getByText("Stage 2: Campaign Period")).toBeInTheDocument();
 
-    // The stepper jumps straight to any stage...
-    await gotoStage(user, "Results");
-    expect(screen.getByText("Stage 5: Election Result")).toBeInTheDocument();
-
-    // ...and Next is closed on the last stage.
-    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: /Previous: Voting/ }));
+    // The stepper jumps straight to any unlocked stage...
+    await gotoStage(user, "Voting");
     expect(screen.getByText("Stage 4: Voting Period")).toBeInTheDocument();
+
+    // 113 — ...but a locked stage is refused: Stage 5 opens only once the
+    // Voting Stage was ENDED, so both the stepper step and the Next button
+    // are dead ends here.
+    expect(screen.getByRole("button", { name: /View Results stage/ })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: /View Results stage/ }));
+    expect(screen.queryByText("Stage 5: Election Result")).toBeNull();
+    expect(screen.getByRole("button", { name: /Next: Results/ })).toBeDisabled();
+
+    // ...and Prev walks back.
+    await user.click(screen.getByRole("button", { name: /Previous: Fingerprint/ }));
+    expect(screen.getByText("Stage 3: Fingerprint Registration")).toBeInTheDocument();
   });
 
   it("refuses to open voting before the campaign meeting is scheduled", async () => {
-    const user = userEvent.setup();
     electionPeriod = period({ lifecycleStage: "application", candidacyOpen: true });
     renderPage();
 
-    // The vote is not startable while the Application Stage is still current:
-    // neither the schedule nor the open action is offered, and the standing
-    // lock note names the reason.
-    await gotoStage(user, "Voting");
-    expect(screen.getByText("Schedule the campaign meeting before opening voting.")).toBeInTheDocument();
+    // The vote is not startable while the Application Stage is still current
+    // and no meeting exists: Stage 4 is locked outright, so the card — and
+    // with it the schedule and open actions — is unreachable (113).
+    expect(screen.getByRole("button", { name: /View Voting stage/ })).toBeDisabled();
+    expect(screen.queryByText("Stage 4: Voting Period")).toBeNull();
     expect(screen.queryByRole("button", { name: /Open Voting/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /Save Schedule/ })).toBeNull();
   });
@@ -741,7 +775,7 @@ describe("AdminElectionSetup", () => {
     expect(mockOpenElectionRpc).not.toHaveBeenCalled();
   });
 
-  it("Close Voting pauses the vote and offers the password-gated actions", async () => {
+  it("Close Voting moves the election to the Results stage and offers the password-gated actions", async () => {
     const user = userEvent.setup();
     electionPeriod = period({
       lifecycleStage: "voting",
@@ -753,9 +787,10 @@ describe("AdminElectionSetup", () => {
       endDate: "2026-11-02",
       endTime: "17:00",
     });
-    // close_election_rpc (084) only pauses: the row stays at stage 'voting'.
-    const pausedRow = period({
-      lifecycleStage: "voting",
+    // close_election_rpc (113) closes AND moves: the row lands at stage
+    // 'results' with voting_ended_at still null — closed, not ended.
+    const closedRow = period({
+      lifecycleStage: "results",
       isActive: false,
       candidacyOpen: false,
       rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
@@ -764,7 +799,7 @@ describe("AdminElectionSetup", () => {
       endDate: "2026-11-02",
       endTime: "17:00",
     });
-    mockReloadElectionPeriod.mockResolvedValue(pausedRow);
+    mockReloadElectionPeriod.mockResolvedValue(closedRow);
     renderPage();
 
     await gotoStage(user, "Voting");
@@ -773,12 +808,69 @@ describe("AdminElectionSetup", () => {
     await waitFor(() => {
       expect(mockCloseElectionRpc).toHaveBeenCalledWith(PERIOD_ID);
       expect(mockApplyElectionPeriod).toHaveBeenCalledWith(
-        expect.objectContaining({ lifecycleStage: "voting", isActive: false }),
+        expect.objectContaining({ lifecycleStage: "results", isActive: false }),
       );
     });
   });
 
-  it("shows Reopen Voting and End Voting Stage while the vote is paused", async () => {
+  it("shows Reopen Voting and End Voting Stage while the vote is closed but not ended", async () => {
+    const user = userEvent.setup();
+    electionPeriod = period({
+      lifecycleStage: "results",
+      isActive: false,
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      startDate: "2026-11-02",
+      startTime: "08:00",
+      endDate: "2026-11-02",
+      endTime: "17:00",
+    });
+    candidates = fullRoster();
+    renderPage();
+
+    await gotoStage(user, "Voting");
+    expect(screen.getByText("Voting Closed")).toBeInTheDocument();
+    // The close is not the end: both consequential moves are offered.
+    expect(screen.getByRole("button", { name: /Reopen Voting/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /End Voting Stage/ })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /Open Voting/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Close Voting/ })).toBeNull();
+    // 113 — but the schedule stays final after opening and closing: no
+    // edit icon in the closed state (only a Void re-opens it).
+    expect(screen.queryByRole("button", { name: "Edit the Voting Schedule" })).toBeNull();
+
+    // 113 — Stage 5 stays LOCKED until the stage was ENDED: the stepper
+    // refuses it, and the Next button will not walk into it either.
+    expect(screen.getByRole("button", { name: /View Results stage/ })).toBeDisabled();
+  });
+
+  it("after End Voting Stage only Reopen is refused — the moves disappear and Stage 4 is checked", async () => {
+    const user = userEvent.setup();
+    electionPeriod = period({
+      lifecycleStage: "results",
+      isActive: false,
+      votingEndedAt: "2026-11-02T17:30:00.000Z",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      startDate: "2026-11-02",
+      startTime: "08:00",
+      endDate: "2026-11-02",
+      endTime: "17:00",
+    });
+    candidates = fullRoster();
+    renderPage();
+
+    // 113 — ending the stage is what finally moves the page on to Stage 5:
+    // the default view lands there, publish unlocked.
+    expect(screen.getByRole("button", { name: /Publish & Proclaim Winners/ })).toBeEnabled();
+
+    await gotoStage(user, "Voting");
+    expect(screen.getByText("Voting Stage Ended")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Reopen Voting/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /End Voting Stage/ })).toBeNull();
+  });
+
+  it("after a Void the period sits paused in the Voting Stage — only Reopen is offered", async () => {
     const user = userEvent.setup();
     electionPeriod = period({
       lifecycleStage: "voting",
@@ -795,15 +887,104 @@ describe("AdminElectionSetup", () => {
 
     await gotoStage(user, "Voting");
     expect(screen.getByText("Voting Closed")).toBeInTheDocument();
-    // The pause is not the end: both consequential moves are offered.
     expect(screen.getByRole("button", { name: /Reopen Voting/ })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /End Voting Stage/ })).toBeEnabled();
+    // Ending a voided (zero-vote) run straight away is not offered: the
+    // board resumes voting with Reopen instead.
+    expect(screen.queryByRole("button", { name: /End Voting Stage/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /Open Voting/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Close Voting/ })).toBeNull();
+    // 113 — the voided run may be re-planned: the schedule edit icon is
+    // offered again for the re-run.
+    expect(screen.getByRole("button", { name: "Edit the Voting Schedule" })).toBeInTheDocument();
+  });
 
-    // Stage 5 publishing stays locked until the stage was actually ENDED.
-    await gotoStage(user, "Results");
-    expect(screen.getByRole("button", { name: /Publish & Proclaim Winners/ })).toBeDisabled();
+  it("after a Void the Voting schedule can be edited and saved for the re-run", async () => {
+    const user = userEvent.setup();
+    // 113 — Void rewinds the election to a paused Voting Stage: the board
+    // may move the re-run to a new modality, venue or dates before
+    // reopening. Sequencing is long since done, so no Stage 3 gate applies.
+    electionPeriod = period({
+      lifecycleStage: "voting",
+      isActive: false,
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: "2026-10-05T08:00:00.000Z",
+      startDate: "2026-11-02",
+      startTime: "08:00",
+      endDate: "2026-11-02",
+      endTime: "17:00",
+    });
+    candidates = fullRoster();
+    renderPage();
+
+    await gotoStage(user, "Voting");
+    await user.click(screen.getByRole("button", { name: "Edit the Voting Schedule" }));
+
+    expect(screen.getByLabelText("Start Date")).toBeEnabled();
+    expect(screen.getByLabelText("Venue")).toBeEnabled();
+    expect(screen.getByLabelText("Election Modalities")).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Save Changes/ })).toBeEnabled();
+
+    await user.selectOptions(screen.getByLabelText("Election Modalities"), "manual");
+    await user.click(screen.getByRole("button", { name: /Save Changes/ }));
+
+    await waitFor(() => {
+      expect(mockSetElectionPeriod).toHaveBeenCalledWith(
+        expect.objectContaining({
+          electionModality: "manual",
+          lifecycleStage: "voting",
+          isActive: false,
+        }),
+      );
+    });
+  });
+
+  it("spaces the voting pickers off the campaign end and allows a same-day voting end (113)", () => {
+    // Voting opens two days after the Campaign Period ends (whichever of
+    // that and tomorrow is later), and may end the very day it starts.
+    electionPeriod = period({
+      lifecycleStage: "fingerprint_registration",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: localIso(1, "08:00"),
+      campaignStartDate: localIso(2, "08:00"),
+      campaignEndDate: localIso(4, "17:00"),
+      startDate: "2026-11-02",
+      startTime: "08:00",
+      endDate: "2026-11-02",
+      endTime: "17:00",
+    });
+    renderPage();
+
+    expect(screen.getByLabelText("Start Date")).toHaveAttribute("min", futureDate(6));
+    expect(screen.getByLabelText("End Date")).toHaveAttribute("min", "2026-11-02");
+  });
+
+  it("refuses a voting start less than two days after the campaign ends (113)", async () => {
+    const user = userEvent.setup();
+    electionPeriod = period({
+      lifecycleStage: "fingerprint_registration",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      fingerprintRegistrationStartAt: localIso(1, "08:00"),
+      campaignStartDate: localIso(2, "08:00"),
+      campaignEndDate: localIso(4, "17:00"),
+      startDate: futureDate(10),
+      startTime: "08:00",
+      endDate: futureDate(10),
+      endTime: "17:00",
+    });
+    candidates = fullRoster();
+    renderPage();
+
+    await gotoStage(user, "Voting");
+    await user.click(screen.getByRole("button", { name: "Edit the Voting Schedule" }));
+    // Move the start onto campaignEnd+1 — inside the two-day spacing.
+    await user.clear(screen.getByLabelText("Start Date"));
+    await user.type(screen.getByLabelText("Start Date"), futureDate(5));
+    await user.click(screen.getByRole("button", { name: /Save Changes/ }));
+
+    expect(mockSetElectionPeriod).not.toHaveBeenCalled();
+    expect(screen.getByText("Voting must start at least two days after the Campaign Period ends.")).toBeInTheDocument();
   });
 
   it("Reopen Voting refuses an empty or wrong Electoral Board password", async () => {
@@ -842,8 +1023,10 @@ describe("AdminElectionSetup", () => {
 
   it("Reopen Voting resumes the vote once the password is accepted", async () => {
     const user = userEvent.setup();
+    // 113 — Reopen works from the CLOSED state: Close Voting leaves the row
+    // at stage 'results', inactive, not yet ended.
     electionPeriod = period({
-      lifecycleStage: "voting",
+      lifecycleStage: "results",
       isActive: false,
       candidacyOpen: false,
       rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
@@ -852,8 +1035,8 @@ describe("AdminElectionSetup", () => {
       endDate: "2026-11-02",
       endTime: "17:00",
     });
-    // reopen_voting_rpc (084) flips is_active back on; the page mirrors the
-    // row the server produced.
+    // reopen_voting_rpc (113) moves the stage back to 'voting' and flips
+    // is_active on; the page mirrors the row the server produced.
     mockReloadElectionPeriod.mockResolvedValue(
       period({
         lifecycleStage: "voting",
@@ -883,10 +1066,11 @@ describe("AdminElectionSetup", () => {
     });
   });
 
-  it("End Voting Stage moves the election to Stage 5 once the password is accepted", async () => {
+  it("End Voting Stage stamps the stage as ended once the password is accepted", async () => {
     const user = userEvent.setup();
+    // 113 — End runs from the closed state (stage 'results', inactive).
     electionPeriod = period({
-      lifecycleStage: "voting",
+      lifecycleStage: "results",
       isActive: false,
       candidacyOpen: false,
       rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
@@ -895,12 +1079,13 @@ describe("AdminElectionSetup", () => {
       endDate: "2026-11-02",
       endTime: "17:00",
     });
-    // end_voting_stage_rpc (084) moves the stage to results; the page mirrors
+    // end_voting_stage_rpc (113) stamps voting_ended_at; the page mirrors
     // the row the server produced.
     mockReloadElectionPeriod.mockResolvedValue(
       period({
         lifecycleStage: "results",
         isActive: false,
+        votingEndedAt: "2026-11-02T17:30:00.000Z",
         candidacyOpen: false,
         rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
         startDate: "2026-11-02",
@@ -921,9 +1106,81 @@ describe("AdminElectionSetup", () => {
     await waitFor(() => {
       expect(mockEndVotingStageRpc).toHaveBeenCalledWith(PERIOD_ID, "chief123");
       expect(mockApplyElectionPeriod).toHaveBeenCalledWith(
-        expect.objectContaining({ lifecycleStage: "results", isActive: false }),
+        expect.objectContaining({
+          lifecycleStage: "results",
+          isActive: false,
+          votingEndedAt: expect.any(String),
+        }),
       );
     });
+  });
+
+  it("Void Election discards the votes and returns the period to the Voting Stage, paused", async () => {
+    const user = userEvent.setup();
+    electionPeriod = period({
+      lifecycleStage: "results",
+      isActive: false,
+      votingEndedAt: "2026-11-02T17:30:00.000Z",
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      startDate: "2026-11-02",
+      startTime: "08:00",
+      endDate: "2026-11-02",
+      endTime: "17:00",
+    });
+    // void_election_rpc (113) rewinds the SAME period to the Voting Stage,
+    // paused, with the votes gone; the page mirrors the row the server
+    // produced.
+    mockReloadElectionPeriod.mockResolvedValue(
+      period({
+        lifecycleStage: "voting",
+        isActive: false,
+        votingEndedAt: null,
+        candidacyOpen: false,
+        rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+        startDate: "2026-11-02",
+        startTime: "08:00",
+        endDate: "2026-11-02",
+        endTime: "17:00",
+      }),
+    );
+    renderPage();
+
+    await gotoStage(user, "Results");
+    await user.click(screen.getByRole("button", { name: /Void Election/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText("Electoral Board Password"), "chief123");
+    await user.click(within(dialog).getByRole("button", { name: /Void Election/ }));
+
+    await waitFor(() => {
+      expect(mockVoidElectionRpc).toHaveBeenCalledWith(PERIOD_ID, "chief123");
+      expect(mockApplyElectionPeriod).toHaveBeenCalledWith(
+        expect.objectContaining({ lifecycleStage: "voting", isActive: false, votingEndedAt: null }),
+      );
+    });
+  });
+
+  it("Void Election disappears once results are published and winners are proclaimed", async () => {
+    const user = userEvent.setup();
+    electionPeriod = period({
+      lifecycleStage: "results",
+      isActive: false,
+      votingEndedAt: "2026-11-02T17:30:00.000Z",
+      resultsPublished: true,
+      proclaimed: true,
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      startDate: "2026-11-02",
+      startTime: "08:00",
+      endDate: "2026-11-02",
+      endTime: "17:00",
+    });
+    renderPage();
+
+    await gotoStage(user, "Results");
+    expect(screen.queryByRole("button", { name: /Void Election/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Publish & Proclaim Winners/ })).toBeNull();
   });
 
   it("hides Open Voting once voting has concluded — no re-open", async () => {
@@ -931,6 +1188,7 @@ describe("AdminElectionSetup", () => {
     electionPeriod = period({
       lifecycleStage: "results",
       isActive: false,
+      votingEndedAt: "2026-11-02T17:30:00.000Z",
       candidacyOpen: false,
       rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
       startDate: "2026-11-02",
@@ -941,12 +1199,12 @@ describe("AdminElectionSetup", () => {
     candidates = fullRoster();
     renderPage();
 
-    // Closing the vote moved the election to Stage 5 (the default view): the
+    // Ending the vote moved the election to Stage 5 (the default view): the
     // publish flow takes over, and Stage 4 offers no way back in.
     expect(screen.getByRole("button", { name: /Publish & Proclaim Winners/ })).toBeEnabled();
     await gotoStage(user, "Voting");
     expect(screen.queryByRole("button", { name: /Open Voting/ })).toBeNull();
-    expect(screen.getByText("Voting Closed")).toBeInTheDocument();
+    expect(screen.getByText("Voting Stage Ended")).toBeInTheDocument();
   });
 
   it("turns candidacy and the campaign period off once voting opens", async () => {
@@ -986,6 +1244,8 @@ describe("AdminElectionSetup", () => {
     electionPeriod = period({
       lifecycleStage: "results",
       isActive: false,
+      // 113 — an ended stage is what makes Stage 5 (and this test) reachable.
+      votingEndedAt: "2026-11-02T17:30:00.000Z",
       candidacyOpen: false,
       rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
     });
@@ -1304,6 +1564,42 @@ describe("AdminElectionSetup", () => {
     expect(mockSaveCampaignWindowRpc).not.toHaveBeenCalled();
   });
 
+  it("spaces the campaign pickers off the meeting — start at +2 days, end at start + 1 (113)", () => {
+    // Meeting on day X: the Campaign Start picker opens on X+2 and the
+    // Campaign End picker on X+3 — no stage boundary shares a day.
+    electionPeriod = period({
+      lifecycleStage: "campaign",
+      candidacyOpen: false,
+      rulesDiscussionAt: localIso(5, "09:00"),
+    });
+    renderPage();
+
+    const meetingDay = toLocalDate(localIso(5, "09:00"));
+    expect(screen.getByLabelText("Campaign Start")).toHaveAttribute("min", plusDays(meetingDay, 2));
+    expect(screen.getByLabelText("Campaign End")).toHaveAttribute("min", plusDays(meetingDay, 3));
+  });
+
+  it("refuses a Campaign window that starts less than two days after the meeting (113)", async () => {
+    const user = userEvent.setup();
+    electionPeriod = period({
+      lifecycleStage: "campaign",
+      candidacyOpen: false,
+      rulesDiscussionAt: localIso(5, "09:00"),
+      campaignStartDate: localIso(7, "08:00"),
+      campaignEndDate: localIso(9, "17:00"),
+    });
+    renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Edit the Campaign Period" }));
+    // Move the start onto meeting+1 — inside the two-day spacing.
+    await user.clear(screen.getByLabelText("Campaign Start"));
+    await user.type(screen.getByLabelText("Campaign Start"), futureDate(6));
+    await user.click(screen.getByRole("button", { name: /Update Campaign Window/ }));
+
+    expect(mockSaveCampaignWindowRpc).not.toHaveBeenCalled();
+    expect(screen.getByText("The Campaign Period must start at least two days after the Rules Discussion Meeting.")).toBeInTheDocument();
+  });
+
   it("ends the Campaign Period early via the End Campaign Early button", async () => {
     const user = userEvent.setup();
     electionPeriod = period({
@@ -1462,13 +1758,12 @@ describe("AdminElectionSetup", () => {
     expect(screen.queryByRole("button", { name: /Update Registration Window/ })).toBeNull();
   });
 
-  it("locks Fingerprint Registration until the campaign meeting is scheduled", async () => {
-    const user = userEvent.setup();
+  it("locks Fingerprint Registration until the campaign meeting is scheduled", () => {
     electionPeriod = period({ lifecycleStage: "campaign", candidacyOpen: false });
     renderPage();
 
-    await gotoStage(user, "Fingerprint");
-    expect(screen.getByText("Save the meeting schedule in the Application Stage first.")).toBeInTheDocument();
+    // 113 — the locked step is a dead end, not a preview.
+    expect(screen.getByRole("button", { name: /View Fingerprint stage/ })).toBeDisabled();
     expect(screen.queryByLabelText("Registration Opens")).toBeNull();
   });
 
@@ -1761,7 +2056,13 @@ describe("AdminElectionSetup", () => {
   });
 
   it("blocks publish & proclaim while a complaint is filed — resolve it first", () => {
-    electionPeriod = period({ lifecycleStage: "results", resultsPublished: false, isActive: false });
+    electionPeriod = period({
+      lifecycleStage: "results",
+      resultsPublished: false,
+      // 113 — the ended stamp is what makes Stage 5 reachable at all.
+      votingEndedAt: "2026-11-02T17:30:00.000Z",
+      isActive: false,
+    });
     complaints = [{ status: "filed", electionPeriodId: PERIOD_ID }];
     renderPage();
 
@@ -1775,7 +2076,12 @@ describe("AdminElectionSetup", () => {
   });
 
   it("reports the complaint count from the server when context has none — and blocks", async () => {
-    electionPeriod = period({ lifecycleStage: "results", resultsPublished: false, isActive: false });
+    electionPeriod = period({
+      lifecycleStage: "results",
+      resultsPublished: false,
+      votingEndedAt: "2026-11-02T17:30:00.000Z",
+      isActive: false,
+    });
     mockCountActiveComplaintsRpc.mockResolvedValue(2);
     renderPage();
 
@@ -1858,7 +2164,13 @@ describe("AdminElectionSetup", () => {
 
   describe("proclaim winners", () => {
     const publishedPeriod = () =>
-      period({ lifecycleStage: "results", resultsPublished: true, isActive: false });
+      period({
+        lifecycleStage: "results",
+        resultsPublished: true,
+        // 113 — publishing requires the Voting Stage to have been ENDED.
+        votingEndedAt: "2026-11-02T17:30:00.000Z",
+        isActive: false,
+      });
 
     const tallyRows = [
       { position: "President", candidateId: "p1", candidateName: "Ada Leader", partyName: "Alpha", votes: 10 },
@@ -1965,7 +2277,7 @@ describe("AdminElectionSetup", () => {
       );
     });
 
-    it("requires a Complaint Reason to proclaim when a substantiated grievance is on record (097)", async () => {
+    it("requires a Complaint Resolution and Justification to proclaim when a substantiated grievance is on record (097)", async () => {
       const user = userEvent.setup();
       electionPeriod = publishedPeriod();
       // An already-RESOLVED complaint classified as a substantiated grievance,
@@ -1986,10 +2298,11 @@ describe("AdminElectionSetup", () => {
       renderPage();
 
       // Stage 5 — the substantiated grievance appears ONLY in the red
-      // section below, as the reason the board owes a Complaint Reason.
+      // section below, as the reason the board owes a Complaint Resolution
+      // and Justification.
       // Its findings are hidden until the Nature of Complaint is clicked.
       expect(
-        screen.getByText(/A Complaint Reason is required when proclaiming winners due to:/),
+        screen.getByText(/A Complaint Resolution and Justification is required when proclaiming winners due to:/),
       ).toBeInTheDocument();
       expect(screen.queryByText("Ballot receipts confirmed a proxy vote.")).not.toBeInTheDocument();
       await user.click(screen.getByRole("button", { name: /Vote buying/ }));
@@ -1999,7 +2312,7 @@ describe("AdminElectionSetup", () => {
       const dialog = await screen.findByRole("dialog");
 
       const proclaim = within(dialog).getByRole("button", { name: /Publish & Proclaim Winners/ });
-      expect(within(dialog).getByLabelText(/Complaint Reason/)).toBeInTheDocument();
+      expect(within(dialog).getByLabelText(/Complaint Resolution and Justification/)).toBeInTheDocument();
       expect(proclaim).toBeDisabled();
 
       // The grievance's findings are revealed the same way inside the dialog.
@@ -2008,11 +2321,84 @@ describe("AdminElectionSetup", () => {
       await user.click(dialogRow);
       expect(within(dialog).getByText("Ballot receipts confirmed a proxy vote.")).toBeInTheDocument();
 
-      await user.type(within(dialog).getByLabelText(/Complaint Reason/), "Results were tainted by the substantiated grievance.");
+      await user.type(within(dialog).getByLabelText(/Complaint Resolution and Justification/), "Results were tainted by the substantiated grievance.");
       expect(proclaim).toBeEnabled();
     });
 
-    it("locks tie picks until the Complaint Reason and tie method are recorded (097)", async () => {
+    it("requires a Complaint Resolution and Justification for unsubstantiated and dismissed decisions too (114)", async () => {
+      const user = userEvent.setup();
+      electionPeriod = publishedPeriod();
+      // Resolved complaints classified Unsubstantiated and Dismissed — 097
+      // left these without any owed explanation; 114 makes them eligible
+      // (and required) for the Board's one-time resolution + justification.
+      complaints = [
+        {
+          id: "c1",
+          status: "accepted",
+          subject: "Late filing",
+          electionPeriodId: PERIOD_ID,
+          decision: "unsubstantiated",
+          findings: "No evidence supported the claim.",
+        },
+        {
+          id: "c2",
+          status: "accepted",
+          subject: "Campaign past hours",
+          electionPeriodId: PERIOD_ID,
+          decision: "dismissed",
+          findings: "Filed outside the complaint window.",
+        },
+      ];
+      // A tie-free tally, so the only thing blocking the action is the
+      // resolution and justification.
+      mockGetProclamationTallyRpc.mockResolvedValue([
+        { position: "President", candidateId: "p1", candidateName: "Ada Leader", partyName: "Alpha", votes: 10 },
+        { position: "President", candidateId: "p2", candidateName: "Bea Runner", partyName: "Beta", votes: 4 },
+      ]);
+      renderPage();
+
+      // Stage 5 — the gray decisions card carries the requirement note for
+      // every decision on record.
+      expect(
+        screen.getByText(/A Complaint Resolution and Justification is required when proclaiming winners/),
+      ).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: /Publish & Proclaim Winners/ }));
+      const dialog = await screen.findByRole("dialog");
+
+      const proclaim = within(dialog).getByRole("button", { name: /Publish & Proclaim Winners/ });
+      // Both decisions are listed with click-to-reveal findings (just like a
+      // substantiated grievance), and the field is required.
+      expect(within(dialog).getByText("2 complaint decisions on record")).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: /Late filing/ })).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: /Campaign past hours/ })).toBeInTheDocument();
+      expect(within(dialog).getByLabelText(/Complaint Resolution and Justification/)).toBeInTheDocument();
+      expect(proclaim).toBeDisabled();
+
+      // The findings reveal the same way inside the dialog.
+      expect(within(dialog).queryByText("No evidence supported the claim.")).not.toBeInTheDocument();
+      await user.click(within(dialog).getByRole("button", { name: /Late filing/ }));
+      expect(within(dialog).getByText("No evidence supported the claim.")).toBeInTheDocument();
+      await user.click(within(dialog).getByRole("button", { name: /Campaign past hours/ }));
+      expect(within(dialog).getByText("Filed outside the complaint window.")).toBeInTheDocument();
+
+      await user.type(
+        within(dialog).getByLabelText(/Complaint Resolution and Justification/),
+        "The grievance did not change the outcome.",
+      );
+      expect(proclaim).toBeEnabled();
+
+      await user.click(proclaim);
+      await waitFor(() => {
+        expect(mockProclaimWinnersRpc).toHaveBeenCalledWith(
+          PERIOD_ID,
+          {},
+          { complaintNote: undefined, decisionReason: "The grievance did not change the outcome." },
+        );
+      });
+    });
+
+    it("locks tie picks until the Complaint Resolution and Justification and tie method are recorded (097)", async () => {
       const user = userEvent.setup();
       electionPeriod = publishedPeriod();
       complaints = [{
@@ -2034,12 +2420,12 @@ describe("AdminElectionSetup", () => {
       expect(within(dialog).queryByRole("button", { name: /Cara One/ })).not.toBeInTheDocument();
       expect(
         within(dialog).getByText(
-          /Record the Complaint Reason and how the tie was resolved above before choosing a winner/,
+          /Record the Complaint Resolution and Justification and how the tie was resolved above before choosing a winner/,
         ),
       ).toBeInTheDocument();
       expect(within(dialog).getByText("Cara One").closest("div.opacity-60")).not.toBeNull();
 
-      await user.type(within(dialog).getByLabelText(/Complaint Reason/), "The grievance did not change the outcome.");
+      await user.type(within(dialog).getByLabelText(/Complaint Resolution and Justification/), "The grievance did not change the outcome.");
       await user.selectOptions(within(dialog).getByLabelText("How the tie was resolved"), "Coin Toss");
 
       // Both recorded — the grey-out lifts and the tie opens for picks.
@@ -2064,8 +2450,10 @@ describe("AdminElectionSetup", () => {
       const dialog = await screen.findByRole("dialog");
 
       expect(within(dialog).getByText("Proclamation Summary")).toBeInTheDocument();
-      // Pending decisions are flagged, not hidden.
-      expect(within(dialog).getByText("Tie — no winner chosen yet")).toBeInTheDocument();
+      // 113b — the bottom summary is a count: the clean-win President is
+      // selected, the all-zero Secretary tie is not picked yet.
+      expect(within(dialog).getByText("Winners to proclaim — 1 of 2 selected")).toBeInTheDocument();
+      expect(within(dialog).getByText("1 of 2 winners selected")).toBeInTheDocument();
       expect(within(dialog).getByText("Not recorded yet")).toBeInTheDocument();
 
       await user.selectOptions(within(dialog).getByLabelText("How the tie was resolved"), "Coin Toss");
@@ -2073,11 +2461,11 @@ describe("AdminElectionSetup", () => {
       const alert = await screen.findByRole("alertdialog");
       await user.click(within(alert).getByRole("button", { name: /Confirm Winner/ }));
 
-      // The summary now reflects the board's decisions.
-      expect(within(dialog).getByText("Tie — board choice")).toBeInTheDocument();
+      // The summary now counts the board's decision too.
+      expect(within(dialog).getByText("Winners to proclaim — 2 of 2 selected")).toBeInTheDocument();
+      expect(within(dialog).getByText("2 of 2 winners selected")).toBeInTheDocument();
       expect(within(dialog).getByText("Tie resolution:")).toBeInTheDocument();
       expect(within(dialog).queryByText("Not recorded yet")).not.toBeInTheDocument();
-      expect(within(dialog).queryByText("Tie — no winner chosen yet")).not.toBeInTheDocument();
     });
   });
 });

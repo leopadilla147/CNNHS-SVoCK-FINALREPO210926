@@ -23,10 +23,10 @@ const DEFAULT_DECISION_REASON_LABEL = "Complaint Reason";
 
 /**
  * The public complaint record of an election — the same treatment the
- * Electoral Board sees in Stage 5: substantiated grievances with their
- * click-to-reveal findings, the other resolutions, and whatever is still
- * on file.  Renders nothing for an election with no complaint record at
- * all, so pages without one look exactly as before.
+ * Electoral Board sees in Stage 5: every resolved grievance (substantiated
+ * or not) with its click-to-reveal findings, and whatever is still on file.
+ * Renders nothing for an election with no complaint record at all, so pages
+ * without one look exactly as before.
  */
 export function ComplaintRecordSection({
   entries,
@@ -79,14 +79,25 @@ export function ComplaintRecordSection({
             <CheckCircle2 size={16} className="shrink-0" />
             Complaint decisions ({otherResolved.length})
           </div>
-          <ul className="mt-1.5 space-y-0.5">
-            {otherResolved.map((e) => (
-              <li key={e.id} className="text-xs flex items-center gap-1.5 flex-wrap">
-                <span className="font-medium">{e.subject}</span>
-                <span className="text-gray-400">·</span>
-                <span>{complaintDecisionLabel(e.decision ?? undefined)}</span>
-              </li>
-            ))}
+          {/* 114 — the same click-to-reveal Findings a substantiated
+              grievance gets; the public results pages keep the plain row. */}
+          <ul className="mt-1.5 space-y-1.5">
+            {otherResolved.map((e) =>
+              showFindings ? (
+                <FindingsDisclosure
+                  key={e.id}
+                  id={`record-other-findings-${e.id}`}
+                  subject={e.subject}
+                  decisionLabel={complaintDecisionLabel(e.decision ?? undefined)}
+                  findings={e.findings}
+                />
+              ) : (
+                <li key={e.id} className="text-xs flex items-center gap-1.5 flex-wrap">
+                  <span className="font-semibold">{e.subject}</span>
+                  <span className="opacity-70">· {complaintDecisionLabel(e.decision ?? undefined)}</span>
+                </li>
+              ),
+            )}
           </ul>
         </div>
       )}

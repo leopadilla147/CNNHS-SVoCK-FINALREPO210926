@@ -17,6 +17,7 @@ const entries: ElectionComplaintRecord[] = [
     subject: "Late posting of results",
     status: "accepted",
     decision: "unsubstantiated",
+    findings: "No evidence supported the claim.",
   },
   {
     id: "c3",
@@ -48,10 +49,12 @@ describe("ComplaintRecordSection", () => {
     await user.click(screen.getByRole("button", { name: /Vote buying/ }));
     expect(screen.getByText("Ballot receipts confirmed a proxy vote.")).toBeInTheDocument();
 
-    // The other resolutions are only noted.
+    // The other resolutions get the same click-to-reveal findings (114).
     expect(screen.getByText(/Complaint decisions \(1\)/)).toBeInTheDocument();
-    expect(screen.getByText("Late posting of results")).toBeInTheDocument();
-    expect(screen.getByText("Unsubstantiated Grievance")).toBeInTheDocument();
+    expect(screen.getByText(/Unsubstantiated Grievance/)).toBeInTheDocument();
+    expect(screen.queryByText("No evidence supported the claim.")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Late posting of results/ }));
+    expect(screen.getByText("No evidence supported the claim.")).toBeInTheDocument();
 
     // Whatever is still on file is flagged, never hidden.
     expect(screen.getByText(/1 complaint is still on file/)).toBeInTheDocument();
@@ -79,9 +82,12 @@ describe("ComplaintRecordSection", () => {
     // The findings never render — and there is nothing to click.
     expect(screen.queryByText("Ballot receipts confirmed a proxy vote.")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Vote buying/ })).not.toBeInTheDocument();
-    // The substantiated grievance is still on the record, as a plain row.
+    // The substantiated grievance is still on the record, as a plain row —
+    // and 114 keeps the other decisions as plain rows here too.
     expect(screen.getByText(/Substantiated grievance on record \(1\)/)).toBeInTheDocument();
     expect(screen.getByText(/· Substantiated Grievance/)).toBeInTheDocument();
+    expect(screen.getByText(/· Unsubstantiated Grievance/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Late posting of results/ })).not.toBeInTheDocument();
     // The Board's explanation keeps its public name.
     expect(
       screen.getByText(

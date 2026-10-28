@@ -14,9 +14,6 @@ import cnnhsLogo from "../../assets/CNNHS_Logo1.png";
 
 /** Every dropdown shut — the state each "close all" path returns to. */
 const CLOSED_DROPDOWNS = {
-  voterReg: false,
-  elections: false,
-  voting: false,
   results: false,
   resources: false,
   user: false,
@@ -117,99 +114,32 @@ export function Header() {
 
             {/* Desktop Nav */}
             <div className="hidden md:flex items-center gap-6">
-              {/* Voter Registration Dropdown */}
-              <div className="relative">
-                <button
-                  onClick={() => toggleDropdown("voterReg")}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors text-sm"
-                >
-                  Voter Registration
-                  <ChevronDown size={14} className="text-gray-500" />
-                </button>
-                {dropdowns.voterReg && (
-                  <div className="absolute left-0 mt-1 w-56 bg-white border border-gray-200 rounded-lg shadow-lg py-2 z-50">
-                    <Link
-                      to="/register"
-                      onClick={() => toggleDropdown("voterReg")}
-                      className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                    >
-                      Register to Vote
-                    </Link>
-                  </div>
-                )}
-              </div>
+              {/* About CNNHS — direct tab, leftmost of the tabs */}
+              <Link
+                to="/about"
+                className="px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors text-sm"
+              >
+                About CNNHS
+              </Link>
 
-              {/* Elections Dropdown */}
-              <div className="relative">
-                <button
-                  onClick={() => toggleDropdown("elections")}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors text-sm"
+              {/* Student Registration — direct tab; hidden once any user is
+                  signed in (the Register CTA follows the same rule). */}
+              {!currentUser && (
+                <Link
+                  to="/register"
+                  className="px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors text-sm"
                 >
-                  Elections
-                  <ChevronDown size={14} className="text-gray-500" />
-                </button>
-                {dropdowns.elections && (
-                  <div className="absolute left-0 mt-1 w-60 bg-white border border-gray-200 rounded-lg shadow-lg py-2 z-50">
-                    <Link
-                      to="/current-election"
-                      onClick={() => toggleDropdown("elections")}
-                      className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                    >
-                      Current Election
-                    </Link>
-                    <Link
-                      to="/"
-                      onClick={() => toggleDropdown("elections")}
-                      className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                    >
-                      Election Calendar
-                    </Link>
-                    <Link
-                      to="/"
-                      onClick={() => toggleDropdown("elections")}
-                      className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                    >
-                      Candidates
-                    </Link>
-                    <Link
-                      to="/"
-                      onClick={() => toggleDropdown("elections")}
-                      className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                    >
-                      Parties
-                    </Link>
-                  </div>
-                )}
-              </div>
+                  Student Registration
+                </Link>
+              )}
 
-              {/* Voting Dropdown */}
-              <div className="relative">
-                <button
-                  onClick={() => toggleDropdown("voting")}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors text-sm"
-                >
-                  Voting
-                  <ChevronDown size={14} className="text-gray-500" />
-                </button>
-                {dropdowns.voting && (
-                  <div className="absolute left-0 mt-1 w-56 bg-white border border-gray-200 rounded-lg shadow-lg py-2 z-50">
-                    <Link
-                      to="/"
-                      onClick={() => toggleDropdown("voting")}
-                      className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                    >
-                      How to Vote
-                    </Link>
-                    <Link
-                      to="/"
-                      onClick={() => toggleDropdown("voting")}
-                      className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                    >
-                      FAQ
-                    </Link>
-                  </div>
-                )}
-              </div>
+              {/* Current Election — direct tab */}
+              <Link
+                to="/current-election"
+                className="px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors text-sm"
+              >
+                Current Election
+              </Link>
 
               {/* Results Dropdown */}
               <div className="relative">
@@ -252,7 +182,7 @@ export function Header() {
                 {dropdowns.resources && (
                   <div className="absolute left-0 mt-1 w-60 bg-white border border-gray-200 rounded-lg shadow-lg py-2 z-50">
                     <Link
-                      to="/"
+                      to="/guidelines"
                       onClick={() => toggleDropdown("resources")}
                       className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
                     >
@@ -263,21 +193,21 @@ export function Header() {
                       onClick={() => toggleDropdown("resources")}
                       className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
                     >
-                      Forms
+                      Election Calendar
                     </Link>
                     <Link
-                      to="/"
+                      to="/faq"
                       onClick={() => toggleDropdown("resources")}
                       className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
                     >
                       FAQ
                     </Link>
                     <Link
-                      to="/"
+                      to="/contact"
                       onClick={() => toggleDropdown("resources")}
                       className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
                     >
-                      Contact
+                      Contact Information
                     </Link>
                   </div>
                 )}
@@ -368,132 +298,34 @@ export function Header() {
           Home
         </Link>
         <div className="border-t border-gray-200 pt-2">
-          {/* Mobile Voter Registration */}
-          <div className="py-2">
-            <button
-              onClick={() => toggleDropdown("voterReg")}
-              className="w-full text-left text-gray-700 py-2 hover:bg-gray-50"
-            >
-              Voter Registration
-              {dropdowns.voterReg ? (
-                <ChevronUp size={16} className="ml-2 text-gray-500" />
-              ) : (
-                <ChevronDown size={16} className="ml-2 text-gray-500" />
-              )}
-            </button>
-            {dropdowns.voterReg && (
-              <>
-                <Link
-                  to="/register"
-                  onClick={() => {
-                    setMobileOpen(false);
-                    toggleDropdown("voterReg");
-                  }}
-                  className="block pl-8 py-1 text-sm text-gray-600 hover:text-[#5C0102]"
-                >
-                  Register to Vote
-                </Link>
-              </>
-            )}
-          </div>
+          {/* Mobile About CNNHS */}
+          <Link
+            to="/about"
+            onClick={() => setMobileOpen(false)}
+            className="block py-2 text-gray-700 text-sm"
+          >
+            About CNNHS
+          </Link>
 
-          {/* Mobile Elections */}
-          <div className="py-2">
-            <button
-              onClick={() => toggleDropdown("elections")}
-              className="w-full text-left text-gray-700 py-2 hover:bg-gray-50"
+          {/* Mobile Student Registration — hidden once any user is signed in */}
+          {!currentUser && (
+            <Link
+              to="/register"
+              onClick={() => setMobileOpen(false)}
+              className="block py-2 text-gray-700 text-sm"
             >
-              Elections
-              {dropdowns.elections ? (
-                <ChevronUp size={16} className="ml-2 text-gray-500" />
-              ) : (
-                <ChevronDown size={16} className="ml-2 text-gray-500" />
-              )}
-            </button>
-            {dropdowns.elections && (
-              <>
-                <Link
-                  to="/current-election"
-                  onClick={() => {
-                    setMobileOpen(false);
-                    toggleDropdown("elections");
-                  }}
-                  className="block pl-8 py-1 text-sm text-gray-600 hover:text-[#5C0102]"
-                >
-                  Current Election
-                </Link>
-                <Link
-                  to="/"
-                  onClick={() => {
-                    setMobileOpen(false);
-                    toggleDropdown("elections");
-                  }}
-                  className="block pl-8 py-1 text-sm text-gray-600 hover:text-[#5C0102]"
-                >
-                  Election Calendar
-                </Link>
-                <Link
-                  to="/"
-                  onClick={() => {
-                    setMobileOpen(false);
-                    toggleDropdown("elections");
-                  }}
-                  className="block pl-8 py-1 text-sm text-gray-600 hover:text-[#5C0102]"
-                >
-                  Candidates
-                </Link>
-                <Link
-                  to="/"
-                  onClick={() => {
-                    setMobileOpen(false);
-                    toggleDropdown("elections");
-                  }}
-                  className="block pl-8 py-1 text-sm text-gray-600 hover:text-[#5C0102]"
-                >
-                  Parties
-                </Link>
-              </>
-            )}
-          </div>
+              Student Registration
+            </Link>
+          )}
 
-          {/* Mobile Voting */}
-          <div className="py-2">
-            <button
-              onClick={() => toggleDropdown("voting")}
-              className="w-full text-left text-gray-700 py-2 hover:bg-gray-50"
-            >
-              Voting
-              {dropdowns.voting ? (
-                <ChevronUp size={16} className="ml-2 text-gray-500" />
-              ) : (
-                <ChevronDown size={16} className="ml-2 text-gray-500" />
-              )}
-            </button>
-            {dropdowns.voting && (
-              <>
-                <Link
-                  to="/"
-                  onClick={() => {
-                    setMobileOpen(false);
-                    toggleDropdown("voting");
-                  }}
-                  className="block pl-8 py-1 text-sm text-gray-600 hover:text-[#5C0102]"
-                >
-                  How to Vote
-                </Link>
-                <Link
-                  to="/"
-                  onClick={() => {
-                    setMobileOpen(false);
-                    toggleDropdown("voting");
-                  }}
-                  className="block pl-8 py-1 text-sm text-gray-600 hover:text-[#5C0102]"
-                >
-                  FAQ
-                </Link>
-              </>
-            )}
-          </div>
+          {/* Mobile Current Election */}
+          <Link
+            to="/current-election"
+            onClick={() => setMobileOpen(false)}
+            className="block py-2 text-gray-700 text-sm"
+          >
+            Current Election
+          </Link>
 
           {/* Mobile Results */}
           <div className="py-2">
@@ -549,6 +381,16 @@ export function Header() {
             </button>
             {dropdowns.resources && (
               <>
+                  <Link
+                    to="/guidelines"
+                    onClick={() => {
+                      setMobileOpen(false);
+                      toggleDropdown("resources");
+                    }}
+                    className="block pl-8 py-1 text-sm text-gray-600 hover:text-[#5C0102]"
+                  >
+                    Election Guidelines
+                  </Link>
                 <Link
                   to="/"
                   onClick={() => {
@@ -557,20 +399,10 @@ export function Header() {
                   }}
                   className="block pl-8 py-1 text-sm text-gray-600 hover:text-[#5C0102]"
                 >
-                  Election Guidelines
+                  Election Calendar
                 </Link>
                 <Link
-                  to="/"
-                  onClick={() => {
-                    setMobileOpen(false);
-                    toggleDropdown("resources");
-                  }}
-                  className="block pl-8 py-1 text-sm text-gray-600 hover:text-[#5C0102]"
-                >
-                  Forms
-                </Link>
-                <Link
-                  to="/"
+                  to="/faq"
                   onClick={() => {
                     setMobileOpen(false);
                     toggleDropdown("resources");
@@ -580,14 +412,14 @@ export function Header() {
                   FAQ
                 </Link>
                 <Link
-                  to="/"
+                  to="/contact"
                   onClick={() => {
                     setMobileOpen(false);
                     toggleDropdown("resources");
                   }}
                   className="block pl-8 py-1 text-sm text-gray-600 hover:text-[#5C0102]"
                 >
-                  Contact
+                  Contact Information
                 </Link>
               </>
             )}

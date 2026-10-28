@@ -223,6 +223,12 @@ export interface ElectionPeriod {
    *  RPC-owned (proclaim_winners_rpc) — never in the schedule sync payload. */
   proclamationDecisionReason?: string;
   proclamationComplaintNote?: string;
+  /** 113 column: when the Voting Stage was formally ended
+   *  (end_voting_stage_rpc).  Close Voting leaves it null — Close and End
+   *  both leave the stage at 'results', so this is what tells the Stage 4
+   *  check mark and the publish gate that the stage was ENDED, not merely
+   *  closed.  RPC-owned — never in the schedule sync payload. */
+  votingEndedAt?: string | null;
 }
 
 /** 096: one supporting-evidence attachment on a complaint. */
@@ -372,6 +378,8 @@ interface AppContextType {
   setReportTemplates: (reports: ReportTemplate[]) => void;
   kioskStatuses: KioskStatus[];
   setKioskStatuses: (statuses: KioskStatus[]) => void;
+  homepageSettings: HomepageSettings;
+  setHomepageSettings: (settings: HomepageSettings) => void;
   logs: LogEntry[];
   addLog: (entry: Omit<LogEntry, "id" | "timestamp">) => void;
   registeredLRNs: Set<string>;
@@ -383,6 +391,44 @@ interface AppContextType {
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
+
+/**
+ * Site-wide homepage content, editable by the Chief Commissioner under
+ * Homepage Setting (migration 115): the Election Guidelines file shown by
+ * the Resources dropdown and the footer's Contact Us block.  A deliberate
+ * singleton — the footer renders for logged-out visitors, so the row is
+ * world-readable and only the RPC writes it.
+ */
+export interface HomepageSettings {
+  /** Public URL of the uploaded guidelines file (homepage-files bucket). */
+  guidelinesUrl?: string;
+  /** Original file name, kept for the "replace/remove" UI. */
+  guidelinesName?: string;
+  contactEmail: string;
+  /** Address text — the footer turns it into a Google Maps link + embed. */
+  location: string;
+  /** 'HH:MM' strings, exactly what <input type="time"> submits. */
+  officeHoursStart: string;
+  officeHoursEnd: string;
+}
+
+/** The values the footer shipped with before settings became editable. */
+export const defaultHomepageSettings: HomepageSettings = {
+  contactEmail: "voting@cnnhs.edu.ph",
+  location: "Camarines Norte National High School, Daet, Camarines Norte, Philippines",
+  officeHoursStart: "08:00",
+  officeHoursEnd: "17:00",
+};
+
+/** '08:00' -> '8:00 AM' — how homepage_settings office hours render everywhere. */
+export function formatOfficeTime(value: string): string {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value || "");
+  if (!match) return value || "";
+  const hour = Number(match[1]);
+  const minute = match[2];
+  const suffix = hour >= 12 ? "PM" : "AM";
+  return `${hour % 12 === 0 ? 12 : hour % 12}:${minute} ${suffix}`;
+}
 
 export const emptyElectionPeriod: ElectionPeriod = {
   id: "",
@@ -429,6 +475,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [complaints, setComplaintsState] = useState<Complaint[]>([]);
   const [reportTemplates, setReportTemplates] = useState<ReportTemplate[]>([]);
   const [kioskStatuses, setKioskStatuses] = useState<KioskStatus[]>([]);
+  const [homepageSettings, setHomepageSettingsState] = useState<HomepageSettings>(defaultHomepageSettings);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
@@ -458,6 +505,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setComplaintsState(state.complaints);
     setReportTemplates(state.reportTemplates);
     setKioskStatuses(state.kioskStatuses);
+    setHomepageSettingsState(state.homepageSettings);
     setLogs(state.logs);
   };
 
@@ -716,6 +764,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setReportTemplates,
       kioskStatuses,
       setKioskStatuses,
+      homepageSettings,
+      setHomepageSettings: setHomepageSettingsState,
       logs,
       addLog,
       registeredLRNs,

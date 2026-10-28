@@ -1,4 +1,4 @@
-import { emptyElectionPeriod } from "../context/AppContext";
+import { emptyElectionPeriod, defaultHomepageSettings } from "../context/AppContext";
 import type {
   Candidate,
   Commissioner,
@@ -7,6 +7,7 @@ import type {
   ComplaintEvidence,
   CurrentUser,
   ElectionPeriod,
+  HomepageSettings,
   KioskStatus,
   LogEntry,
   OfficerStatus,
@@ -598,6 +599,7 @@ export async function fetchSupabaseState() {
     complaintsRes,
     reportsRes,
     logsRes,
+    homepageRes,
   ] = await Promise.all([
     safeSelect("students", "*", "registered_at"),
     safeSelect("student_masterlist", "*", "imported_at"),
@@ -611,6 +613,8 @@ export async function fetchSupabaseState() {
     safeSelect("complaints", "*, students(first_name,last_name)", "submitted_at"),
     safeSelect("report_templates", "*", "enclosure"),
     safeSelect("audit_logs", "*", "timestamp", 150),
+    // 115: singleton row, world-readable (the footer renders logged-out).
+    safeSelect("homepage_settings", "*", "updated_at", 1),
   ]);
 
   return {
@@ -625,6 +629,7 @@ export async function fetchSupabaseState() {
     complaints: complaintsRes.map(mapComplaint),
     reportTemplates: reportsRes.map(mapReportTemplate),
     kioskStatuses: [] as KioskStatus[],
+    homepageSettings: homepageRes[0] ? mapHomepageSettings(homepageRes[0]) : defaultHomepageSettings,
     logs: logsRes.map(mapLog),
   };
 }
@@ -700,6 +705,9 @@ export function buildElectionPeriodSyncPayload(period: ElectionPeriod) {
     // stages: writing a default here would let a "Save Schedule" click reset a
     // live campaign back to Stage 1.  Only the 058 RPCs may change it.
     //
+    // voting_ended_at is ABSENT for the same reason (113): the End Voting
+    // Stage stamp belongs to end_voting_stage_rpc, and a schedule save must
+    // never clear or fake it.
     // campaign_start_at / campaign_end_at are ABSENT for the same reason
     // (093): the Campaign window is a locked record with a guarded RPC of its
     // own.  Leaving the columns here would let a Stage 4 "Save Schedule"
@@ -999,6 +1007,10 @@ function mapElectionPeriod(row: any): ElectionPeriod {
     // 081 columns — the merged publish & proclaim flow's board decision text.
     proclamationDecisionReason: row.proclamation_decision_reason || undefined,
     proclamationComplaintNote: row.proclamation_complaint_note || undefined,
+    // 113 column — stamps the End Voting Stage action; null while the vote is
+    // merely closed.  Absent until the migration is applied, so null (not a
+    // fake value) is the default.
+    votingEndedAt: row.voting_ended_at || null,
   };
 }
 
@@ -1193,6 +1205,67 @@ export async function uploadAdminPicture(adminId: string, file: File | Blob): Pr
   if (error) throw new Error(`Storage upload failed: ${error.message}`);
   const { data: { publicUrl } } = supabase.storage.from("admin-pictures").getPublicUrl(fileName);
   return publicUrl;
+}
+
+/** 115: map the homepage_settings singleton row onto client state. */
+export function mapHomepageSettings(row: any): HomepageSettings {
+  return {
+    guidelinesUrl: row.guidelines_url || undefined,
+    guidelinesName: row.guidelines_name || undefined,
+    contactEmail: row.contact_email || defaultHomepageSettings.contactEmail,
+    location: row.location || defaultHomepageSettings.location,
+    // `time`-style values can arrive as "08:00:00" — keep the HH:MM the
+    // <input type="time"> controls expect.
+    officeHoursStart: (row.office_hours_start || "").slice(0, 5) || defaultHomepageSettings.officeHoursStart,
+    officeHoursEnd: (row.office_hours_end || "").slice(0, 5) || defaultHomepageSettings.officeHoursEnd,
+  };
+}
+
+/**
+ * 115: the Election Guidelines document lives in its own public bucket
+ * (10 MB, pdf/doc/docx — mirrors migration 115).  Unique name per upload so
+ * the insert-only storage policy always applies; the replaced file is left
+ * in the bucket (acceptable orphan for a once-per-election document).
+ */
+export async function uploadGuidelinesFile(file: File): Promise<string> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const ext = file.name.match(/\.(\w+)$/)?.[1]?.toLowerCase() || "pdf";
+  const safeBase = file.name.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9-_ ]/g, "").trim().replace(/\s+/g, "_").slice(0, 60) || "election_guidelines";
+  const fileName = `guidelines_${Date.now()}_${safeBase}.${ext}`;
+  const { error } = await supabase.storage.from("homepage-files").upload(fileName, file);
+  if (error) throw new Error(`Storage upload failed: ${error.message}`);
+  const { data: { publicUrl } } = supabase.storage.from("homepage-files").getPublicUrl(fileName);
+  return publicUrl;
+}
+
+/**
+ * 115: persist the homepage settings through the Chief-gated RPC.  The RPC
+ * re-validates every field server-side (email shape, HH:MM office hours,
+ * guidelines URL bucket) and returns the saved row, which becomes the new
+ * client state.
+ */
+export async function saveHomepageSettingsRpc(payload: {
+  guidelinesUrl: string | null;
+  guidelinesName: string | null;
+  contactEmail: string;
+  location: string;
+  officeHoursStart: string;
+  officeHoursEnd: string;
+}): Promise<HomepageSettings> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("save_homepage_settings_rpc", {
+    p_guidelines_url: payload.guidelinesUrl,
+    p_guidelines_name: payload.guidelinesName,
+    p_contact_email: payload.contactEmail,
+    p_location: payload.location,
+    p_office_hours_start: payload.officeHoursStart,
+    p_office_hours_end: payload.officeHoursEnd,
+  });
+  if (error) {
+    const msg = [error.message, error.details, error.hint].filter(Boolean).join(" | ");
+    throw new Error(msg);
+  }
+  return mapHomepageSettings(data);
 }
 
 /**
@@ -1693,6 +1766,35 @@ export async function fetchEafSignatoriesRpc(): Promise<EafSignatories> {
 }
 
 /**
+ * 116 — the public Contact Information page (/contact).  An UNGATED public
+ * RPC (the page renders for logged-out visitors, like homepage_settings):
+ * the ACTIVE Chief Commissioner, SSLG Adviser and Grievance Commissioner,
+ * each as name + email ONLY.  A null entry means the role is vacant or the
+ * officer has no email on file — the page renders a vacancy notice for it.
+ */
+export interface ContactInfoEntry {
+  name: string;
+  email: string;
+}
+
+export interface ContactInformation {
+  chief_commissioner: ContactInfoEntry | null;
+  sslg_adviser: ContactInfoEntry | null;
+  grievance_commissioner: ContactInfoEntry | null;
+}
+
+export async function fetchContactInformationRpc(): Promise<ContactInformation> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("contact_information_rpc");
+  if (error) throw new Error(error.message);
+  return (data || {
+    chief_commissioner: null,
+    sslg_adviser: null,
+    grievance_commissioner: null,
+  }) as ContactInformation;
+}
+
+/**
  * 068 — Chief-gated officer removal (Officer Management "Remove" action).
  * SECURITY DEFINER RPC: the DB refuses non-chief callers, the chief's own
  * row, and self-removal, purges the target's sessions, and nulls every
@@ -1927,7 +2029,8 @@ export interface PastElectionResults {
     proclaimedAt?: string;
     /** 081 — the board's public note on the complaint(s) of record. */
     complaintNote?: string;
-    /** 097 — the Board's one-time Complaint Reason (substantiated grievance). */
+    /** 097/114 — the Board's one-time Complaint Resolution and Justification
+     *  (owed whenever any Findings decision is on record). */
     decisionReason?: string;
     /** 099 — the election's sanitized public complaint record. */
     complaints?: ElectionComplaintRecord[];
@@ -2059,8 +2162,9 @@ export interface ProclamationTieAnnotation {
 export interface ProclamationAnnotations {
   ties: ProclamationTieAnnotation[];
   complaintNote?: string;
-  /** 097 — the Board's one-time Complaint Reason (owed when a substantiated
-   *  grievance is on record).  Public on the results pages with the note. */
+  /** 097/114 — the Board's one-time Complaint Resolution and Justification
+   *  (owed whenever ANY Findings decision is on record).  Public on the
+   *  results pages with the note. */
   decisionReason?: string;
 }
 
@@ -2346,6 +2450,22 @@ export async function endVotingStageRpc(pElectionId: string, password: string): 
   if (error) throw new Error(error.message);
 }
 
+/**
+ * Void the election (113).  Deletes every recorded vote of the period and
+ * returns the SAME period to the Voting Stage, paused — Stage 1-3 records,
+ * candidates, complaints and the schedule are untouched.  Requires the
+ * caller's own Electoral Board password — verified server-side by the RPC.
+ * Only possible before the results are published / winners proclaimed.
+ */
+export async function voidElectionRpc(pElectionId: string, password: string): Promise<void> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.rpc("void_election_rpc", {
+    p_election_id: pElectionId,
+    p_password: password,
+  });
+  if (error) throw new Error(error.message);
+}
+
 export async function publishResultsRpc(pElectionId: string): Promise<void> {
   if (!supabase) throw new Error("Supabase is not configured.");
   const { error } = await supabase.rpc("publish_results_rpc", {
@@ -2424,8 +2544,9 @@ export async function proclaimWinnersRpc(
   const { data, error } = await supabase.rpc("proclaim_winners_rpc", {
     p_election_id: pElectionId,
     p_resolutions: payload,
-    // 097 — the one-time Complaint Reason (required when a substantiated
-    // grievance is on record; blank otherwise).
+    // 097/114 — the one-time Complaint Resolution and Justification
+    // (required whenever ANY Findings decision — Substantiated,
+    // Unsubstantiated, or Dismissed — is on record; blank otherwise).
     p_decision_reason: decision?.decisionReason || null,
     p_complaint_note: decision?.complaintNote || null,
   });

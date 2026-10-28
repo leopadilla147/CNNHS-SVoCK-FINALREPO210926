@@ -1,7 +1,15 @@
 import { Link } from "react-router";
-import { Mail, Phone, Calendar, Facebook, Github, Twitter } from "lucide-react";
+import { Mail, MapPin, Clock, Facebook } from "lucide-react";
+import { useApp, defaultHomepageSettings, formatOfficeTime } from "../../context/AppContext";
 
 export function Footer() {
+  // 115: the Contact Us block is Chief-editable content (Homepage Setting).
+  // The context falls back to the shipped defaults while the row loads (or
+  // when Supabase is not configured).  The destructure default also covers
+  // flat test stubs that omit the key entirely.
+  const { currentUser, homepageSettings = defaultHomepageSettings } = useApp();
+  const mapsLink = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(homepageSettings.location)}`;
+
   return (
     <footer className="bg-gray-900 text-white">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -17,12 +25,6 @@ export function Footer() {
               <a href="#" className="text-gray-400 hover:text-white transition-colors" aria-label="Facebook">
                 <Facebook size={20} />
               </a>
-              <a href="#" className="text-gray-400 hover:text-white transition-colors" aria-label="Github">
-                <Github size={20} />
-              </a>
-              <a href="#" className="text-gray-400 hover:text-white transition-colors" aria-label="Twitter">
-                <Twitter size={20} />
-              </a>
             </div>
           </div>
 
@@ -31,22 +33,22 @@ export function Footer() {
             <h3 className="text-white font-semibold mb-2">Resources</h3>
             <ul className="space-y-2 text-gray-400">
               <li>
-                <Link to="/" className="block hover:text-white transition-colors">
+                <Link to="/guidelines" className="block hover:text-white transition-colors">
                   Election Guidelines
                 </Link>
               </li>
               <li>
                 <Link to="/" className="block hover:text-white transition-colors">
-                  Forms & Documents
+                  Election Calendar
                 </Link>
               </li>
               <li>
-                <Link to="/" className="block hover:text-white transition-colors">
+                <Link to="/faq" className="block hover:text-white transition-colors">
                   FAQ
                 </Link>
               </li>
               <li>
-                <Link to="/" className="block hover:text-white transition-colors">
+                <Link to="/contact" className="block hover:text-white transition-colors">
                   Contact Information
                 </Link>
               </li>
@@ -58,49 +60,57 @@ export function Footer() {
             <h3 className="text-white font-semibold mb-2">Quick Links</h3>
             <ul className="space-y-2 text-gray-400">
               <li>
-                <Link to="/register" className="block hover:text-white transition-colors">
-                  Register to Vote
+                <Link to="/about" className="block hover:text-white transition-colors">
+                  About CNNHS
                 </Link>
               </li>
+              {/* Student Registration — guests only, matching the header tab */}
+              {!currentUser && (
+                <li>
+                  <Link to="/register" className="block hover:text-white transition-colors">
+                    Student Registration
+                  </Link>
+                </li>
+              )}
               <li>
-                <Link to="/student/candidates" className="block hover:text-white transition-colors">
-                  View Candidates
-                </Link>
-              </li>
-              <li>
-                <Link to="/" className="block hover:text-white transition-colors">
-                  Election Calendar
-                </Link>
-              </li>
-              <li>
-                <Link to="/" className="block hover:text-white transition-colors">
-                  Voting Guide
+                <Link to="/current-election" className="block hover:text-white transition-colors">
+                  Current Election
                 </Link>
               </li>
             </ul>
           </div>
 
-          {/* Contact Section */}
+          {/* Contact Section — content editable under Homepage Setting (115) */}
           <div className="space-y-4">
             <h3 className="text-white font-semibold mb-2">Contact Us</h3>
             <p className="flex items-center space-x-2 text-gray-400">
               <Mail size={16} />
-              <span>voting@cnnhs.edu.ph</span>
+              <span>{homepageSettings.contactEmail}</span>
             </p>
-            <p className="flex items-center space-x-2 text-gray-400">
-              <Phone size={16} />
-              <span>(054) 400-0000</span>
+            <p className="flex items-start space-x-2 text-gray-400">
+              <MapPin size={16} className="mt-0.5 flex-shrink-0" />
+              <a
+                href={mapsLink}
+                target="_blank"
+                rel="noreferrer"
+                title="View on Google Maps"
+                className="hover:text-white transition-colors"
+              >
+                {homepageSettings.location}
+              </a>
             </p>
             <p className="flex items-center space-x-2 text-gray-400 mt-2">
-              <Calendar size={16} />
-              <span>Office Hours: 8:00 AM - 5:00 PM</span>
+              <Clock size={16} />
+              <span>
+                Office Hours: {formatOfficeTime(homepageSettings.officeHoursStart)} - {formatOfficeTime(homepageSettings.officeHoursEnd)}
+              </span>
             </p>
           </div>
         </div>
 
         <div className="mt-12 pt-8 border-t border-gray-800 text-center text-gray-500">
           <p className="text-sm">
-            © 2026 Camarines Norte National High School — Online Voting and Election Management System.
+            © 2026 Camarines Norte National High School — Election Management System.
             All rights reserved.
           </p>
           <p className="text-xs mt-2">

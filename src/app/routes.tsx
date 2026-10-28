@@ -3,6 +3,10 @@ import { PublicLayout } from "./components/layout/PublicLayout";
 import { DashboardLayout } from "./components/layout/DashboardLayout";
 import HomePage from "./pages/HomePage";
 import CurrentElectionPage from "./pages/CurrentElectionPage";
+import GuidelinesPage from "./pages/GuidelinesPage";
+import FAQPage from "./pages/FAQPage";
+import ContactInformationPage from "./pages/ContactInformationPage";
+import AboutCNNHSPage from "./pages/AboutCNNHSPage";
 import PastElectionsPage from "./pages/PastElectionsPage";
 import PastElectionDetailPage from "./pages/PastElectionDetailPage";
 import OfficialResultsPage from "./pages/OfficialResultsPage";
@@ -27,6 +31,7 @@ import AdminComplaints from "./pages/admin/AdminComplaints";
 import AdminComplaintsArchive from "./pages/admin/AdminComplaintsArchive";
 import AdminElectionSetup from "./pages/admin/AdminElectionSetup";
 import ChiefAppointments from "./pages/admin/ChiefAppointments";
+import AdminHomepageSettings from "./pages/admin/AdminHomepageSettings";
 
 function StudentLayout() { return <DashboardLayout requiredRole="student" />; }
 function AdminLayout() { return <DashboardLayout requiredRole="admin" />; }
@@ -38,6 +43,10 @@ export const router = createBrowserRouter([
     children: [
       { index: true, Component: HomePage },
       { path: "current-election", Component: CurrentElectionPage },
+      { path: "guidelines", Component: GuidelinesPage },
+      { path: "faq", Component: FAQPage },
+      { path: "contact", Component: ContactInformationPage },
+      { path: "about", Component: AboutCNNHSPage },
       { path: "official-results", Component: OfficialResultsPage },
       { path: "past-elections", Component: PastElectionsPage },
       { path: "past-elections/:electionId", Component: PastElectionDetailPage },
@@ -76,6 +85,8 @@ export const router = createBrowserRouter([
       // D-01: the Chief's appointment surface replaces the removed
       // /admin/commissioners route (the old commissioners page is deleted).
       { path: "officers", Component: ChiefAppointments },
+      // 115: the Chief's site-content surface (guidelines file + footer contact).
+      { path: "homepage-settings", Component: AdminHomepageSettings },
       { path: "live-results", Component: AdminLiveResults },
       { path: "help-desk", Component: AdminHelpDesk },
       { path: "archive", Component: AdminArchive },

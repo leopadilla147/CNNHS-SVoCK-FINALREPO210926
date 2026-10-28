@@ -23,6 +23,22 @@ const FILTER_VALUES = ["all", "pending", "approved"] as const;
 const readStatusFilter = (param: string | null) =>
   param && FILTER_VALUES.includes(param as (typeof FILTER_VALUES)[number]) ? param : "all";
 
+/**
+ * 112 — the rejection checklist as ONE merged list.  The low/high tier still
+ * exists in the data model (it decides whether the student may revise or is
+ * disqualified), but the modal no longer groups by it: the tier is derived —
+ * any selected high-tier reason makes the rejection "high", otherwise "low".
+ */
+const REJECTION_REASONS: { reason: string; tier: "low" | "high" }[] = [
+  { reason: "Unclear/Unacceptable Introduction Profile", tier: "low" },
+  { reason: "Incomplete Documents", tier: "low" },
+  { reason: "Form/Photo Errors", tier: "low" },
+  { reason: "Failing Grade", tier: "high" },
+  { reason: "Violation Record", tier: "high" },
+  { reason: "Falsified Documents", tier: "high" },
+  { reason: "Not a Bonafide Student", tier: "high" },
+];
+
 export default function AdminCandidates() {
   const { currentUser, candidates, setCandidates, electionPeriod, addLog, insertNotification, students } = useApp();
   const isChief = currentUser?.commissionerRole === "chief";
@@ -44,9 +60,20 @@ export default function AdminCandidates() {
   const [officialListPosted, setOfficialListPosted] = useState(false);
   const [rejectDialog, setRejectDialog] = useState<Candidate | null>(null);
   const [rejectReasons, setRejectReasons] = useState<{ reason: string; tier: "low" | "high" }[]>([]);
+  const [rejectOther, setRejectOther] = useState(false);
+  const [rejectOtherText, setRejectOtherText] = useState("");
   const [rejectDetails, setRejectDetails] = useState("");
-  const rejectTier = rejectReasons.some((r) => r.tier === "high") ? "high" : rejectReasons.length > 0 ? "low" : null;
-  const rejectReason = rejectReasons.map((r) => r.reason).join("; ");
+  // The tier is derived, never asked for: any high-tier reason disqualifies.
+  // "Others" counts as low-tier (it only disqualifies alongside a high reason).
+  const rejectTier = rejectReasons.some((r) => r.tier === "high")
+    ? "high"
+    : rejectReasons.length > 0 || (rejectOther && rejectOtherText.trim())
+    ? "low"
+    : null;
+  const rejectReason = [
+    ...rejectReasons.map((r) => r.reason),
+    ...(rejectOther && rejectOtherText.trim() ? [rejectOtherText.trim()] : []),
+  ].join("; ");
   const [actionError, setActionError] = useState<string | null>(null);
   const approveConfirm = useConfirm({ title: "Approve Candidate?", description: "This will approve the candidate's application for the election.", confirmText: "Approve" });
   const postListConfirm = useConfirm({ title: officialListPosted ? "Unpost Official List?" : "Post Official List?", description: officialListPosted ? "The official list will no longer be visible." : "The official list of candidates will be made visible.", confirmText: officialListPosted ? "Unpost" : "Post" });
@@ -119,11 +146,15 @@ export default function AdminCandidates() {
   const handleReject = async (candidate: Candidate) => {
     setRejectDialog(candidate);
     setRejectReasons([]);
+    setRejectOther(false);
+    setRejectOtherText("");
     setRejectDetails("");
   };
 
   const handleRejectWithReason = async () => {
-    if (!rejectDialog || rejectReasons.length === 0 || !rejectTier) return;
+    // 112: at least one reason (preset or a written "Others") AND the
+    // Additional Remarks are both required before the RPC fires.
+    if (!rejectDialog || !rejectReason || !rejectTier || !rejectDetails.trim()) return;
     setActionError(null);
     setProcessing(rejectDialog.id);
     try {
@@ -575,36 +606,15 @@ export default function AdminCandidates() {
                                     )}
                                   </td>
                                   <td className="py-3 px-4">
-                                    <div className="flex items-center gap-1.5">
-                                      <button
-                                        onClick={() => setSelected(candidate)}
-                                        className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors text-gray-500"
-                                        title="View Details"
-                                      >
-                                        <Eye size={14} />
-                                      </button>
-                                      {candidate.status === "pending" && canReview && (
-                                        <>
-                                          <button
-                                            onClick={() => handleApprove(candidate)}
-                                            disabled={processing === candidate.id}
-                                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-green-600 text-white text-xs hover:bg-green-700 transition-colors disabled:opacity-60"
-                                          >
-                                            {processing === candidate.id
-                                              ? <div className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />
-                                              : <CheckCircle size={12} />}
-                                            Approve
-                                          </button>
-                                          <button
-                                            onClick={() => handleReject(candidate)}
-                                            disabled={processing === candidate.id}
-                                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-red-600 text-white text-xs hover:bg-red-700 transition-colors disabled:opacity-60"
-                                          >
-                                            <XCircle size={12} /> Reject
-                                          </button>
-                                        </>
-                                      )}
-                                    </div>
+                                    {/* 112: one action only — the decision
+                                        (approve/reject) lives inside the
+                                        details modal. */}
+                                    <button
+                                      onClick={() => setSelected(candidate)}
+                                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 text-xs hover:bg-gray-50 transition-colors"
+                                    >
+                                      <Eye size={13} /> View Application Details
+                                    </button>
                                   </td>
                                 </tr>
                               ))}
@@ -806,19 +816,19 @@ export default function AdminCandidates() {
               </p>
             </div>
             <div className="p-5 space-y-4 text-sm">
+              {/* 112: one merged checklist — severity is derived, not asked. */}
               <div>
                 <h4 className="font-medium text-gray-800 mb-2 text-xs uppercase tracking-wide">
-                  Low Severity
+                  Reason for Rejection <span className="text-red-500">*</span>
                 </h4>
-                <p className="text-xs text-gray-400 mb-2">Student can revise and resubmit after fixing the issue.</p>
                 <div className="space-y-1.5">
-                  {["Unclear/Unacceptable Introduction Profile", "Incomplete Documents", "Form/Photo Errors"].map((reason) => {
-                    const checked = rejectReasons.some((r) => r.reason === reason && r.tier === "low");
+                  {REJECTION_REASONS.map(({ reason, tier }) => {
+                    const checked = rejectReasons.some((r) => r.reason === reason);
                     return (
                       <label
                         key={reason}
                         className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
-                          checked ? "border-amber-500 bg-amber-50" : "border-gray-200 hover:border-gray-300"
+                          checked ? "border-[#5C0102] bg-red-50" : "border-gray-200 hover:border-gray-300"
                         }`}
                       >
                         <input
@@ -827,59 +837,50 @@ export default function AdminCandidates() {
                           onChange={() => {
                             setRejectReasons((prev) =>
                               checked
-                                ? prev.filter((r) => !(r.reason === reason && r.tier === "low"))
-                                : [...prev, { reason, tier: "low" }]
+                                ? prev.filter((r) => r.reason !== reason)
+                                : [...prev, { reason, tier }]
                             );
                           }}
-                          className="accent-amber-600"
+                          className="accent-[#5C0102]"
                         />
                         <span className="text-gray-700">{reason}</span>
                       </label>
                     );
                   })}
-                </div>
-              </div>
-              <div className="border-t border-gray-100 pt-4">
-                <h4 className="font-medium text-gray-800 mb-2 text-xs uppercase tracking-wide">
-                  High Severity
-                </h4>
-                <p className="text-xs text-gray-400 mb-2">Permanent disqualification for this election period.</p>
-                <div className="space-y-1.5">
-                  {["Failing Grade", "Violation Record", "Falsified Documents", "Not a Bonafide Student"].map((reason) => {
-                    const checked = rejectReasons.some((r) => r.reason === reason && r.tier === "high");
-                    return (
-                      <label
-                        key={reason}
-                        className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
-                          checked ? "border-red-500 bg-red-50" : "border-gray-200 hover:border-gray-300"
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => {
-                            setRejectReasons((prev) =>
-                              checked
-                                ? prev.filter((r) => !(r.reason === reason && r.tier === "high"))
-                                : [...prev, { reason, tier: "high" }]
-                            );
-                          }}
-                          className="accent-red-600"
-                        />
-                        <span className="text-gray-700">{reason}</span>
-                      </label>
-                    );
-                  })}
+                  <label
+                    className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
+                      rejectOther ? "border-[#5C0102] bg-red-50" : "border-gray-200 hover:border-gray-300"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={rejectOther}
+                      onChange={() => setRejectOther((prev) => !prev)}
+                      className="accent-[#5C0102]"
+                    />
+                    <span className="text-gray-700">Others</span>
+                  </label>
+                  {rejectOther && (
+                    <input
+                      type="text"
+                      value={rejectOtherText}
+                      onChange={(e) => setRejectOtherText(e.target.value)}
+                      placeholder="Specify the reason..."
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50"
+                    />
+                  )}
                 </div>
               </div>
               <div>
-                <label className="block text-sm text-gray-700 mb-1.5">Additional Details (optional)</label>
+                <label className="block text-sm text-gray-700 mb-1.5">
+                  Additional Remarks <span className="text-red-500">*</span>
+                </label>
                 <textarea
                   value={rejectDetails}
                   onChange={(e) => setRejectDetails(e.target.value)}
                   rows={3}
                   className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50"
-                  placeholder="Provide any additional context for the rejection..."
+                  placeholder="Explain the decision for the student..."
                 />
               </div>
               <div className="flex gap-2 pt-2">
@@ -891,7 +892,7 @@ export default function AdminCandidates() {
                 </button>
                 <button
                   onClick={handleRejectWithReason}
-                  disabled={!rejectReason || !rejectTier || processing === rejectDialog.id}
+                  disabled={!rejectReason || !rejectDetails.trim() || processing === rejectDialog.id}
                   className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-700 transition-colors disabled:opacity-60"
                 >
                   {processing === rejectDialog.id ? (

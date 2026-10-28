@@ -19,6 +19,7 @@ import {
   endVotingStageRpc,
   publishResultsRpc,
   proclaimWinnersRpc,
+  getProclaimedWinners,
   getProclamationTallyRpc,
   startCandidacyPeriodRpc,
   saveMeetingScheduleRpc,
@@ -32,6 +33,8 @@ import {
 import type { ProclaimedWinner, ProclamationTallyRow, TieResolution } from "../../lib/supabaseData";
 import { isSupabaseConfigured } from "../../lib/supabase";
 import { FULL_POSITION_ORDER } from "../../lib/partyScope";
+import { resolveStage } from "../../lib/electionStage";
+import type { Stage } from "../../lib/electionStage";
 import { complaintsForElection, substantiatedComplaints, complaintDecisionLabel } from "../../lib/complaints";
 import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
 import { ProclamationDialog, groupTally } from "../../components/ProclamationDialog";
@@ -39,8 +42,6 @@ import type { ProclamationDecision, CandidateProfile } from "../../components/Pr
 import { FindingsDisclosure } from "../../components/FindingsDisclosure";
 import { ProclamationSummary } from "../../components/ProclamationSummary";
 import type { SubstantiatedGrievance } from "../../components/ProclamationSummary";
-
-type Stage = "application" | "campaign" | "fingerprint_registration" | "voting" | "results";
 
 interface StageConfig {
   id: Stage;
@@ -69,28 +70,12 @@ const STAGE_LABELS: Record<ElectionStage, string> = {
 /**
  * The stage the tab is on.
  *
- * 058 introduced `lifecycle_stage` as the authoritative value, but the
- * boolean fallback is kept so a database that has not been migrated yet � or
- * a row written before the column existed � still lands somewhere sensible
- * instead of pretending to be in Stage 1.
+ * resolveStage() lives in lib/electionStage.ts now — the student Apply page
+ * needs the same authoritative reading, and it must not import an admin page
+ * to get it.  Re-exported here so existing imports keep working.
  */
-export function resolveStage(electionPeriod: ElectionPeriod): Stage {
-  const stage = electionPeriod.lifecycleStage;
-  if (
-    stage === "application" ||
-    stage === "campaign" ||
-    stage === "fingerprint_registration" ||
-    stage === "voting" ||
-    stage === "results"
-  ) {
-    return stage;
-  }
-  if (electionPeriod.proclaimed || electionPeriod.resultsPublished) return "results";
-  if (electionPeriod.isActive) return "voting";
-  if (electionPeriod.fingerprintRegistrationStartAt) return "fingerprint_registration";
-  if (electionPeriod.rulesDiscussionAt) return "campaign";
-  return "application";
-}
+export { resolveStage } from "../../lib/electionStage";
+export type { Stage } from "../../lib/electionStage";
 
 /**
  * The stage the tab opens on.
@@ -533,6 +518,22 @@ export default function AdminElectionSetup() {
       .catch(() => { if (!cancelled) setActiveComplaints(null); });
     return () => { cancelled = true; };
   }, [electionPeriod.id, electionId]);
+
+  // The proclaim RPC returns the winners only once, at the moment of
+  // proclaiming; they are then held in component state.  The rows persist in
+  // the `proclamations` ledger, so rehydrate them when the period is already
+  // proclaimed (fresh mount after a reload, or the effect re-firing after
+  // commitProclaim's refreshPeriod flips the flag) — photos included.
+  useEffect(() => {
+    if (!isSupabaseConfigured || !electionPeriod.proclaimed) return;
+    const id = electionPeriod.id || electionId;
+    if (!id) return;
+    let cancelled = false;
+    getProclaimedWinners(id)
+      .then((winners) => { if (!cancelled) setProclaimedWinners(winners); })
+      .catch(() => { /* the fallback text covers the failure */ });
+    return () => { cancelled = true; };
+  }, [electionPeriod.id, electionId, electionPeriod.proclaimed]);
 
   useEffect(() => {
     if (electionPeriod.rulesDiscussionAt) {
@@ -2409,15 +2410,32 @@ export default function AdminElectionSetup() {
               </h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                 {proclaimedWinners.map((w) => (
-                  <div key={w.position} className="bg-white p-3 rounded-lg border border-amber-100 text-sm">
-                    <div className="text-xs text-gray-500">{w.position}</div>
-                    <div className="font-medium text-gray-900">{w.winnerName}</div>
-                    <div className="text-xs text-gray-400">{w.votes} vote{w.votes !== 1 ? "s" : ""}</div>
-                    {w.resolutionMethod === "manual" && (
-                      <div className="mt-1 text-[10px] font-bold uppercase tracking-wider text-amber-700 flex items-center gap-1">
-                        <Gavel size={11} /> Tie — board choice
+                  <div key={w.position} className="bg-white p-3 rounded-lg border border-amber-100 text-sm flex items-center gap-3">
+                    {w.picture ? (
+                      <img
+                        src={w.picture}
+                        alt={w.winnerName}
+                        className="w-11 h-11 rounded-full object-cover border-2 flex-shrink-0"
+                        style={{ borderColor: "#5C0102" }}
+                      />
+                    ) : (
+                      <div
+                        className="w-11 h-11 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0"
+                        style={{ border: "2px solid #5C0102" }}
+                      >
+                        <Users size={18} className="text-gray-400" />
                       </div>
                     )}
+                    <div className="min-w-0">
+                      <div className="text-xs text-gray-500 truncate">{w.position}</div>
+                      <div className="font-medium text-gray-900 truncate">{w.winnerName}</div>
+                      <div className="text-xs text-gray-400">{w.votes} vote{w.votes !== 1 ? "s" : ""}</div>
+                      {w.resolutionMethod === "manual" && (
+                        <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-700 flex items-center gap-1">
+                          <Gavel size={11} /> Tie — board choice
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>

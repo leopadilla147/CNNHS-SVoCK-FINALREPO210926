@@ -102,6 +102,11 @@ export interface Candidate {
   mobileNumber: string;
   landline?: string;
   homeAddress: string;
+  /** 111 — the PSGC codes behind the address dropdowns, so editing restores
+   *  the selection instead of forcing a re-pick. */
+  addressProvinceCode?: string;
+  addressCityCode?: string;
+  addressBarangayCode?: string;
   parentGuardianName?: string;
   parentGuardianContact?: string;
   picture?: string;
@@ -121,6 +126,9 @@ export interface Candidate {
   partyDecidedAt?: string;
   leadershipProfile?: {
     qualities: string;
+    /** Part IV Leadership Capsule guide question — its own answer, not the
+     *  Introductory Profile's "inspiring student leader" essay. */
+    capsuleQualities?: string;
     skills: string[];
     skillsExplanation: string;
     threeYearVision: string;

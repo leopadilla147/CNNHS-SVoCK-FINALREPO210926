@@ -7,6 +7,12 @@ interface EAFPreviewDocumentProps {
   student: Student;
   partyName?: string;
   onPrint?: () => void;
+  /** 110 — the ACTIVE Screening and Validation Commissioner; falls back to
+   *  the form's "FULL NAME OF THE AUTHORITY" placeholder when vacant. */
+  screeningCommissionerName?: string;
+  /** 110 — the ACTIVE Youth COMEA Chief Commissioner; falls back to the
+   *  form's "FULL NAME OF THE SCHOOL HEAD" placeholder when vacant. */
+  chiefCommissionerName?: string;
 }
 
 const LineValue = ({ children, className = "" }: { children?: ReactNode; className?: string }) => (
@@ -30,7 +36,7 @@ const CheckCell = ({ label }: { label: string }) => (
   </div>
 );
 
-export function EAFPreviewDocument({ candidate, student, partyName, onPrint }: EAFPreviewDocumentProps) {
+export function EAFPreviewDocument({ candidate, student, partyName, onPrint, screeningCommissionerName, chiefCommissionerName }: EAFPreviewDocumentProps) {
   const fullName = `${candidate.surname}, ${candidate.givenName} ${candidate.middleName ? candidate.middleName + " " : ""}${candidate.extensionName || ""}`.trim();
   const positionAndParty = `${candidate.position} - ${partyName || candidate.partyAffiliation || "Independent"}`;
 
@@ -40,17 +46,20 @@ export function EAFPreviewDocument({ candidate, student, partyName, onPrint }: E
         data-eaf-document="true"
         className="eaf-preview mx-auto w-[816px] min-h-[1056px] bg-white p-8 text-[10px] leading-tight print:w-[8.5in] print:min-h-[11in] print:p-[0.32in]"
       >
-        <header className="grid grid-cols-[58px_1fr_58px] items-center gap-3 mb-2">
-          <img src={depedSealUrl} alt="Department of Education seal" className="w-[58px] h-[58px] object-contain" />
-          <div className="text-center leading-tight">
-            <div>Republic of the Philippines</div>
-            <div>Department of Education</div>
-            <div>Region V- Bicol</div>
-            <div className="font-bold">SCHOOLS DIVISION OFFICE OF CAMARINES NORTE</div>
-            <div className="font-bold">CAMARINES NORTE NATIONAL HIGH SCHOOL</div>
-            <div>Camambugan, Daet, Camarines Norte</div>
+        {/* 111: the seal leads the letterhead — centred above the address
+            block (it previously sat in a left gutter). */}
+        <header className="mb-2">
+          <div className="flex flex-col items-center">
+            <img src={depedSealUrl} alt="Department of Education seal" className="w-[58px] h-[58px] object-contain mb-1.5" />
+            <div className="text-center leading-tight">
+              <div>Republic of the Philippines</div>
+              <div>Department of Education</div>
+              <div>Region V- Bicol</div>
+              <div className="font-bold">SCHOOLS DIVISION OFFICE OF CAMARINES NORTE</div>
+              <div className="font-bold">CAMARINES NORTE NATIONAL HIGH SCHOOL</div>
+              <div>Camambugan, Daet, Camarines Norte</div>
+            </div>
           </div>
-          <div />
         </header>
 
         <div className="mb-2 text-[10px]">
@@ -165,12 +174,20 @@ export function EAFPreviewDocument({ candidate, student, partyName, onPrint }: E
         <div className="grid grid-cols-2 gap-14 mt-4">
           <div>
             <div className="mb-5">Verified by:</div>
-            <SignatureBlock label="FULL NAME OF THE AUTHORITY" sublabel="Screening and Validation Commissioner" />
+            {/* 110: the serving officer's name sits above their role line;
+                the blank rule above stays for the wet signature. */}
+            <SignatureBlock
+              label={screeningCommissionerName || "FULL NAME OF THE AUTHORITY"}
+              sublabel="Screening and Validation Commissioner"
+            />
             <div className="mt-2">Date: <LineValue className="w-32" /></div>
           </div>
           <div>
             <div className="mb-5">Approved by:</div>
-            <SignatureBlock label="FULL NAME OF THE SCHOOL HEAD" sublabel="Youth COMEA Chief Commissioner" />
+            <SignatureBlock
+              label={chiefCommissionerName || "FULL NAME OF THE SCHOOL HEAD"}
+              sublabel="Youth COMEA Chief Commissioner"
+            />
             <div className="mt-2">Date: <LineValue className="w-32" /></div>
           </div>
         </div>
@@ -186,17 +203,21 @@ export function EAFPreviewDocument({ candidate, student, partyName, onPrint }: E
         className="eaf-preview mx-auto w-[816px] min-h-[1056px] bg-white p-8 text-[10px] leading-tight print:w-[8.5in] print:min-h-[11in] print:p-[0.32in] print:page-break-before:always"
         style={{ fontFamily: "Times New Roman, serif" }}
       >
-        <header className="grid grid-cols-[58px_1fr_58px] items-center gap-3 mb-2">
-          <img src={depedSealUrl} alt="Department of Education seal" className="w-[58px] h-[58px] object-contain" />
-          <div className="text-center leading-tight">
-            <div>Republic of the Philippines</div>
-            <div>Department of Education</div>
-            <div>Region V- Bicol</div>
-            <div className="font-bold">SCHOOLS DIVISION OFFICE OF CAMARINES NORTE</div>
-            <div className="font-bold">CAMARINES NORTE NATIONAL HIGH SCHOOL</div>
-            <div>Camambugan, Daet, Camarines Norte</div>
+        {/* Same centred letterhead as page 1; "Back Page" stays pinned to the
+            top-right corner. */}
+        <header className="relative mb-2">
+          <div className="absolute right-0 top-0 text-[8px]">Back Page</div>
+          <div className="flex flex-col items-center">
+            <img src={depedSealUrl} alt="Department of Education seal" className="w-[58px] h-[58px] object-contain mb-1.5" />
+            <div className="text-center leading-tight">
+              <div>Republic of the Philippines</div>
+              <div>Department of Education</div>
+              <div>Region V- Bicol</div>
+              <div className="font-bold">SCHOOLS DIVISION OFFICE OF CAMARINES NORTE</div>
+              <div className="font-bold">CAMARINES NORTE NATIONAL HIGH SCHOOL</div>
+              <div>Camambugan, Daet, Camarines Norte</div>
+            </div>
           </div>
-          <div className="text-[8px] text-right">Back Page</div>
         </header>
 
         <h2 className="text-center text-[13px] font-bold uppercase tracking-wide mb-4">
@@ -205,8 +226,10 @@ export function EAFPreviewDocument({ candidate, student, partyName, onPrint }: E
 
         <section className="mb-4">
           <h3 className="font-bold mb-2">Guide Question: What are your qualities that you believe can make a great leader?</h3>
+          {/* Part IV's own answer (capsuleQualities) — never the Introductory
+              Profile's "inspiring student leader" essay (qualities). */}
           <p className="text-justify indent-7 text-[10px] leading-relaxed">
-            {candidate.leadershipProfile?.qualities || "No answer provided."}
+            {candidate.leadershipProfile?.capsuleQualities || "No answer provided."}
           </p>
         </section>
 

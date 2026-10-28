@@ -160,6 +160,13 @@ export default function AdminLiveResults() {
     [liveResults],
   );
 
+  // Header abstain total: the per-position abstain counts (079) summed
+  // across every position — refreshed by the same live tally cycle.
+  const totalAbstains = useMemo(
+    () => [...abstainByPosition.values()].reduce((sum, n) => sum + (Number(n) || 0), 0),
+    [abstainByPosition],
+  );
+
   // 099 — the election's complaint record, straight from the admin context
   // (the complaints table is admin-readable), shaped for the shared record
   // section: substantiated grievances with their findings, other decisions,
@@ -232,6 +239,18 @@ export default function AdminLiveResults() {
              <div className="leading-tight">
                <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Total Votes</div>
                <div className="text-lg font-black text-gray-900">{totalVotesAll.toLocaleString()}</div>
+             </div>
+           </div>
+
+           <div className="hidden sm:block h-6 w-px bg-gray-300"></div>
+
+           <div className="flex items-center gap-2.5 min-w-[130px]">
+             <div className="p-2 rounded-xl bg-amber-500/5 border border-amber-500/10 text-amber-600">
+               <MinusCircle size={16} />
+             </div>
+             <div className="leading-tight">
+               <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Total Abstains</div>
+               <div className="text-lg font-black text-gray-900">{totalAbstains.toLocaleString()}</div>
              </div>
            </div>
 

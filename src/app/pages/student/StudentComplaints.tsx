@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { motion } from "motion/react";
-import { AlertCircle, Send, Clock, CheckCircle, XCircle, CalendarDays, MessageSquare, Lock, Paperclip, Upload, X } from "lucide-react";
+import { AlertCircle, Send, Clock, CheckCircle, XCircle, CalendarDays, MessageSquare, Lock, Paperclip, Upload, X, Download } from "lucide-react";
 import { useApp } from "../../context/AppContext";
 import type { Complaint, ComplaintEvidence } from "../../context/AppContext";
 import { insertComplaint, uploadComplaintEvidence } from "../../lib/supabaseData";
 import { EvidenceFileThumb, EvidenceAttachment } from "../../components/EvidencePreview";
+import { saveGrievanceFormDocx } from "../../lib/docxGrievanceForm";
 import { statusMeta, sortFiledFirst, complaintWindowOpen, complaintsForElection, COMPLAINT_SUBJECTS, COMPLAINT_SUBJECT_OTHERS, resolveComplaintSubject, COMPLAINT_AGAINST_OPTIONS, COMPLAINT_AGAINST_OTHERS, resolveComplaintAgainst, COMPLAINT_CERTIFICATION, validateComplaintForm, formatSubmittedAt, validateEvidenceFiles, EVIDENCE_ACCEPT, EVIDENCE_MAX_FILES, EVIDENCE_TYPES_LABEL } from "../../lib/complaints";
 import type { ComplaintFormErrors } from "../../lib/complaints";
 
@@ -19,7 +20,7 @@ const TONE_CLASSES: Record<string, string> = {
 };
 
 export default function StudentComplaints() {
-  const { complaints, setComplaints, currentUser, addLog, electionPeriod } = useApp();
+  const { complaints, setComplaints, currentUser, addLog, electionPeriod, students } = useApp();
   const [complaintAgainst, setComplaintAgainst] = useState("");
   const [otherAgainst, setOtherAgainst] = useState("");
   const [subject, setSubject] = useState("");
@@ -34,6 +35,8 @@ export default function StudentComplaints() {
   // 096: optional supporting-evidence files picked for the next complaint.
   const [evidenceFiles, setEvidenceFiles] = useState<File[]>([]);
   const [evidenceError, setEvidenceError] = useState("");
+  // The complaint whose grievance form is currently being generated.
+  const [generatingForm, setGeneratingForm] = useState<string | null>(null);
 
   // 089: the filing window opens at the campaign stage and closes as soon as
   // voting ends; complaints also only ever show for their own election.
@@ -75,6 +78,30 @@ export default function StudentComplaints() {
   const removeEvidenceFile = (index: number) => {
     setEvidenceError("");
     setEvidenceFiles((previous) => previous.filter((_, i) => i !== index));
+  };
+
+  // Generates and downloads the filled Grievance Form
+  // (CNNHS-Grievance-Form-for-SSLG-Elections.docx) for this filed complaint.
+  const handleDownloadGrievanceForm = async (complaint: Complaint) => {
+    setGeneratingForm(complaint.id);
+    try {
+      await saveGrievanceFormDocx({
+        complaint,
+        complainantName: currentUser?.name,
+        complainantEmail: currentUser?.email,
+        complainantBirthdate: students.find((s) => s.id === currentUser?.id)?.birthdate,
+        schoolYear: electionPeriod.schoolYear,
+      });
+    } catch (err) {
+      addLog({
+        user: currentUser?.name || "Student",
+        role: "Student",
+        action: "Grievance Form Download Failed",
+        details: err instanceof Error ? err.message : "Failed to generate the grievance form",
+        type: "error",
+      });
+    }
+    setGeneratingForm(null);
   };
 
   const resetEvidence = () => {
@@ -403,6 +430,17 @@ export default function StudentComplaints() {
                     )}
                   </div>
                 )}
+                <div className="mt-3 pt-3 border-t border-gray-100 flex justify-end">
+                  <button
+                    onClick={() => handleDownloadGrievanceForm(complaint)}
+                    disabled={generatingForm === complaint.id}
+                    aria-label="Download CNNHS-Grievance-Form-for-SSLG-Elections.docx"
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 transition-colors disabled:opacity-60 flex items-center gap-1.5"
+                  >
+                    <Download size={12} />
+                    {generatingForm === complaint.id ? "Preparing..." : "Grievance Form"}
+                  </button>
+                </div>
               </div>
             ))}
           </div>

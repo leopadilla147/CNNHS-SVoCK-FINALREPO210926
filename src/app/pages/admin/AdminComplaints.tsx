@@ -473,7 +473,7 @@ export default function AdminComplaints() {
                     onClick={(e) => { e.stopPropagation(); handleDownloadResponseForm(complaint); }}
                     disabled={generatingForm === complaint.id}
                     aria-label="Download CNNHS-Grievance-Commissioner-Response-Form.docx"
-                    className="px-4 py-2 bg-white text-gray-700 border border-gray-200 rounded-lg text-xs font-medium hover:border-[#5C0102] hover:text-[#5C0102] transition-colors disabled:opacity-60 flex items-center gap-1.5"
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 transition-colors disabled:opacity-60 flex items-center gap-1.5"
                   >
                     <Download size={12} />
                     {generatingForm === complaint.id ? "Preparing..." : "Response Form"}

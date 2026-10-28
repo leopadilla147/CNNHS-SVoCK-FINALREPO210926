@@ -3,7 +3,7 @@ import { AlertCircle, Upload, CheckCircle, XCircle, FileImage, FileDown, Pencil,
 import { motion, AnimatePresence } from "motion/react";
 import { useApp, Candidate } from "../../context/AppContext";
 import { EAFPreviewDocument } from "../../components/EAFPreviewDocument";
-import { reapplyPartyCandidacyRpc, submitCandidacyRpc, uploadCandidateImage, fetchCandidateGate } from "../../lib/supabaseData";
+import { reapplyPartyCandidacyRpc, submitCandidacyRpc, uploadCandidateImage, fetchCandidateGate, fetchEafSignatoriesRpc } from "../../lib/supabaseData";
 import { isSupabaseConfigured, supabase } from "../../lib/supabase";
 import { useConfirm } from "../../lib/useConfirm";
 import { escapeHtml } from "../../lib/escapeHtml";
@@ -18,6 +18,7 @@ import {
   partyApprovalBlockForSubmit,
   partySeatSummaries,
 } from "../../lib/partyScope";
+import { applicationStageEnded } from "../../lib/electionStage";
 
 const GENDERS = ["Male", "Female"];
 const LEADERSHIP_SKILLS = ["Motivational", "Problem Solving", "Values-Oriented", "Communication", "Goal-Oriented", "Service-Oriented"];
@@ -252,6 +253,9 @@ export default function StudentApplyCandidacy() {
   const currentStudent = students.find((s) => s.id === currentUser?.id);
   const generateEafConfirm = useConfirm({ title: "Generate EAF?", description: "This will create or update your candidacy application based on the information provided.", confirmText: "Generate" });
   const finalSubmitConfirm = useConfirm({ title: "Submit Completed EAF?", description: "This will finalize your candidacy application and submit it to the Commissioner on Screening and Validation for review. You will not be able to edit it afterward.", confirmText: "Submit", destructive: true });
+  // 112: same confirm gate as the other wizard actions — Save Changes writes
+  // the whole edited profile to the row before returning to the EAF page.
+  const saveChangesConfirm = useConfirm({ title: "Save Changes?", description: "This will save your edits to your candidacy application and return you to your EAF page.", confirmText: "Save Changes" });
   // Parties belong to a single election period, so the picker must offer the
   // parties of the live period only — never a past period's slate.  For the
   // same reason the application being edited is the live period's one: a
@@ -259,26 +263,37 @@ export default function StudentApplyCandidacy() {
   const periodCandidates = candidatesInLivePeriod(candidates, electionPeriod);
   const existing = periodCandidates.find((c) => c.studentId === currentUser?.id);
 
+  // 109: once the Electoral Board ends the Candidacy Application Stage, the
+  // roster is final — nothing may be filed, revised, resubmitted, or
+  // re-applied for.  The RPCs refuse the writes; every check below is the
+  // friendly version of that same rule.
+  const stage1Ended = applicationStageEnded(electionPeriod);
+
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(false);
   const [finalLoading, setFinalLoading] = useState(false);
   const [reapplyLoading, setReapplyLoading] = useState(false);
   const [reapplyError, setReapplyError] = useState<string | null>(null);
+  // 110: the printed EAF names its two signatories — the ACTIVE Screening and
+  // Validation Commissioner and the ACTIVE Chief Commissioner.  The roster
+  // itself is chief-gated (046), so this minimal read is all the student gets.
+  const [signatories, setSignatories] = useState<{ screening: string | null; chief: string | null }>({
+    screening: null,
+    chief: null,
+  });
+  // While the two EAF pages are being rasterized into the downloadable PDF.
+  const [pdfLoading, setPdfLoading] = useState(false);
+  // 112 — while "Save Changes" persists the wizard edits and returns to the EAF.
+  const [savingChanges, setSavingChanges] = useState(false);
   // The party President decides in their own browser session, so the approval
   // only reaches this page through an explicit re-read.
   const [gateCheckLoading, setGateCheckLoading] = useState(false);
   const [gateCheckError, setGateCheckError] = useState<string | null>(null);
   const [gateCheckedAt, setGateCheckedAt] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [partyMode, setPartyMode] = useState<"existing" | "new" | "independent">(
-    parties.length > 0 ? "existing" : "independent"
-  );
-  // The party list arrives with the rest of the Supabase state, so the mode
-  // cannot be settled once at mount: a student who opens this page while the
-  // fetch is still in flight would be parked on "Independent" and never shown
-  // the picker they are meant to use.  Keep following the list until they
-  // choose for themselves.
-  const [partyModeChosen, setPartyModeChosen] = useState(false);
+  // 109 aside, the Party Type defaults to Independent: the student opts into a
+  // party (existing or new) by picking it, never the other way around.
+  const [partyMode, setPartyMode] = useState<"existing" | "new" | "independent">("independent");
   const [editingExisting, setEditingExisting] = useState(false);
 
   const [provinces, setProvinces] = useState<Province[]>([]);
@@ -316,6 +331,7 @@ export default function StudentApplyCandidacy() {
     parentGuardianLastName: "",
     parentGuardianContact: "",
     leadershipQualities: "",
+    capsuleQualities: "",
     leadershipSkills: [] as string[],
     leadershipSkillsExplanation: "",
     threeYearVision: "",
@@ -403,32 +419,36 @@ export default function StudentApplyCandidacy() {
   }, []);
 
   const fetchCities = async (provinceCode: string) => {
-    if (!provinceCode) return;
+    if (!provinceCode) return [];
     setLoadingAddress(true);
     try {
       const provinceCities = await fetchJSON<City[]>(`${PSGC_API}/provinces/${provinceCode}/cities-municipalities/`);
       if (provinceCities.length === 0) throw new Error("No cities found");
       setCities(provinceCities);
+      return provinceCities;
     } catch (err) {
       console.warn("City fallback", err);
       const fallbackCities = FALLBACK_CITIES[provinceCode] || [];
       setCities(fallbackCities);
+      return fallbackCities;
     } finally {
       setLoadingAddress(false);
     }
   };
 
   const fetchBarangays = async (cityCode: string) => {
-    if (!cityCode) return;
+    if (!cityCode) return [];
     setLoadingAddress(true);
     try {
       const cityBarangays = await fetchJSON<Barangay[]>(`${PSGC_API}/cities-municipalities/${cityCode}/barangays/`);
       if (cityBarangays.length === 0) throw new Error("No barangays found");
       setBarangays(cityBarangays);
+      return cityBarangays;
     } catch (err) {
       console.warn("Barangay fallback", err);
       const fallbackBarangays = FALLBACK_BARANGAYS[cityCode] || [];
       setBarangays(fallbackBarangays);
+      return fallbackBarangays;
     } finally {
       setLoadingAddress(false);
     }
@@ -473,6 +493,8 @@ export default function StudentApplyCandidacy() {
     }
   }, [form.dateOfBirth]);
 
+  // The mode effect runs on mount too, so an Independent start clears the
+  // party field and defaults the position to the first executive seat.
   useEffect(() => {
     if (partyMode === "new") {
       setForm((f) => ({ ...f, position: "President", partyAffiliation: "" }));
@@ -490,14 +512,28 @@ export default function StudentApplyCandidacy() {
     }
   }, [partyMode]);
 
-  // Follow the party list as it loads, until the student picks a mode.  Only a
-  // party they can join is worth defaulting to; when every party is blocked the
-  // student is better served on Independent than on a dead dropdown.
+  // 110: fetch the EAF signatory names once a session exists (same cadence as
+  // AppContext's boot load).  A failure is silent — the EAF falls back to its
+  // printed placeholders rather than blocking the application flow.
   useEffect(() => {
-    if (!partyModeChosen && joinableParties.length > 0) {
-      setPartyMode("existing");
-    }
-  }, [partyModeChosen, joinableParties.length]);
+    if (!isSupabaseConfigured || !supabase) return;
+    let cancelled = false;
+    fetchEafSignatoriesRpc()
+      .then((names) => {
+        if (!cancelled) {
+          setSignatories({
+            screening: names.screening_commissioner || null,
+            chief: names.chief_commissioner || null,
+          });
+        }
+      })
+      .catch(() => {
+        /* placeholders stay */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.id]);
 
   const capitalizeFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
@@ -676,6 +712,10 @@ export default function StudentApplyCandidacy() {
       positionApprovalStatus: (isNewParty || isIndependent) ? "notRequired" : "presidentApprovalRequired",
       leadershipProfile: {
         qualities: form.leadershipQualities.trim(),
+        // Part IV Leadership Capsule guide question — kept separate from the
+        // Introductory Profile's qualities so neither answer leaks into the
+        // other question or onto the printed EAF.
+        capsuleQualities: form.capsuleQualities.trim(),
         skills: form.leadershipSkills,
         skillsExplanation: form.leadershipSkillsExplanation.trim(),
         threeYearVision: form.threeYearVision.trim(),
@@ -715,6 +755,18 @@ export default function StudentApplyCandidacy() {
           pictureUrl = await uploadCandidateImage("candidate-pictures", form.picture, fileName);
         }
 
+        // 111: the payload rides along on 'update' too — the RPC persists the
+        // revised profile fields (address with its PSGC codes, names, contact,
+        // guardian, leadership profile) instead of only the picture.  Position
+        // and party stay as originally filed; the DB derives those at creation.
+        const candidacyPayload = {
+          ...newCandidate,
+          provinceCode: form.provinceCode,
+          cityCode: form.cityCode,
+          barangayCode: form.barangayCode,
+          positionApprovalStatus: undefined,
+        } as any;
+
         const result = await submitCandidacyRpc({
           p_action: editingExisting ? "update" : "create",
           // The gate is stripped before it leaves the browser.  It is a local
@@ -722,7 +774,7 @@ export default function StudentApplyCandidacy() {
           // position and party it finds itself, and ignoring the payload is a
           // safety property, not an accident of naming.  Sending it would only
           // invite someone to read the field as something they can assert.
-          p_candidate_data: editingExisting ? undefined : ({ ...newCandidate, positionApprovalStatus: undefined } as any),
+          p_candidate_data: candidacyPayload,
           p_candidate_id: editingExisting ? existing?.id : undefined,
           p_picture_url: pictureUrl,
         });
@@ -764,27 +816,33 @@ export default function StudentApplyCandidacy() {
   };
 
   const handleEditExisting = (candidate: Candidate) => {
+    // 109: the wizard never opens once the Application Stage has ended, even
+    // from a stale EAF page still holding an Edit button.  The RPC refuses
+    // the write anyway — this just avoids the dead end.
+    if (stage1Ended) return;
     // A founder is whoever registered the slate by running for its President.
     // Inferring it from positionApprovalStatus breaks the moment that founder
     // is approved, since the gate then reads 'presidentApproved'.
     const isNewParty = isPartyFounder(candidate);
     const isIndependent = !candidate.partyAffiliation;
-    setPartyModeChosen(true);
     setPartyMode(isNewParty ? "new" : isIndependent ? "independent" : "existing");
-    const addrParts = candidate.homeAddress.split(", ");
-    let houseStreet = "", barangay = "", city = "", province = "";
-    if (addrParts.length >= 4) {
-      if (addrParts.length === 5) {
-        houseStreet = addrParts[0];
-        barangay = addrParts[1];
-        city = addrParts[2];
-        province = addrParts[3];
-      } else {
-        barangay = addrParts[0];
-        city = addrParts[1];
-        province = addrParts[2];
-      }
-    }
+    // 111: the PSGC codes ride on the row, so the dropdowns restore the saved
+    // selection.  The names still fall back to the composed address text for
+    // rows filed before 111 (codes empty) — display-only; step 1 keeps its
+    // re-pick requirement for those.
+    // 111/112: the saved row carries the PSGC codes, so the dropdowns restore
+    // the saved selection — and the NAMES come from the PSGC lists, because
+    // the composed address ("Street Brgy. Barangay City, Province") cannot be
+    // split reliably (multi-word cities, the street glued to the Brgy. tag).
+    // The street is the text before " Brgy. "; province is after the last
+    // comma.  Pre-111 rows (no codes) fall back to name matching.
+    const address = candidate.homeAddress || "";
+    const lastComma = address.lastIndexOf(", ");
+    const main = lastComma >= 0 ? address.slice(0, lastComma) : address;
+    const provinceGuess = lastComma >= 0 ? address.slice(lastComma + 2) : "";
+    const brgyMarker = main.indexOf("Brgy. ");
+    const streetGuess = brgyMarker >= 0 ? main.slice(0, brgyMarker).trim() : "";
+    const afterBrgy = brgyMarker >= 0 ? main.slice(brgyMarker + 6).trim() : main.trim();
     setForm({
       surname: candidate.surname,
       givenName: candidate.givenName,
@@ -800,18 +858,19 @@ export default function StudentApplyCandidacy() {
       email: candidate.email,
       mobileNumber: candidate.mobileNumber,
       landline: candidate.landline || "",
-      provinceCode: "",
-      provinceName: province,
-      cityCode: "",
-      cityName: city,
-      barangayCode: "",
-      barangayName: barangay,
-      houseStreet: houseStreet,
+      provinceCode: candidate.addressProvinceCode || "",
+      provinceName: provinceGuess,
+      cityCode: candidate.addressCityCode || "",
+      cityName: "",
+      barangayCode: candidate.addressBarangayCode || "",
+      barangayName: "",
+      houseStreet: streetGuess,
       parentGuardianFirstName: candidate.parentGuardianName?.split(" ")[0] || "",
       parentGuardianMiddleInitial: candidate.parentGuardianName && candidate.parentGuardianName.split(" ").length > 2 ? candidate.parentGuardianName.split(" ").slice(1, -1).join(" ").replace(".", "") : "",
       parentGuardianLastName: candidate.parentGuardianName?.split(" ").slice(-1)[0] || "",
       parentGuardianContact: candidate.parentGuardianContact || "",
       leadershipQualities: candidate.leadershipProfile?.qualities || "",
+      capsuleQualities: candidate.leadershipProfile?.capsuleQualities || "",
       leadershipSkills: candidate.leadershipProfile?.skills || [],
       leadershipSkillsExplanation: candidate.leadershipProfile?.skillsExplanation || "",
       threeYearVision: candidate.leadershipProfile?.threeYearVision || "",
@@ -826,9 +885,143 @@ export default function StudentApplyCandidacy() {
       picture: null,
       picturePreview: candidate.picture || "",
     });
+    // 112: the restore resolves the codes into names and loads the dependent
+    // option lists (same fetches a manual Province/City pick would trigger).
+    void restoreAddressSelections(candidate, { provinceGuess, afterBrgy });
     setErrors({});
     setEditingExisting(true);
     setStep(0);
+  };
+
+  /**
+   * 112 — finish the edit prefill: turn the saved PSGC codes (or, for pre-111
+   * rows, the province name parsed out of the address) into the province /
+   * city / barangay NAMES the composed "Full address to be saved" preview and
+   * the saved row are built from.  Codes are authoritative; name matching is
+   * the fallback.  Failures leave the parsed guesses in place.
+   */
+  const restoreAddressSelections = async (
+    candidate: Candidate,
+    parsed: { provinceGuess: string; afterBrgy: string }
+  ) => {
+    try {
+      const provCode =
+        candidate.addressProvinceCode ||
+        provinces.find((p) => p.name.toLowerCase() === parsed.provinceGuess.toLowerCase())?.code ||
+        "";
+      if (!provCode) return;
+      const provinceName = provinces.find((p) => p.code === provCode)?.name || parsed.provinceGuess;
+
+      const cityList = await fetchCities(provCode);
+      let city = candidate.addressCityCode
+        ? cityList.find((c) => c.code === candidate.addressCityCode)
+        : undefined;
+      if (!city) {
+        // No code (pre-111 row): the city name is the tail of "… Brgy. Barangay City".
+        const lower = parsed.afterBrgy.toLowerCase();
+        city = cityList
+          .filter((c) => lower.endsWith(c.name.toLowerCase()))
+          .sort((a, b) => b.name.length - a.name.length)[0];
+      }
+      const cityCode = city?.code || candidate.addressCityCode || "";
+      const cityName = city?.name || "";
+      let barangayName = cityName
+        ? parsed.afterBrgy.slice(0, parsed.afterBrgy.length - cityName.length).trim()
+        : "";
+      let barangayCode = candidate.addressBarangayCode || "";
+
+      if (cityCode) {
+        const brgyList = await fetchBarangays(cityCode);
+        const brgy = barangayCode
+          ? brgyList.find((b) => b.code === barangayCode)
+          : brgyList.find((b) => b.name.toLowerCase() === barangayName.toLowerCase());
+        if (brgy) {
+          barangayCode = brgy.code;
+          barangayName = brgy.name;
+        }
+      }
+
+      setForm((f) => ({
+        ...f,
+        provinceCode: provCode,
+        provinceName,
+        cityCode,
+        cityName,
+        barangayCode,
+        barangayName,
+      }));
+    } catch {
+      /* the parsed guesses stay */
+    }
+  };
+
+  /**
+   * 112 — "Save Changes": persist every step of the wizard onto the existing
+   * row (the same update RPC the Generate EAF step uses) and drop the student
+   * straight back to their EAF page, without forcing a walk to step 7.
+   * All six steps are validated first; the first step with a problem is the
+   * one the wizard lands on.
+   */
+  const handleSaveChanges = async () => {
+    if (!existing) return;
+    for (let s = 0; s <= 5; s++) {
+      const errs = validateStep(s);
+      if (Object.keys(errs).length > 0) {
+        setErrors(errs);
+        setStep(s);
+        return;
+      }
+    }
+    const ok = await saveChangesConfirm.confirm();
+    if (!ok) return;
+    setErrors({});
+    setSavingChanges(true);
+    try {
+      const newCandidate = buildCandidate(existing);
+      if (isSupabaseConfigured && supabase) {
+        let pictureUrl: string | undefined;
+        if (form.picture) {
+          const fileName = `candidate_${crypto.randomUUID()}_${Date.now()}.jpg`;
+          pictureUrl = await uploadCandidateImage("candidate-pictures", form.picture, fileName);
+        }
+        const dbRow = (await submitCandidacyRpc({
+          p_action: "update",
+          p_candidate_data: {
+            ...newCandidate,
+            provinceCode: form.provinceCode,
+            cityCode: form.cityCode,
+            barangayCode: form.barangayCode,
+            positionApprovalStatus: undefined,
+          } as any,
+          p_candidate_id: existing.id,
+          p_picture_url: pictureUrl,
+        })) as Record<string, any> | null;
+        if (dbRow) {
+          const serverCandidate: Candidate = {
+            ...newCandidate,
+            id: dbRow.id,
+            picture: dbRow.picture_url || newCandidate.picture,
+            eafFrontImage: dbRow.eaf_front_url || undefined,
+            eafBackImage: dbRow.eaf_back_url || undefined,
+            documents: {
+              ...newCandidate.documents,
+              eafFront: dbRow.doc_eaf_front ?? false,
+              eafBack: dbRow.doc_eaf_back ?? false,
+            },
+          };
+          setCandidates(candidates.map((c) => (c.id === existing.id ? serverCandidate : c)));
+        }
+      } else {
+        setCandidates(candidates.map((c) => (c.id === existing.id ? newCandidate : c)));
+      }
+      // Back to the EAF page with the updated data rendered.
+      setEditingExisting(false);
+      setStep(0);
+    } catch (err) {
+      setErrors({ submit: err instanceof Error ? err.message : "Saving changes failed" });
+    } finally {
+      setSavingChanges(false);
+    }
   };
 
   const readEafImage = async (candidate: Candidate, side: "front" | "back", file?: File) => {
@@ -1015,6 +1208,51 @@ export default function StudentApplyCandidacy() {
     setTimeout(() => pdfWindow.print(), 500);
   };
 
+  /**
+   * 110 — real file download (the browser print dialog is not a download).
+   * Each EAF page is rasterized to a canvas and assembled into a letter-size
+   * PDF with jsPDF.  The libraries are imported lazily so their bundle weight
+   * is only paid when a student actually clicks Download PDF.
+   *
+   * html2canvas-pro is required instead of classic html2canvas: Tailwind 4's
+   * palette emits oklch() colors, which the classic parser cannot read.
+   */
+  const handleDownloadPdf = async (candidate: Candidate) => {
+    const eafDocument = document.querySelector('[data-eaf-document="true"]');
+    const eafPage2 = document.querySelector('[data-eaf-page2="true"]');
+    if (!eafDocument) {
+      setErrors({ eafUpload: "EAF document not found." });
+      return;
+    }
+    const fileName = `${candidate.givenName}-${candidate.surname}-EAF.pdf`;
+    setPdfLoading(true);
+    try {
+      const [{ jsPDF }, { default: html2canvas }] = await Promise.all([
+        import("jspdf"),
+        import("html2canvas-pro"),
+      ]);
+      const pdf = new jsPDF({ orientation: "portrait", unit: "in", format: "letter" });
+      const pages = [eafDocument, eafPage2].filter(Boolean) as HTMLElement[];
+      for (let i = 0; i < pages.length; i++) {
+        const canvas = await html2canvas(pages[i], {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: "#ffffff",
+          logging: false,
+        });
+        if (i > 0) pdf.addPage("letter", "portrait");
+        pdf.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", 0, 0, 8.5, 11);
+      }
+      pdf.save(fileName);
+    } catch (err) {
+      setErrors({
+        eafUpload: err instanceof Error ? err.message : "Could not generate the PDF download.",
+      });
+    } finally {
+      setPdfLoading(false);
+    }
+  };
+
   const statusLabel = (status: Candidate["status"]) =>
     status === "ongoingSubmission" ? "Ongoing Submission" : status.charAt(0).toUpperCase() + status.slice(1);
   const statusClasses = (status: Candidate["status"]) => {
@@ -1048,6 +1286,8 @@ export default function StudentApplyCandidacy() {
             candidate={candidate}
             student={currentStudent}
             onPrint={() => handleExportPdf(candidate)}
+            screeningCommissionerName={signatories.screening || undefined}
+            chiefCommissionerName={signatories.chief || undefined}
           />
 
           <div className="space-y-4">
@@ -1197,10 +1437,20 @@ export default function StudentApplyCandidacy() {
             </div>
 
             <button
-              onClick={() => handleExportPdf(candidate)}
-              className="w-full py-3 rounded-xl border border-gray-200 text-sm text-gray-700 hover:bg-gray-50 flex items-center justify-center gap-2"
+              onClick={() => handleDownloadPdf(candidate)}
+              disabled={pdfLoading}
+              className="w-full py-3 rounded-xl border border-gray-200 text-sm text-gray-700 hover:bg-gray-50 flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              <FileDown size={16} /> Download PDF
+              {pdfLoading ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />
+                  Preparing PDF...
+                </>
+              ) : (
+                <>
+                  <FileDown size={16} /> Download PDF
+                </>
+              )}
             </button>
             <button
               onClick={() => handleEditExisting(candidate)}
@@ -1345,19 +1595,25 @@ export default function StudentApplyCandidacy() {
           </div>
           <p className="text-sm text-red-900">
             Another candidate was approved for <strong>{candidate.position}</strong> in your party.
-            You can re-apply if that position opens up again.
+            {stage1Ended
+              ? " The Candidacy Application Stage has ended, so this position can no longer be re-applied for in this election."
+              : " You can re-apply if that position opens up again."}
           </p>
-          {reapplyError && (
-            <p className="mt-2 text-xs text-red-700">{reapplyError}</p>
+          {!stage1Ended && (
+            <>
+              {reapplyError && (
+                <p className="mt-2 text-xs text-red-700">{reapplyError}</p>
+              )}
+              <button
+                onClick={handleReapply}
+                disabled={reapplyLoading}
+                className="mt-3 px-4 py-2 text-white rounded-lg text-xs font-medium hover:opacity-90 transition-all disabled:opacity-60 flex items-center gap-2"
+                style={{ backgroundColor: "#5C0102" }}
+              >
+                {reapplyLoading ? "Re-applying..." : "Re-apply for this position"}
+              </button>
+            </>
           )}
-          <button
-            onClick={handleReapply}
-            disabled={reapplyLoading}
-            className="mt-3 px-4 py-2 text-white rounded-lg text-xs font-medium hover:opacity-90 transition-all disabled:opacity-60 flex items-center gap-2"
-            style={{ backgroundColor: "#5C0102" }}
-          >
-            {reapplyLoading ? "Re-applying..." : "Re-apply for this position"}
-          </button>
         </div>
       );
     }
@@ -1365,11 +1621,48 @@ export default function StudentApplyCandidacy() {
     return null;
   };
 
+  /**
+   * 109: the friendly face of the database gate.  The Candidacy Application
+   * Stage has ended, so the roster is final — the per-situation detail line
+   * explains what this particular student can no longer do.
+   */
+  const renderStageEnded = (detail: string) => (
+    <div className="p-6 md:p-8 max-w-2xl mx-auto">
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
+        <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 bg-amber-100">
+          <AlertCircle size={28} className="text-amber-600" />
+        </div>
+        <h2 className="text-gray-900 mb-2">The Candidacy Application Stage has ended</h2>
+        <p className="text-gray-500 text-sm mb-4">{detail}</p>
+        <p className="text-xs text-gray-400">
+          If you believe this is a mistake, please see the Screening and Validation
+          Commissioner.
+        </p>
+      </div>
+    </div>
+  );
+
   if (existing?.status === "ongoingSubmission" && !editingExisting) {
+    // 109: an application the student never finished submitting is closed
+    // along with the stage — the roster the campaign runs on is final.
+    if (stage1Ended) {
+      return (
+        <>
+          {renderStageEnded(
+            "Your completed EAF can no longer be submitted — the Candidacy Application Stage ended before your application was finalized."
+          )}
+          {generateEafConfirm.dialog}
+          {finalSubmitConfirm.dialog}
+        </>
+      );
+    }
     return <>{renderEafStep(existing)}{generateEafConfirm.dialog}{finalSubmitConfirm.dialog}</>;
   }
 
-  if (existing && existing.status !== "ongoingSubmission") {
+  // 112: `!editingExisting` matters — this branch used to swallow the revise
+  // flow: clicking "Revise and Resubmit" set editingExisting, but a rejected
+  // row re-rendered THIS screen, so the wizard never opened.
+  if (existing && existing.status !== "ongoingSubmission" && !editingExisting) {
     const isRejected = existing.status === "rejected";
     const isLowTier = isRejected && existing.rejectionTier === "low";
     const isHighTier = isRejected && existing.rejectionTier === "high";
@@ -1406,17 +1699,23 @@ export default function StudentApplyCandidacy() {
                 <p>Position: <strong>{existing.position}</strong></p>
                 <p>Party: <strong>{existing.partyAffiliation || "Independent"}</strong></p>
               </div>
-              {isLowTier && (
+              {isLowTier && !stage1Ended && (
                 <button
-                  onClick={() => {
-                    setEditingExisting(true);
-                    setStep(0);
-                  }}
+                  // 112: goes through the full prefill (party mode, address
+                  // codes, profile) — the bare setEditingExisting used here
+                  // before left the wizard empty even once it rendered.
+                  onClick={() => handleEditExisting(existing)}
                   className="mt-5 px-6 py-2.5 text-white rounded-xl text-sm font-medium hover:opacity-90 transition-all flex items-center gap-2 mx-auto"
                   style={{ backgroundColor: "#5C0102" }}
                 >
                   <Pencil size={16} /> Revise and Resubmit
                 </button>
+              )}
+              {isLowTier && stage1Ended && (
+                <div className="mt-4 p-4 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-600">
+                  The Candidacy Application Stage has ended, so this application can no longer be
+                  revised or resubmitted for this election.
+                </div>
               )}
               {isHighTier && (
                 <div className="mt-4 p-4 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-600">
@@ -1455,7 +1754,8 @@ export default function StudentApplyCandidacy() {
 
   // 058: new applications are only accepted while the Candidate Application
   // Period is open. The RPC enforces this too — this is the friendly version.
-  // A student who already started an application is never locked out of it.
+  // A student who already started an application can still see it here while
+  // the stage is current — 109 locks everything in only once it has ended.
   if (!electionPeriod.candidacyOpen && !editingExisting) {
     // The Rules Discussion Meeting announcement is intentionally absent here:
     // this screen only ever renders for a student with NO application in the
@@ -1482,6 +1782,15 @@ export default function StudentApplyCandidacy() {
     );
   }
 
+  // 109: a stale tab can still hold editingExisting = true after the Electoral
+  // Board has ended the stage; the wizard must not pretend otherwise.  The
+  // RPCs refuse the writes anyway — this is the friendly version.
+  if (editingExisting && stage1Ended) {
+    return renderStageEnded(
+      "Your application can no longer be revised — the Candidacy Application Stage has ended for this election."
+    );
+  }
+
   return (
     <div className="p-6 md:p-8 max-w-4xl mx-auto">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
@@ -1501,18 +1810,23 @@ export default function StudentApplyCandidacy() {
           {STEPS.map((label, i) => (
             <div key={i} className="flex items-center flex-1">
               <div className="flex flex-col items-center">
-                <div
+                {/* 112: while editing, the chips jump straight to any step so a
+                    student can fix one field and reach Save Changes quickly. */}
+                <button
+                  type="button"
+                  disabled={!editingExisting}
+                  onClick={() => setStep(i)}
                   className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${
                     i < step
                       ? "bg-green-500 text-white"
                       : i === step
                       ? "text-white"
                       : "bg-gray-200 text-gray-500"
-                  }`}
+                  } ${editingExisting ? "cursor-pointer hover:opacity-80" : "cursor-default"}`}
                   style={i === step ? { backgroundColor: "#5C0102" } : {}}
                 >
                   {i < step ? <Check size={14} /> : i + 1}
-                </div>
+                </button>
                 <span
                   className={`text-[10px] mt-1.5 text-center leading-tight max-w-[70px] ${
                     i === step ? "font-semibold" : "text-gray-400"
@@ -1792,10 +2106,7 @@ export default function StudentApplyCandidacy() {
                       <label className="block text-sm text-gray-700 mb-1.5">Party Type <span className="text-red-500">*</span></label>
                       <select
                         value={partyMode}
-                        onChange={(e) => {
-                          setPartyModeChosen(true);
-                          setPartyMode(e.target.value as "existing" | "new" | "independent");
-                        }}
+                        onChange={(e) => setPartyMode(e.target.value as "existing" | "new" | "independent")}
                         className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50"
                       >
                         <option value="independent">Independent (No Party)</option>
@@ -2036,9 +2347,13 @@ export default function StudentApplyCandidacy() {
                       <label className="block text-sm text-gray-700 mb-2 font-medium">
                         What are your qualities that you believe can make a great leader?
                       </label>
+                      {/* Part IV's own answer — deliberately NOT the Introductory
+                          Profile's "inspiring student leader" essay.  They used to
+                          share one field, which passed that answer down here and
+                          onto the printed EAF. */}
                       <textarea
-                        value={form.leadershipQualities}
-                        onChange={(e) => update("leadershipQualities", e.target.value)}
+                        value={form.capsuleQualities}
+                        onChange={(e) => update("capsuleQualities", e.target.value)}
                         rows={4}
                         className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50"
                       />
@@ -2144,6 +2459,25 @@ export default function StudentApplyCandidacy() {
             </button>
 
             <div className="flex items-center gap-2">
+              {editingExisting && (
+                <button
+                  onClick={handleSaveChanges}
+                  disabled={savingChanges || loading}
+                  className="flex items-center gap-1.5 px-5 py-2.5 rounded-xl text-white text-sm font-medium hover:opacity-90 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                  style={{ backgroundColor: "#2E7D32" }}
+                >
+                  {savingChanges ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Check size={16} /> Save Changes
+                    </>
+                  )}
+                </button>
+              )}
               {step < STEPS.length - 1 && (
                 <button
                   onClick={handleNext}
@@ -2159,6 +2493,7 @@ export default function StudentApplyCandidacy() {
       </div>
       {generateEafConfirm.dialog}
       {finalSubmitConfirm.dialog}
+      {saveChangesConfirm.dialog}
     </div>
   );
 }

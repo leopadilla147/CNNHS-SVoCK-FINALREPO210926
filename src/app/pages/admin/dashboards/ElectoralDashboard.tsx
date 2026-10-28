@@ -11,11 +11,15 @@ import {
   ArrowRight,
   Trophy,
   Fingerprint,
+  ListChecks,
+  Monitor,
+  Search,
   Users,
   UserCheck,
   UserX,
   MinusCircle,
 } from "lucide-react";
+import { buildVoterRows, type VoteListRow } from "../../../lib/voterList";
 import type { ReactNode } from "react";
 
 /** A period timestamp as a Date, or null when it is absent/unparseable. */
@@ -97,10 +101,24 @@ function StatCard({ stat, index }: { stat: Stat; index: number }) {
   );
 }
 
-/** Per-position abstain rows share these shapes with the votes table (018). */
-interface VoteRow {
-  voter_id: string;
-  abstained: boolean;
+/** Voter List status pills. */
+const VOTER_FILTERS = [
+  { value: "all", label: "All" },
+  { value: "voted", label: "Voted" },
+  { value: "not-voted", label: "Not Voted" },
+] as const;
+
+type VoterFilter = (typeof VOTER_FILTERS)[number]["value"];
+
+/** Compact "Voted At" cell text; "—" for not-voted rows. */
+function formatVotedAt(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString(undefined, {
+    month: "short", day: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
 }
 
 export default function ElectoralDashboard() {
@@ -121,38 +139,44 @@ export default function ElectoralDashboard() {
     [students],
   );
 
-  const [turnout, setTurnout] = useState({ voted: 0, notVoted: 0, abstains: 0 });
+  // Raw votes rows for the active period — shared by the turnout snapshot
+  // above and the Voter List below. One lightweight select (RLS lets staff
+  // read votes); soft-fail keeps the previous rows, mirroring Live Results.
+  const [voteRows, setVoteRows] = useState<VoteListRow[]>([]);
 
-  // One lightweight select covers all turnout counts (RLS lets staff read votes).
-  // Soft-fail keeps the previous values, mirroring the Live Results pattern.
   useEffect(() => {
     const periodId = electionPeriod.id;
     if (!periodId) return;
 
     let cancelled = false;
 
-    const loadTurnout = async () => {
+    const loadVotes = async () => {
       const { data, error } = await supabase!
         .from("votes")
-        .select("voter_id, abstained")
+        .select("voter_id, abstained, kiosk_id, transaction_id, voted_at")
         .eq("election_period_id", periodId);
       if (cancelled || error || !data) return;
-      const rows = data as VoteRow[];
-      const votedVoters = new Set(rows.map((v) => v.voter_id)).size;
-      setTurnout({
-        voted: votedVoters,
-        notVoted: Math.max(0, approvedVoters - votedVoters),
-        abstains: rows.filter((v) => v.abstained).length,
-      });
+      setVoteRows(data as VoteListRow[]);
     };
 
-    loadTurnout();
-    const timer = setInterval(loadTurnout, 30_000);
+    loadVotes();
+    const timer = setInterval(loadVotes, 30_000);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [electionPeriod.id, approvedVoters]);
+  }, [electionPeriod.id]);
+
+  // Same formula as the DB's approved_voters turnout (033): a voter counts
+  // once even when every position row is an abstain.
+  const turnout = useMemo(() => {
+    const voted = new Set(voteRows.map((v) => v.voter_id)).size;
+    return {
+      voted,
+      notVoted: Math.max(0, approvedVoters - voted),
+      abstains: voteRows.filter((v) => v.abstained).length,
+    };
+  }, [voteRows, approvedVoters]);
 
   const turnoutStats: Stat[] = [
     { label: "Total Voters", value: approvedVoters.toLocaleString(), sub: "Approved student voters", icon: <Users size={20} />, color: "#8B0103" },
@@ -160,6 +184,74 @@ export default function ElectoralDashboard() {
     { label: "Not Voted", value: turnout.notVoted.toLocaleString(), sub: `${pct(turnout.notVoted, approvedVoters)}% of voters`, icon: <UserX size={20} />, color: "#EF4444" },
     { label: "Abstains", value: turnout.abstains.toLocaleString(), sub: "Across all positions", icon: <MinusCircle size={20} />, color: "#EAB308" },
   ];
+
+  // ---- Voter List (search + voted/not-voted pills + kiosk dropdown) ----
+  const [voterSearch, setVoterSearch] = useState("");
+  const [voterFilter, setVoterFilter] = useState<VoterFilter>("all");
+  const [kioskFilter, setKioskFilter] = useState("all");
+
+  const approvedStudents = useMemo(
+    () => students.filter((s) => s.status === "approved"),
+    [students],
+  );
+
+  const voterRows = useMemo(
+    () => buildVoterRows(approvedStudents, voteRows),
+    [approvedStudents, voteRows],
+  );
+
+  // Per-kiosk voter counts (distinct students per kiosk label), in numeric
+  // order ("Kiosk 2" before "Kiosk 10"; "Unknown" last).
+  const kioskCounts = useMemo(() => {
+    const votersByKiosk = new Map<string, Set<string>>();
+    for (const row of voterRows) {
+      if (!row.voted || !row.kioskLabel) continue;
+      let voters = votersByKiosk.get(row.kioskLabel);
+      if (!voters) {
+        voters = new Set();
+        votersByKiosk.set(row.kioskLabel, voters);
+      }
+      voters.add(row.student.id);
+    }
+    return [...votersByKiosk.entries()]
+      .map(([label, voters]) => ({ label, count: voters.size }))
+      .sort((a, b) => {
+        const na = parseInt(a.label.replace(/\D+/g, ""), 10);
+        const nb = parseInt(b.label.replace(/\D+/g, ""), 10);
+        const va = Number.isNaN(na) ? Number.MAX_SAFE_INTEGER : na;
+        const vb = Number.isNaN(nb) ? Number.MAX_SAFE_INTEGER : nb;
+        return va - vb || a.label.localeCompare(b.label);
+      });
+  }, [voterRows]);
+
+  // Dropdown options = the same kiosk labels as the turnout cards above.
+  const kioskOptions = useMemo(() => kioskCounts.map((k) => k.label), [kioskCounts]);
+
+  // Kiosk turnout cards (between the stat cards and Live Results).
+  const kioskStats: Stat[] = kioskCounts.map((k) => ({
+    label: k.label,
+    value: k.count.toLocaleString(),
+    icon: <Monitor size={20} />,
+    color: "#3B82F6",
+    sub: `${pct(k.count, approvedVoters)}% turnout`,
+  }));
+
+  const filteredVoters = useMemo(() => {
+    const q = voterSearch.trim().toLowerCase();
+    return voterRows.filter((row) => {
+      const matchSearch =
+        !q ||
+        `${row.student.firstName} ${row.student.lastName} ${row.student.lrn}`
+          .toLowerCase()
+          .includes(q);
+      const matchStatus =
+        voterFilter === "all" || (voterFilter === "voted" ? row.voted : !row.voted);
+      // Only voted students were physically at a kiosk.
+      const matchKiosk =
+        kioskFilter === "all" || (row.voted && row.kioskLabel === kioskFilter);
+      return matchSearch && matchStatus && matchKiosk;
+    });
+  }, [voterRows, voterSearch, voterFilter, kioskFilter]);
 
   return (
     <div className="p-6 md:p-8 max-w-7xl mx-auto">
@@ -175,6 +267,19 @@ export default function ElectoralDashboard() {
           <StatCard key={stat.label} stat={stat} index={i} />
         ))}
       </div>
+
+      {/* Per-kiosk turnout — how many students voted on each kiosk (K1, K2, ...) */}
+      {kioskStats.length > 0 ? (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          {kioskStats.map((stat, i) => (
+            <StatCard key={stat.label} stat={stat} index={i} />
+          ))}
+        </div>
+      ) : (
+        <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 mb-6 text-sm text-gray-400">
+          Kiosk turnout will appear here once students start voting.
+        </div>
+      )}
 
       {/* Live Results with a voter turnout snapshot */}
       <Link
@@ -207,6 +312,141 @@ export default function ElectoralDashboard() {
           ))}
         </div>
       </Link>
+
+      {/* Voter List — who has voted, who hasn't, and which kiosk (K1/K2) each ballot was cast on */}
+      <section className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden mb-6">
+        <div className="flex items-center justify-between p-5 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl flex items-center justify-center text-white" style={{ backgroundColor: "#5C0102" }}>
+              <ListChecks size={20} />
+            </div>
+            <div>
+              <div className="text-sm font-medium text-gray-900">Voter List</div>
+              <div className="text-xs text-gray-500">Voted / not voted per student and the kiosk each ballot was cast on</div>
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-lg font-bold text-gray-900">
+              {turnout.voted.toLocaleString()}
+              <span className="text-gray-400 text-sm font-medium"> / {approvedVoters.toLocaleString()}</span>
+            </div>
+            <div className="text-[11px] text-gray-400">students voted</div>
+          </div>
+        </div>
+
+        {/* Filters */}
+        <div className="px-5 pb-4">
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="relative flex-1">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search by name or LRN..."
+                value={voterSearch}
+                onChange={(e) => setVoterSearch(e.target.value)}
+                className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50"
+              />
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              {VOTER_FILTERS.map((f) => (
+                <button
+                  key={f.value}
+                  onClick={() => setVoterFilter(f.value)}
+                  className={`px-3 py-2 rounded-lg text-xs font-medium capitalize transition-all ${voterFilter === f.value ? "text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                  style={voterFilter === f.value ? { backgroundColor: "#5C0102" } : {}}
+                >
+                  {f.label}
+                </button>
+              ))}
+              <select
+                value={kioskFilter}
+                onChange={(e) => setKioskFilter(e.target.value)}
+                className="px-2.5 py-2 border border-gray-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102]"
+              >
+                <option value="all">All Kiosks</option>
+                {kioskOptions.map((k) => (
+                  <option key={k} value={k}>{k}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Table */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ backgroundColor: "#FFF5F5" }}>
+                <th className="text-left py-3 px-5 text-xs font-medium text-gray-500">Student</th>
+                <th className="text-left py-3 px-4 text-xs font-medium text-gray-500">LRN</th>
+                <th className="text-left py-3 px-4 text-xs font-medium text-gray-500">Grade</th>
+                <th className="text-left py-3 px-4 text-xs font-medium text-gray-500">Status</th>
+                <th className="text-left py-3 px-4 text-xs font-medium text-gray-500">Kiosk</th>
+                <th className="text-left py-3 px-4 text-xs font-medium text-gray-500">Voted At</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {filteredVoters.map((row) => (
+                <tr key={row.student.id} className="hover:bg-gray-50 transition-colors">
+                  <td className="py-3 px-5">
+                    <div className="flex items-center gap-2">
+                      {row.student.profilePictureUrl ? (
+                        <img src={row.student.profilePictureUrl} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
+                      ) : (
+                        <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{ backgroundColor: "#5C0102" }}>
+                          {row.student.firstName.charAt(0)}{row.student.lastName.charAt(0)}
+                        </div>
+                      )}
+                      <div>
+                        <div className="font-medium text-gray-900">
+                          {row.student.firstName} {row.student.middleName ? row.student.middleName + " " : ""}{row.student.lastName}
+                        </div>
+                        <div className="text-xs text-gray-400">{row.student.email || "—"}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="py-3 px-4 text-gray-600 font-mono text-xs">{row.student.lrn}</td>
+                  <td className="py-3 px-4 text-gray-500 text-xs">{row.student.gradeLevel}</td>
+                  <td className="py-3 px-4">
+                    {row.voted ? (
+                      <span className="text-xs px-2.5 py-1 rounded-full bg-green-100 text-green-700 font-medium flex items-center gap-1 w-fit">
+                        <UserCheck size={11} /> Voted
+                      </span>
+                    ) : (
+                      <span className="text-xs px-2.5 py-1 rounded-full bg-red-100 text-red-700 font-medium flex items-center gap-1 w-fit">
+                        <UserX size={11} /> Not Voted
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-3 px-4">
+                    {row.voted && row.kioskLabel ? (
+                      row.kioskLabel === "Unknown" ? (
+                        <span className="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-500 font-medium">Unknown</span>
+                      ) : (
+                        <span className="text-xs px-2.5 py-1 rounded-full bg-blue-100 text-blue-700 font-medium">{row.kioskLabel}</span>
+                      )
+                    ) : (
+                      <span className="text-gray-300 text-xs">—</span>
+                    )}
+                  </td>
+                  <td className="py-3 px-4 text-gray-500 text-xs">{formatVotedAt(row.votedAt)}</td>
+                </tr>
+              ))}
+              {filteredVoters.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="py-10 text-center text-sm text-gray-400">
+                    No students match the current filters.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="px-5 py-3 border-t border-gray-100 text-xs text-gray-400">
+          Showing {filteredVoters.length.toLocaleString()} of {voterRows.length.toLocaleString()} approved students
+        </div>
+      </section>
     </div>
   );
 }

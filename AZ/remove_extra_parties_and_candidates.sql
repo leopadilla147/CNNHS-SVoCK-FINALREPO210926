@@ -14,8 +14,12 @@
 --      .election_period_id FK is ON DELETE CASCADE -- 001:372 -- but the
 --      period row may be kept for the other batch, so they go
 --      explicitly)
---   4. this batch's 50 candidates                     (resolved by the
+--   4. this batch's 46 candidates                     (resolved by the
 --      batch lrns through public.students, scoped to the pasted period)
+--   4b. the batch students' notifications              (the approve /
+--      reject / revise test runs wrote into their feeds; the students
+--      themselves stay, so their notification feed is wiped with the
+--      candidacies -- audit_logs are permanent by design and untouched)
 --   5. this batch's 3 parties                         (by fixed id +
 --      period; party_members cascade via 011:49)
 --   6. this period's frozen past-election snapshot rows (the 061/064/
@@ -135,7 +139,7 @@ begin
 
   if not exists (select 1 from public.election_periods p where p.id = v_uuid) then
     raise exception 'No election period with id % -- nothing to remove.', v_uuid
-      using hint = 'Find the id with: select id, school_year, lifecycle_stage, is_active from public.election_periods order by start_at nulls last;';
+      using hint = 'Find the id with: select id, school_year, lifecycle_stage, is_active from public.election_periods order by election_date desc nulls last;';
   end if;
 
   -- The period must contain nothing but this batch (and, when both
@@ -219,6 +223,20 @@ delete from public.candidates c
 using public.students s
 where c.student_id = s.id
   and c.election_period_id = pg_temp.seed_election_period_id()
+  and s.lrn = any(array['999900000201', '999900000202', '999900000203', '999900000204', '999900000205', '999900000206', '999900000207', '999900000208', '999900000209', '999900000210', '999900000211', '999900000212', '999900000213', '999900000214', '999900000215', '999900000216', '999900000217', '999900000218', '999900000219', '999900000220', '999900000221', '999900000222', '999900000223', '999900000224', '999900000225', '999900000226', '999900000227', '999900000228', '999900000229', '999900000230', '999900000231', '999900000232', '999900000233', '999900000234', '999900000235', '999900000236', '999900000237', '999900000238', '999900000239', '999900000240', '999900000241', '999900000242', '999900000251', '999900000252', '999900000253', '999900000254', '999900000255', '999900000256', '999900000257', '999900000258']);
+
+-- ---------------------------------------------------------------------
+-- 4b) NOTIFICATIONS -- everything the batch students' feeds ever
+--     received.  Approve / reject / revise test runs write
+--     candidacy_approved / candidacy_rejected notifications to these
+--     synthetic students; with the candidacies gone a re-seed should
+--     not resurrect stale notices.  notifications.user_id is not an
+--     FK to students (no delete block), so this is pure hygiene.
+--     audit_logs are PERMANENT by design (052) and left alone.
+-- ---------------------------------------------------------------------
+delete from public.notifications n
+using public.students s
+where n.user_id = s.id
   and s.lrn = any(array['999900000201', '999900000202', '999900000203', '999900000204', '999900000205', '999900000206', '999900000207', '999900000208', '999900000209', '999900000210', '999900000211', '999900000212', '999900000213', '999900000214', '999900000215', '999900000216', '999900000217', '999900000218', '999900000219', '999900000220', '999900000221', '999900000222', '999900000223', '999900000224', '999900000225', '999900000226', '999900000227', '999900000228', '999900000229', '999900000230', '999900000231', '999900000232', '999900000233', '999900000234', '999900000235', '999900000236', '999900000237', '999900000238', '999900000239', '999900000240', '999900000241', '999900000242', '999900000251', '999900000252', '999900000253', '999900000254', '999900000255', '999900000256', '999900000257', '999900000258']);
 
 -- ---------------------------------------------------------------------
@@ -316,7 +334,7 @@ $$;
 commit;
 
 -- ---------------------------------------------------------------------
--- Verify: expect removed_candidates = 50, removed_parties = 3,
+-- Verify: expect removed_candidates = 46, removed_parties = 3,
 -- period_votes_left = 0, period_complaints_left = 0,
 -- archive_rows_left = 0 (null only if 061/064/085 were never applied),
 -- period_exists = false (or true with 0 of this batch's rows left if

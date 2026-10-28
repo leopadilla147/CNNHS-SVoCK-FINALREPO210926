@@ -260,6 +260,7 @@ insert into public.candidates (
   grade_level, "position", party_id,
   gender, date_of_birth, age,
   email, mobile_number, home_address,
+  home_address_province_code, home_address_city_code, home_address_barangay_code,
   picture_url, leadership_profile,
   doc_application_form, doc_introductory_profile,
   doc_eaf_front, doc_eaf_back,
@@ -275,8 +276,9 @@ select
   st.email,
   '09' || right(st.lrn, 9),
   'Purok 1 Brgy. Bagong Silang I Labo, Camarines Norte',
+  '051600000', '051606000', '051606005',
   spec.picture_url,
-  '{"skills":["Leadership","Teamwork","Problem-Solving"],"qualities":"I believe discipline, reliability and fairness make a dependable representative. I am ready to listen to my fellow students and work with them on what matters most."}'::jsonb,
+  '{"capsuleQualities":"Great leadership is built on integrity, humility and consistent service. I plan to lead by example, coordinate projects with patience, and make sure every voice in my grade is heard before decisions are made.","skills":["Leadership","Teamwork","Problem-Solving"],"qualities":"I believe discipline, reliability and fairness make a dependable representative. I am ready to listen to my fellow students and work with them on what matters most."}'::jsonb,
   true, true, false, false,
   case when spec.party_id is null or spec.position = 'President'
        then 'notRequired'

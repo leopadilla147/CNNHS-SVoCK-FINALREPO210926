@@ -246,4 +246,32 @@ describe("AdminLiveResults", () => {
       expect(screen.getByText("135")).toBeInTheDocument();
     });
   });
+
+  it("shows the total abstain count across every position in the header", async () => {
+    candidates = [
+      candidate({ id: "c1" }),
+      candidate({ id: "c2", givenName: "John" }),
+      candidate({ id: "c3", position: "Vice President", givenName: "Max" }),
+    ];
+    mockRpc.mockResolvedValue({
+      data: [
+        liveRow("c1", "President", 100),
+        liveRow("c2", "President", 25),
+        liveRow("c3", "Vice President", 10),
+      ],
+      error: null,
+    });
+    mockGetLiveAbstainSummaryRpc.mockResolvedValue([
+      { election_period_id: PERIOD_ID, position: "President", abstain_count: 3 },
+      { election_period_id: PERIOD_ID, position: "Vice President", abstain_count: 2 },
+    ]);
+    render(<AdminLiveResults />);
+
+    // 3 + 2 abstains across both positions, shown beside the vote total.
+    await waitFor(() => {
+      expect(screen.getByText("Total Abstains")).toBeInTheDocument();
+    });
+    const abstainBlock = screen.getByText("Total Abstains").parentElement!;
+    expect(within(abstainBlock).getByText("5")).toBeInTheDocument();
+  });
 });

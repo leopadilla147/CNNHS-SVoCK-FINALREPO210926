@@ -1020,6 +1020,9 @@ function mapCandidate(row: any): Candidate {
     mobileNumber: row.mobile_number,
     landline: row.landline || undefined,
     homeAddress: row.home_address,
+    addressProvinceCode: row.home_address_province_code || undefined,
+    addressCityCode: row.home_address_city_code || undefined,
+    addressBarangayCode: row.home_address_barangay_code || undefined,
     parentGuardianName: row.parent_guardian_name || undefined,
     parentGuardianContact: row.parent_guardian_contact || undefined,
     picture: row.picture_url || undefined,
@@ -1667,6 +1670,26 @@ export async function listStaffRosterRpc(): Promise<StaffRosterRow[]> {
   const { data, error } = await supabase.rpc("list_staff_roster_rpc");
   if (error) throw new Error(error.message);
   return (data || []) as StaffRosterRow[];
+}
+
+/**
+ * The two EAF page-1 signatory names (110) — the ACTIVE Screening and
+ * Validation Commissioner and the ACTIVE Chief Commissioner.  Students call
+ * this when rendering the EAF preview: list_staff_roster_rpc is chief-gated
+ * and adminprofiles is unreadable directly, so this minimal SECURITY DEFINER
+ * read is the only path to the printed "Verified by / Approved by" names.
+ * Null means the role is vacant — the EAF falls back to its placeholders.
+ */
+export interface EafSignatories {
+  screening_commissioner: string | null;
+  chief_commissioner: string | null;
+}
+
+export async function fetchEafSignatoriesRpc(): Promise<EafSignatories> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { data, error } = await supabase.rpc("eaf_signatories_rpc");
+  if (error) throw new Error(error.message);
+  return (data || { screening_commissioner: null, chief_commissioner: null }) as EafSignatories;
 }
 
 /**
@@ -2370,6 +2393,10 @@ export interface ProclaimedWinner {
   votes: number;
   /** 'manual' when the position was a Board-resolved tie, otherwise null. */
   resolutionMethod: string | null;
+  /** Candidate photo (public storage URL) for the Stage 5 winners grid. */
+  picture?: string | null;
+  /** Winner's candidate row id — present on rows read back from the ledger. */
+  candidateId?: string | null;
 }
 
 /**
@@ -2409,6 +2436,46 @@ export async function proclaimWinnersRpc(
     votes: row.votes,
     resolutionMethod: row.resolution_method ?? null,
   }));
+}
+
+/**
+ * Read the proclaimed winners back from the `proclamations` ledger.  The RPC
+ * above only returns them at the moment of proclaiming — the admin setup
+ * page holds them in component state, so a page reload would blank the
+ * Stage 5 grid even though the rows persist forever.  This rehydrates them,
+ * joining the candidate row for the display name (same order as the RPC:
+ * given name then surname, positions ascending) and the public photo URL.
+ * Soft-fails to an empty list so an un-migrated database can never break
+ * the page — the fallback text covers the gap.
+ */
+export async function getProclaimedWinners(
+  electionPeriodId: string
+): Promise<ProclaimedWinner[]> {
+  if (!supabase) return [];
+  try {
+    const { data, error } = await supabase
+      .from("proclamations")
+      .select(
+        "winning_position, candidate_id, votes, resolution_method, " +
+        "candidates(surname, given_name, picture_url)"
+      )
+      .eq("election_period_id", electionPeriodId)
+      .order("winning_position");
+    if (error) return [];
+    return (data || []).map((row: any) => {
+      const cand = row.candidates;
+      return {
+        position: row.winning_position,
+        winnerName: cand ? `${cand.given_name} ${cand.surname}`.trim() : "",
+        votes: row.votes,
+        resolutionMethod: row.resolution_method ?? null,
+        candidateId: row.candidate_id || null,
+        picture: cand?.picture_url || null,
+      };
+    });
+  } catch {
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------

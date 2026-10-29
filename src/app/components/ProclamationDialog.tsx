@@ -31,12 +31,23 @@ const POSITION_INDEX = new Map<string, number>(
 
 export interface PositionTally {
   position: string;
+  /** Seats the position elects — 2 for Grade Level Representatives (117). */
+  seats: number;
   /** Candidates in running order — highest vote first. */
   candidates: ProclamationTallyRow[];
   topVotes: number;
-  /** Every candidate sharing the top count (> 1 means a tie). */
+  /** Every candidate sharing the top count. */
   tied: ProclamationTallyRow[];
+  /** True when the board must resolve something before proclaiming. */
   isTie: boolean;
+  /** How many winners the board must pick (0 = proclaimed automatically). */
+  picksNeeded: number;
+  /** The tied candidates the board picks from when picksNeeded > 0. */
+  pickGroup: ProclamationTallyRow[];
+  /** Winners proclaimed automatically, without a board pick. */
+  autoWinners: ProclamationTallyRow[];
+  /** 117 — exactly `seats` candidates tie at the top and ALL win. */
+  bothWin: boolean;
 }
 
 /** The candidate's profile details joined onto a tally row by id. */
@@ -46,7 +57,22 @@ export interface CandidateProfile {
   gradeLevel?: string;
 }
 
-/** Group the flat tally rows into positions, ranked highest-vote-first. */
+/** 117 — Grade Level Representative positions elect two winners; every
+ *  other position elects one. */
+export function seatsForPosition(position: string): number {
+  return position.endsWith(" Representative") ? 2 : 1;
+}
+
+/**
+ * Group the flat tally rows into positions, ranked highest-vote-first, and
+ * work out what (if anything) the board must resolve per position:
+ *   - fewer top-count candidates than seats → they win outright; the next
+ *     count fills the remaining seat(s), and a tie there (2+ candidates
+ *     sharing the next count) needs exactly one board pick;
+ *   - exactly `seats` tied at the top → ALL win (117: a 2-way Grade Rep
+ *     tie elects both, no pick needed);
+ *   - more tied candidates than seats → the board picks `seats` of them.
+ */
 export function groupTally(tally: ProclamationTallyRow[]): PositionTally[] {
   const byPosition = new Map<string, ProclamationTallyRow[]>();
   for (const row of tally) {
@@ -57,12 +83,55 @@ export function groupTally(tally: ProclamationTallyRow[]): PositionTally[] {
 
   return [...byPosition.entries()]
     .map(([position, rows]) => {
+      const seats = seatsForPosition(position);
       const candidates = [...rows].sort(
         (a, b) => b.votes - a.votes || a.candidateName.localeCompare(b.candidateName),
       );
       const topVotes = candidates[0]?.votes ?? 0;
       const tied = candidates.filter((c) => c.votes === topVotes);
-      return { position, candidates, topVotes, tied, isTie: tied.length > 1 };
+      const autoWinners: ProclamationTallyRow[] = [];
+      let picksNeeded = 0;
+      let pickGroup: ProclamationTallyRow[] = [];
+
+      if (tied.length < seats) {
+        // The top count fills fewer seats than the position elects: every
+        // top-count candidate is a default winner.
+        autoWinners.push(...tied);
+        const rest = candidates.filter((c) => c.votes < topVotes);
+        if (rest.length > 0) {
+          const nextVotes = rest[0].votes;
+          const nextTied = rest.filter((c) => c.votes === nextVotes);
+          const remaining = seats - autoWinners.length;
+          if (nextTied.length <= remaining) {
+            // Unique runner-up (or not enough candidates) — fills the seat.
+            autoWinners.push(...nextTied);
+          } else {
+            // A tie for the last seat: the board picks one.
+            picksNeeded = remaining;
+            pickGroup = nextTied;
+          }
+        }
+      } else if (tied.length === seats) {
+        // Exactly `seats` candidates tie at the top — they all fit.
+        autoWinners.push(...tied);
+      } else {
+        // More tied candidates than seats: the board picks `seats`.
+        picksNeeded = seats;
+        pickGroup = tied;
+      }
+
+      return {
+        position,
+        seats,
+        candidates,
+        topVotes,
+        tied,
+        isTie: picksNeeded > 0,
+        picksNeeded,
+        pickGroup,
+        autoWinners,
+        bothWin: picksNeeded === 0 && seats > 1 && tied.length === seats,
+      };
     })
     .sort(
       (a, b) =>
@@ -72,14 +141,18 @@ export function groupTally(tally: ProclamationTallyRow[]): PositionTally[] {
 }
 
 /**
- * A per-tie draft: only the board's chosen winner lives here.  085b — the
- * resolution METHOD is one shared decision for the whole election (recorded
- * below the complaint note), so a tie is resolved once its winner is picked.
+ * A per-position draft: the board's chosen winner(s) of a tie (117 — up to
+ * two for a Grade Level Representative tie) and/or the "Remain Winner"
+ * affirmation of the default winner when a complaint is on record.  085b —
+ * the resolution METHOD is one shared decision for the whole election
+ * (recorded below the complaint note), so a tie is resolved once its
+ * winner(s) are picked.
  */
-type DraftResolution = { method: "manual"; candidateId?: string };
+type DraftResolution = { method?: "manual"; candidateIds?: string[]; remainWinner?: boolean };
 
-function isResolved(resolution: DraftResolution | undefined): boolean {
-  return !!resolution?.candidateId;
+/** The board has named exactly the required number of winners. */
+function isResolved(resolution: DraftResolution | undefined, picksNeeded: number): boolean {
+  return picksNeeded > 0 && (resolution?.candidateIds?.length ?? 0) === picksNeeded;
 }
 
 function tallyVoteLabel(votes: number): string {
@@ -108,6 +181,10 @@ interface ProclamationDialogProps {
   profiles?: Record<string, CandidateProfile>;
   /** Subjects of the complaints still filed against this election (081). */
   complaintSubjects: string[];
+  /** 117 — TRUE when ANY complaint is on record for this election (filed
+   *  or resolved): every default (highest-vote) winner must then be
+   *  affirmed with "Remain Winner" before the board may proclaim. */
+  hasComplaints: boolean;
   /** 097 — the election's SUBSTANTIATED grievances (already resolved), each
    *  with its read-only findings shown beside the subject. */
   substantiatedGrievances: SubstantiatedGrievance[];
@@ -123,12 +200,16 @@ interface ProclamationDialogProps {
 
 /**
  * 069 — the proclaim-winners review.  Shows the tally for every position
- * with the highest vote on top, flags ties, and asks the Electoral Board
- * to pick the winner of each tied position.  085b — ONE resolution method
- * for the whole election is recorded below the complaint note and applies
- * to every tie, instead of being re-entered inside each per-candidate
- * confirm.  When a complaint is still filed, the board decides the
- * winners and records a note on the complaint.
+ * with the highest vote on top, flags ties, and asks the Electoral Board to
+ * pick the winner of each tied position.  117 — Grade Level Representative
+ * positions elect TWO winners: a unique 1-2 finish or a 2-way top tie
+ * proclaims both automatically, a 3+-way tie needs two picks, and a tie for
+ * the remaining seat needs one.  When a complaint is on record, every
+ * default (highest-vote) winner must be affirmed with "Remain Winner".
+ * 085b — ONE resolution method for the whole election is recorded below the
+ * complaint note and applies to every resolved tie, instead of being
+ * re-entered inside each per-candidate confirm.  When a complaint is still
+ * filed, the board decides the winners and records a note on the complaint.
  */
 export function ProclamationDialog({
   open,
@@ -138,6 +219,7 @@ export function ProclamationDialog({
   tally,
   profiles = {},
   complaintSubjects,
+  hasComplaints,
   substantiatedGrievances,
   otherResolved,
   onCancel,
@@ -170,8 +252,14 @@ export function ProclamationDialog({
 
   if (!open) return null;
 
-  const tiePositions = positions.filter((p) => p.isTie);
-  const unresolvedTies = tiePositions.filter((p) => !isResolved(resolutions[p.position]));
+  const tiePositions = positions.filter((p) => p.picksNeeded > 0);
+  const unresolvedTies = tiePositions.filter((p) => !isResolved(resolutions[p.position], p.picksNeeded));
+  // 117 — with a complaint on record, every position whose top candidate is
+  // the DEFAULT winner (strictly the highest vote — a 2-way Grade Rep tie
+  // has no single default winner) must be affirmed with "Remain Winner".
+  const remainNeeded = hasComplaints
+    ? positions.filter((p) => p.tied.length === 1 && p.autoWinners.length > 0 && !resolutions[p.position]?.remainWinner)
+    : [];
   const complaintsPending = complaintSubjects.length > 0;
   const decisionReady = !complaintsPending || complaintNote.trim() !== "";
   // 097/114 — a substantiated grievance requires the Board's one-time
@@ -181,7 +269,9 @@ export function ProclamationDialog({
   const otherResolvedPending = otherResolved.length > 0;
   const anyDecidedGrievance = substantiatedPending || otherResolvedPending;
   const reasonReady = !anyDecidedGrievance || complaintReason.trim() !== "";
-  // 085b — one method covers every tie; "Others" needs its text.
+  // 085b — one method covers every tie the board resolves; "Others" needs
+  // its text.  (A 2-way Grade Rep tie proclaims both automatically and
+  // needs no method — only picksNeeded ties count here.)
   const tieMethodReady =
     tiePositions.length === 0 ||
     (tieMethod !== "" && (tieMethod !== "others" || tieOther.trim() !== ""));
@@ -201,7 +291,7 @@ export function ProclamationDialog({
     : tieMethod === "draw_lots" ? "Draw Lots"
     : tieOther.trim();
   const canProclaim =
-    !loading && !confirming && positions.length > 0 && unresolvedTies.length === 0 && decisionReady && reasonReady && tieMethodReady;
+    !loading && !confirming && positions.length > 0 && unresolvedTies.length === 0 && remainNeeded.length === 0 && decisionReady && reasonReady && tieMethodReady;
 
   const setResolution = (position: string, resolution: DraftResolution) => {
     setResolutions((prev) => ({ ...prev, [position]: resolution }));
@@ -213,25 +303,46 @@ export function ProclamationDialog({
 
   const confirmPick = () => {
     if (!pendingPick) return;
-    setResolution(pendingPick.position, {
-      method: "manual",
-      candidateId: pendingPick.candidate.candidateId,
+    setResolutions((prev) => {
+      const current = prev[pendingPick.position] ?? {};
+      const ids = current.candidateIds ?? [];
+      if (ids.includes(pendingPick.candidate.candidateId)) return prev;
+      return {
+        ...prev,
+        [pendingPick.position]: {
+          ...current,
+          method: "manual",
+          candidateIds: [...ids, pendingPick.candidate.candidateId],
+        },
+      };
     });
     setPendingPick(null);
+  };
+
+  // 117 — the "Remain Winner" affirmation of the default winner.
+  const toggleRemainWinner = (position: string) => {
+    setResolutions((prev) => {
+      const current = prev[position] ?? {};
+      return { ...prev, [position]: { ...current, remainWinner: !current.remainWinner } };
+    });
   };
 
   const handleConfirm = () => {
     const payload: Record<string, TieResolution> = {};
     for (const p of positions) {
       const resolution = resolutions[p.position];
-      if (!p.isTie || !isResolved(resolution)) continue;
-      if (resolution && resolution.method === "manual" && resolution.candidateId) {
-        payload[p.position] = {
-          method: "manual",
-          candidateId: resolution.candidateId,
-          // 085b — the one shared decision, written onto every tie.
-          tieBreak: sharedTieBreak,
-        };
+      const entry: TieResolution = {};
+      if (p.picksNeeded > 0 && isResolved(resolution, p.picksNeeded) && resolution?.method === "manual") {
+        entry.method = "manual";
+        entry.candidateIds = resolution.candidateIds;
+        // 085b — the one shared decision, written onto every resolved tie.
+        entry.tieBreak = sharedTieBreak;
+      }
+      if (hasComplaints && resolution?.remainWinner && p.tied.length === 1 && p.autoWinners.length > 0) {
+        entry.remainWinner = true;
+      }
+      if (entry.method || entry.remainWinner) {
+        payload[p.position] = entry;
       }
     }
     onConfirm(payload, {
@@ -445,43 +556,62 @@ export function ProclamationDialog({
 
               {positions.map((p) => {
                 const resolution = resolutions[p.position];
+                const picksSoFar = resolution?.candidateIds?.length ?? 0;
+                // 117 — the pick targets are the tied group the board must
+                // resolve: the top-count candidates themselves when more
+                // are tied than there are seats, or the next-count
+                // candidates when a unique leader leaves one seat to a tie.
+                const pickVotes = p.pickGroup[0]?.votes ?? null;
+                const remainAffirmed = !!resolution?.remainWinner && p.autoWinners.length > 0;
                 return (
                   <section key={p.position} className="rounded-2xl border border-gray-200 overflow-hidden">
                     <div className="flex items-center justify-between gap-2 px-4 py-3 bg-gray-50 border-b border-gray-100">
-                      <h4 className="text-sm font-semibold text-gray-900">{p.position}</h4>
-                      {p.isTie ? (
+                      <h4 className="text-sm font-semibold text-gray-900">
+                        {p.position}
+                        {p.seats > 1 && (
+                          <span className="ml-2 text-[11px] font-normal text-gray-500">2 winners</span>
+                        )}
+                      </h4>
+                      {p.picksNeeded > 0 ? (
                         <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
-                          Tie
+                          {p.pickGroup.length}-way tie — pick {p.picksNeeded}
+                        </span>
+                      ) : p.bothWin ? (
+                        <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+                          2-way tie — both win
                         </span>
                       ) : (
                         <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-green-100 text-green-700 border border-green-200">
-                          Winner
+                          {p.autoWinners.length > 1 ? "Winners" : "Winner"}
                         </span>
                       )}
                     </div>
 
                     <div className="p-2 space-y-1.5">
                       {p.candidates.map((c) => {
-                        const isTop = c.votes === p.topVotes;
-                        const isLeader = isTop;
                         const percentage = p.topVotes > 0 ? (c.votes / p.topVotes) * 100 : 0;
-                        const manualPick = resolution?.method === "manual" && resolution.candidateId === c.candidateId;
+                        const isPickTarget = pickVotes !== null && c.votes === pickVotes;
+                        const manualPick = resolution?.method === "manual" && !!resolution.candidateIds?.includes(c.candidateId);
+                        const isAutoWinner = p.autoWinners.some((w) => w.candidateId === c.candidateId);
                         // 081 — the tally rows ARE the choice: for a tied
-                        // position every top-count candidate is a pick target,
-                        // so no separate tie list is rendered below.  The
-                        // board can only pick once the Complaint Resolution
-                        // and Justification (097/114) and the shared tie
-                        // method are both recorded.
-                        const selectable = p.isTie && isTop && !picksLocked;
+                        // position every candidate in the pick group is a
+                        // pick target, so no separate tie list is rendered
+                        // below.  The board can only pick once the Complaint
+                        // Resolution and Justification (097/114) and the
+                        // shared tie method are both recorded, and only
+                        // until the required number of picks is reached.
+                        const selectable = isPickTarget && !picksLocked && picksSoFar < p.picksNeeded;
                         // Greyed out while the Complaint Resolution and
                         // Justification (097/114) or the shared tie method is
                         // still missing — the choice exists but cannot be
                         // made yet.
-                        const pickLockedRow = p.isTie && isTop && picksLocked;
-                        // The trophy marks ONLY a winner: the clean-win leader,
-                        // or the tied candidate the board actually chose.  The
-                        // whole winner row wears the proclamation colour.
-                        const showTrophy = manualPick || (!p.isTie && isTop);
+                        const pickLockedRow = isPickTarget && !selectable && !manualPick;
+                        // The trophy marks ONLY a winner: a default winner
+                        // (117 — includes both winners of a 2-way Grade Rep
+                        // tie), or the tied candidate(s) the board chose.
+                        // The whole winner row wears the proclamation colour.
+                        const showTrophy = isAutoWinner || manualPick;
+                        const isLeader = isAutoWinner || isPickTarget;
                         const profile = profiles[c.candidateId];
                         const rowClass = `relative overflow-hidden rounded-xl border px-3 py-2 flex items-center gap-3 w-full text-left ${
                           showTrophy
@@ -569,7 +699,11 @@ export function ProclamationDialog({
                             className={rowClass}
                             title={
                               pickLockedRow
-                                ? `Record ${lockedBecause} above before choosing a winner.`
+                                ? picksSoFar >= p.picksNeeded
+                                  ? p.picksNeeded === 1
+                                    ? "The winner of this position has been chosen already."
+                                    : "Both winners of this position have been chosen already."
+                                  : `Record ${lockedBecause} above before choosing a winner.`
                                 : undefined
                             }
                           >
@@ -579,7 +713,49 @@ export function ProclamationDialog({
                       })}
                     </div>
 
-                    {p.isTie && (
+                    {/* 117 — with a complaint on record, the default
+                        (highest-vote) winner keeps the seat only once the
+                        board affirms it: "Remain Winner".  Tie-resolved
+                        seats need no affirmation — the board's pick there
+                        already IS the decision, and a 2-way Grade Rep tie
+                        elects both by rule. */}
+                    {hasComplaints && p.tied.length === 1 && p.autoWinners.length > 0 && (
+                      <div className="border-t border-gray-100 bg-gray-50/80 p-3 space-y-2">
+                        <div className="text-[11px] font-bold uppercase tracking-wider text-gray-700 flex items-center gap-1.5">
+                          <ShieldAlert size={13} /> Complaint on record
+                        </div>
+                        <div className="flex items-start gap-2 text-xs text-gray-700">
+                          <div className="w-4 h-4 mt-0.5 flex items-center justify-center">
+                            <Gavel size={13} />
+                          </div>
+                          <span>
+                            <span className="font-medium text-gray-900 flex items-center gap-1">
+                              {p.autoWinners.length > 1
+                                ? "Both highest-vote winners keep their seats."
+                                : "The highest-vote winner keeps the seat."}
+                            </span>
+                            <span className="block text-[11px] text-gray-500">
+                              Confirm &ldquo;Remain Winner&rdquo; so the record shows the Board weighed the complaint and the winner stands.
+                            </span>
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => toggleRemainWinner(p.position)}
+                          disabled={confirming || loading}
+                          className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold border transition-colors disabled:opacity-50 ${
+                            remainAffirmed
+                              ? "bg-green-600 border-green-600 text-white hover:bg-green-700"
+                              : "bg-white border-gray-300 text-gray-700 hover:border-[#5C0102]/40 hover:text-gray-900"
+                          }`}
+                        >
+                          {remainAffirmed ? <CheckCircle2 size={14} /> : <Gavel size={14} />}
+                          {remainAffirmed ? "Remain Winner — affirmed" : "Remain Winner"}
+                        </button>
+                      </div>
+                    )}
+
+                    {p.picksNeeded > 0 && (
                       <div className="border-t border-amber-100 bg-amber-50/60 p-3 space-y-2">
                         <div className="text-[11px] font-bold uppercase tracking-wider text-amber-800 flex items-center gap-1.5">
                           <AlertTriangle size={13} /> Tie — the Electoral Board chooses
@@ -590,7 +766,9 @@ export function ProclamationDialog({
                           </div>
                           <span>
                             <span className="font-medium text-gray-900 flex items-center gap-1">
-                              Pick a highlighted candidate above
+                              {p.picksNeeded === 1
+                                ? "Pick a highlighted candidate above"
+                                : "Pick 2 highlighted candidates above"}
                             </span>
                             <span className="block text-[11px] text-gray-500">
                               The one resolution method recorded above covers every tie in this election.
@@ -598,11 +776,15 @@ export function ProclamationDialog({
                           </span>
                         </div>
 
-                        {!isResolved(resolution) && (
+                        {!isResolved(resolution, p.picksNeeded) && (
                           <div className="text-[11px] text-amber-700">
                             {picksLocked
                               ? `Record ${lockedBecause} above before choosing a winner.`
-                              : "Select the candidate to proclaim as the winner."}
+                              : picksSoFar > 0
+                                ? `${p.picksNeeded - picksSoFar} more pick${p.picksNeeded - picksSoFar === 1 ? "" : "s"} to go.`
+                                : p.picksNeeded === 1
+                                  ? "Select the candidate to proclaim as the winner."
+                                  : "Select both candidates to proclaim as winners."}
                           </div>
                         )}
                       </div>
@@ -643,13 +825,15 @@ export function ProclamationDialog({
             title={
               unresolvedTies.length > 0
                 ? "Proclaim a winner for every tied position first."
-                : !tieMethodReady
-                  ? "Record how the tie was resolved first."
-                  : !reasonReady
-                    ? "Record the Complaint Resolution and Justification first."
-                    : !decisionReady
-                      ? "Record the Board's decision reason and the complaint note first."
-                      : undefined
+                : remainNeeded.length > 0
+                  ? 'Confirm "Remain Winner" for every position with a complaint first.'
+                  : !tieMethodReady
+                    ? "Record how the tie was resolved first."
+                    : !reasonReady
+                      ? "Record the Complaint Resolution and Justification first."
+                      : !decisionReady
+                        ? "Record the Board's decision reason and the complaint note first."
+                        : undefined
             }
             className="px-5 py-2.5 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:opacity-90 disabled:opacity-50"
             style={{ backgroundColor: "#5C0102" }}

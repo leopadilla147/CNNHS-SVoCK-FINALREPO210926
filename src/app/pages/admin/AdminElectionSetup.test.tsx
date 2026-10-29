@@ -158,13 +158,6 @@ function toLocalDate(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-/** 113 — n days after a YYYY-MM-DD day, as YYYY-MM-DD (spacing-rule fixtures). */
-function plusDays(day: string, n: number): string {
-  const d = new Date(`${day}T00:00:00`);
-  d.setDate(d.getDate() + n);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
 function renderPage() {
   return render(
     <MemoryRouter>
@@ -938,9 +931,9 @@ describe("AdminElectionSetup", () => {
     });
   });
 
-  it("spaces the voting pickers off the campaign end and allows a same-day voting end (113)", () => {
-    // Voting opens two days after the Campaign Period ends (whichever of
-    // that and tomorrow is later), and may end the very day it starts.
+  it("keeps the plain tomorrow floor on the voting start and allows a same-day end (113)", () => {
+    // The spacing logic was rolled back: the start picker opens tomorrow,
+    // and the end may share the start's day.
     electionPeriod = period({
       lifecycleStage: "fingerprint_registration",
       candidacyOpen: false,
@@ -955,36 +948,8 @@ describe("AdminElectionSetup", () => {
     });
     renderPage();
 
-    expect(screen.getByLabelText("Start Date")).toHaveAttribute("min", futureDate(6));
+    expect(screen.getByLabelText("Start Date")).toHaveAttribute("min", futureDate(1));
     expect(screen.getByLabelText("End Date")).toHaveAttribute("min", "2026-11-02");
-  });
-
-  it("refuses a voting start less than two days after the campaign ends (113)", async () => {
-    const user = userEvent.setup();
-    electionPeriod = period({
-      lifecycleStage: "fingerprint_registration",
-      candidacyOpen: false,
-      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
-      fingerprintRegistrationStartAt: localIso(1, "08:00"),
-      campaignStartDate: localIso(2, "08:00"),
-      campaignEndDate: localIso(4, "17:00"),
-      startDate: futureDate(10),
-      startTime: "08:00",
-      endDate: futureDate(10),
-      endTime: "17:00",
-    });
-    candidates = fullRoster();
-    renderPage();
-
-    await gotoStage(user, "Voting");
-    await user.click(screen.getByRole("button", { name: "Edit the Voting Schedule" }));
-    // Move the start onto campaignEnd+1 — inside the two-day spacing.
-    await user.clear(screen.getByLabelText("Start Date"));
-    await user.type(screen.getByLabelText("Start Date"), futureDate(5));
-    await user.click(screen.getByRole("button", { name: /Save Changes/ }));
-
-    expect(mockSetElectionPeriod).not.toHaveBeenCalled();
-    expect(screen.getByText("Voting must start at least two days after the Campaign Period ends.")).toBeInTheDocument();
   });
 
   it("Reopen Voting refuses an empty or wrong Electoral Board password", async () => {
@@ -1430,7 +1395,7 @@ describe("AdminElectionSetup", () => {
     await user.type(screen.getByLabelText("Campaign End"), futureDate(2));
     await user.click(screen.getByRole("button", { name: /Start Campaign/ }));
 
-    expect(screen.getByText(/end date must be after the start date/)).toBeInTheDocument();
+    expect(screen.getByText(/must end at least one day after it starts/)).toBeInTheDocument();
     expect(mockSaveCampaignWindowRpc).not.toHaveBeenCalled();
   });
 
@@ -1564,40 +1529,43 @@ describe("AdminElectionSetup", () => {
     expect(mockSaveCampaignWindowRpc).not.toHaveBeenCalled();
   });
 
-  it("spaces the campaign pickers off the meeting — start at +2 days, end at start + 1 (113)", () => {
-    // Meeting on day X: the Campaign Start picker opens on X+2 and the
-    // Campaign End picker on X+3 — no stage boundary shares a day.
+  it("opens the Campaign End picker the day after the chosen start (113)", () => {
+    // 113 — the window may not open and close on the same day: with the
+    // saved window loaded, the end picker's floor is start + 1.  The start
+    // picker keeps the plain tomorrow floor.
     electionPeriod = period({
       lifecycleStage: "campaign",
       candidacyOpen: false,
-      rulesDiscussionAt: localIso(5, "09:00"),
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      campaignStartDate: localIso(2, "08:00"),
+      campaignEndDate: localIso(4, "17:00"),
     });
     renderPage();
 
-    const meetingDay = toLocalDate(localIso(5, "09:00"));
-    expect(screen.getByLabelText("Campaign Start")).toHaveAttribute("min", plusDays(meetingDay, 2));
-    expect(screen.getByLabelText("Campaign End")).toHaveAttribute("min", plusDays(meetingDay, 3));
+    expect(screen.getByLabelText("Campaign Start")).toHaveAttribute("min", futureDate(1));
+    expect(screen.getByLabelText("Campaign End")).toHaveAttribute("min", futureDate(3));
   });
 
-  it("refuses a Campaign window that starts less than two days after the meeting (113)", async () => {
+  it("refuses a Campaign window that opens and closes on the same day (113)", async () => {
     const user = userEvent.setup();
     electionPeriod = period({
       lifecycleStage: "campaign",
       candidacyOpen: false,
-      rulesDiscussionAt: localIso(5, "09:00"),
-      campaignStartDate: localIso(7, "08:00"),
-      campaignEndDate: localIso(9, "17:00"),
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      campaignStartDate: localIso(2, "08:00"),
+      campaignEndDate: localIso(4, "17:00"),
     });
     renderPage();
 
     await user.click(screen.getByRole("button", { name: "Edit the Campaign Period" }));
-    // Move the start onto meeting+1 — inside the two-day spacing.
-    await user.clear(screen.getByLabelText("Campaign Start"));
-    await user.type(screen.getByLabelText("Campaign Start"), futureDate(6));
+    // Move the end onto the start's day — the window must run at least a
+    // full day.
+    await user.clear(screen.getByLabelText("Campaign End"));
+    await user.type(screen.getByLabelText("Campaign End"), futureDate(2));
     await user.click(screen.getByRole("button", { name: /Update Campaign Window/ }));
 
     expect(mockSaveCampaignWindowRpc).not.toHaveBeenCalled();
-    expect(screen.getByText("The Campaign Period must start at least two days after the Rules Discussion Meeting.")).toBeInTheDocument();
+    expect(screen.getByText("The Campaign Period must end at least one day after it starts.")).toBeInTheDocument();
   });
 
   it("ends the Campaign Period early via the End Campaign Early button", async () => {
@@ -2263,7 +2231,7 @@ describe("AdminElectionSetup", () => {
           {
             Secretary: {
               method: "manual",
-              candidateId: "s1",
+              candidateIds: ["s1"],
               tieBreak: "Coin Toss",
             },
           },
@@ -2322,6 +2290,11 @@ describe("AdminElectionSetup", () => {
       expect(within(dialog).getByText("Ballot receipts confirmed a proxy vote.")).toBeInTheDocument();
 
       await user.type(within(dialog).getByLabelText(/Complaint Resolution and Justification/), "Results were tainted by the substantiated grievance.");
+
+      // 117 — a complaint is on record, so the default President winner
+      // must be affirmed with "Remain Winner" before proclaiming unlocks.
+      expect(proclaim).toBeDisabled();
+      await user.click(within(dialog).getByRole("button", { name: "Remain Winner" }));
       expect(proclaim).toBeEnabled();
     });
 
@@ -2386,13 +2359,17 @@ describe("AdminElectionSetup", () => {
         within(dialog).getByLabelText(/Complaint Resolution and Justification/),
         "The grievance did not change the outcome.",
       );
+
+      // 117 — the complaint on record obliges the board to affirm the
+      // default President winner before proclaiming.
+      await user.click(within(dialog).getByRole("button", { name: "Remain Winner" }));
       expect(proclaim).toBeEnabled();
 
       await user.click(proclaim);
       await waitFor(() => {
         expect(mockProclaimWinnersRpc).toHaveBeenCalledWith(
           PERIOD_ID,
-          {},
+          { President: { remainWinner: true } },
           { complaintNote: undefined, decisionReason: "The grievance did not change the outcome." },
         );
       });
@@ -2434,9 +2411,11 @@ describe("AdminElectionSetup", () => {
       const alert = await screen.findByRole("alertdialog");
       await user.click(within(alert).getByRole("button", { name: /Confirm Winner/ }));
       expect(within(dialog).getByText("Chosen")).toBeInTheDocument();
-      // The chosen winner row carries the proclamation colour.  (The name
-      // also appears in the bottom summary — take the tally-section match.)
-      const chosenRow = within(dialog).getAllByText("Cara One")[0].closest("button");
+      // The chosen winner row carries the proclamation colour.  (117 — the
+      // row locks once the seat is filled, so find it by its rounded row
+      // class; the name also appears in the bottom summary — take the
+      // tally-section match.)
+      const chosenRow = within(dialog).getAllByText("Cara One")[0].closest(".rounded-xl");
       expect(chosenRow).toHaveClass("bg-[#5C0102]");
     });
 
@@ -2466,6 +2445,140 @@ describe("AdminElectionSetup", () => {
       expect(within(dialog).getByText("2 of 2 winners selected")).toBeInTheDocument();
       expect(within(dialog).getByText("Tie resolution:")).toBeInTheDocument();
       expect(within(dialog).queryByText("Not recorded yet")).not.toBeInTheDocument();
+    });
+
+    it("proclaims BOTH winners of a 2-way Grade Level Representative tie without a board pick (117)", async () => {
+      const user = userEvent.setup();
+      electionPeriod = publishedPeriod();
+      mockGetProclamationTallyRpc.mockResolvedValue([
+        { position: "Grade 12 Representative", candidateId: "g1", candidateName: "Ella Tied", partyName: "Alpha", votes: 7 },
+        { position: "Grade 12 Representative", candidateId: "g2", candidateName: "Fe Tied", partyName: "Beta", votes: 7 },
+        { position: "Grade 12 Representative", candidateId: "g3", candidateName: "Gil Third", partyName: "Gamma", votes: 1 },
+        { position: "President", candidateId: "p1", candidateName: "Ada Leader", partyName: "Alpha", votes: 10 },
+        { position: "President", candidateId: "p2", candidateName: "Bea Runner", partyName: "Beta", votes: 4 },
+      ]);
+      renderPage();
+
+      await user.click(screen.getByRole("button", { name: /Publish & Proclaim Winners/ }));
+      const dialog = await screen.findByRole("dialog");
+
+      // The 2-way Grade Rep tie elects both by the standing rule — no
+      // resolution method, no pick, and both tied rows carry the trophy
+      // beside the clean-win President's.
+      expect(within(dialog).getByText("2-way tie — both win")).toBeInTheDocument();
+      expect(within(dialog).queryByLabelText("How the tie was resolved")).not.toBeInTheDocument();
+      expect(dialog.querySelectorAll("section svg.lucide-trophy").length).toBe(3);
+      expect(within(dialog).getByText("Winners to proclaim — 3 of 3 selected")).toBeInTheDocument();
+
+      await user.click(within(dialog).getByRole("button", { name: /Publish & Proclaim Winners/ }));
+      await waitFor(() => {
+        expect(mockProclaimWinnersRpc).toHaveBeenCalledWith(
+          PERIOD_ID,
+          {},
+          { complaintNote: undefined, decisionReason: undefined },
+        );
+      });
+    });
+
+    it("requires the board to pick 2 winners when 3 or more tie for a Grade Level Representative seat (117)", async () => {
+      const user = userEvent.setup();
+      electionPeriod = publishedPeriod();
+      mockGetProclamationTallyRpc.mockResolvedValue([
+        { position: "Grade 12 Representative", candidateId: "h1", candidateName: "Hana Tie", partyName: "Alpha", votes: 5 },
+        { position: "Grade 12 Representative", candidateId: "h2", candidateName: "Ivy Tie", partyName: "Beta", votes: 5 },
+        { position: "Grade 12 Representative", candidateId: "h3", candidateName: "May Tie", partyName: "Gamma", votes: 5 },
+        { position: "Grade 12 Representative", candidateId: "h4", candidateName: "Noa Third", partyName: "Delta", votes: 1 },
+        { position: "President", candidateId: "p1", candidateName: "Ada Leader", partyName: "Alpha", votes: 10 },
+        { position: "President", candidateId: "p2", candidateName: "Bea Runner", partyName: "Beta", votes: 4 },
+      ]);
+      renderPage();
+
+      await user.click(screen.getByRole("button", { name: /Publish & Proclaim Winners/ }));
+      const dialog = await screen.findByRole("dialog");
+
+      expect(within(dialog).getByText("3-way tie — pick 2")).toBeInTheDocument();
+      await user.selectOptions(within(dialog).getByLabelText("How the tie was resolved"), "Coin Toss");
+
+      // First pick lands; one more is still owed.
+      await user.click(within(dialog).getByRole("button", { name: /Hana Tie/ }));
+      const firstAlert = await screen.findByRole("alertdialog");
+      await user.click(within(firstAlert).getByRole("button", { name: /Confirm Winner/ }));
+      expect(within(dialog).getByText("Winners to proclaim — 2 of 3 selected")).toBeInTheDocument();
+      expect(within(dialog).getByText("1 more pick to go.")).toBeInTheDocument();
+
+      await user.click(within(dialog).getByRole("button", { name: /Ivy Tie/ }));
+      const secondAlert = await screen.findByRole("alertdialog");
+      await user.click(within(secondAlert).getByRole("button", { name: /Confirm Winner/ }));
+      expect(within(dialog).getByText("Winners to proclaim — 3 of 3 selected")).toBeInTheDocument();
+
+      await user.click(within(dialog).getByRole("button", { name: /Publish & Proclaim Winners/ }));
+      await waitFor(() => {
+        expect(mockProclaimWinnersRpc).toHaveBeenCalledWith(
+          PERIOD_ID,
+          {
+            "Grade 12 Representative": {
+              method: "manual",
+              candidateIds: ["h1", "h2"],
+              tieBreak: "Coin Toss",
+            },
+          },
+          { complaintNote: undefined, decisionReason: undefined },
+        );
+      });
+    });
+
+    it("requires Remain Winner on every default winner while a complaint is on record (117)", async () => {
+      const user = userEvent.setup();
+      electionPeriod = publishedPeriod();
+      // A resolved complaint is on record — publishing may proceed, but
+      // every default (highest-vote) winner must be affirmed first.
+      complaints = [{
+        id: "c1",
+        status: "accepted",
+        subject: "Late filing",
+        electionPeriodId: PERIOD_ID,
+        decision: "unsubstantiated",
+        findings: "No evidence supported the claim.",
+      }];
+      mockGetProclamationTallyRpc.mockResolvedValue([
+        { position: "President", candidateId: "p1", candidateName: "Ada Leader", partyName: "Alpha", votes: 10 },
+        { position: "President", candidateId: "p2", candidateName: "Bea Runner", partyName: "Beta", votes: 4 },
+        { position: "Grade 7 Representative", candidateId: "r1", candidateName: "Omar Rep", partyName: null, votes: 6 },
+        { position: "Grade 7 Representative", candidateId: "r2", candidateName: "Pia Rep", partyName: null, votes: 3 },
+      ]);
+      renderPage();
+
+      await user.click(screen.getByRole("button", { name: /Publish & Proclaim Winners/ }));
+      const dialog = await screen.findByRole("dialog");
+
+      const proclaim = within(dialog).getByRole("button", { name: /Publish & Proclaim Winners/ });
+      // The reason is owed for the decision on record, and BOTH positions
+      // with a default winner show the "Remain Winner" affirmation.
+      await user.type(within(dialog).getByLabelText(/Complaint Resolution and Justification/), "The grievance did not change the outcome.");
+      expect(within(dialog).getAllByText("Complaint on record").length).toBe(2);
+      expect(proclaim).toBeDisabled();
+
+      // Affirming one position is not enough — the other still blocks.
+      const remainButtons = within(dialog).getAllByRole("button", { name: "Remain Winner" });
+      expect(remainButtons.length).toBe(2);
+      await user.click(remainButtons[0]);
+      expect(within(dialog).getByRole("button", { name: "Remain Winner — affirmed" })).toBeInTheDocument();
+      expect(proclaim).toBeDisabled();
+
+      await user.click(within(dialog).getByRole("button", { name: "Remain Winner" }));
+      expect(proclaim).toBeEnabled();
+
+      await user.click(proclaim);
+      await waitFor(() => {
+        expect(mockProclaimWinnersRpc).toHaveBeenCalledWith(
+          PERIOD_ID,
+          {
+            President: { remainWinner: true },
+            "Grade 7 Representative": { remainWinner: true },
+          },
+          { complaintNote: undefined, decisionReason: "The grievance did not change the outcome." },
+        );
+      });
     });
   });
 });

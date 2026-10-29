@@ -15,7 +15,9 @@ export interface TempPasswordModalProps {
  *
  * 104: the credential shown is the account's ROLE DEFAULT password
  * (electoral123 / grievance123 / screening123 / sslg123 — chief123 seed
- * precedent).  It is shown EXACTLY once per creation:
+ * precedent; 118: a Co-commissioner instead gets the co-prefixed
+ * default — coelectoral123 / cogrievance123 / coscreening123).  It is
+ * shown EXACTLY once per creation:
  *   * masked by default with a reveal toggle (never visible on first paint);
  *   * a copy button moves it to the clipboard;
  *   * only the acknowledgement button closes the modal — the password

@@ -3,6 +3,7 @@ import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import GuidelinesPage from "./GuidelinesPage";
 import type { HomepageSettings } from "../context/AppContext";
+import { defaultHomepageSettings } from "../context/AppContext";
 
 // The page reads the settings through useApp, so it renders against a flat
 // context stub — no provider, no Supabase.
@@ -18,6 +19,7 @@ vi.mock("../context/AppContext", async (importOriginal) => {
 });
 
 const shipped: HomepageSettings = {
+  ...defaultHomepageSettings,
   contactEmail: "voting@cnnhs.edu.ph",
   location: "Camarines Norte National High School, Daet, Camarines Norte, Philippines",
   officeHoursStart: "08:00",

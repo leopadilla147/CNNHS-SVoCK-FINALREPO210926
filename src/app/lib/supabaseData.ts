@@ -1209,6 +1209,11 @@ export async function uploadAdminPicture(adminId: string, file: File | Blob): Pr
 
 /** 115: map the homepage_settings singleton row onto client state. */
 export function mapHomepageSettings(row: any): HomepageSettings {
+  // 119: About content — blank stored values fall back to the shipped
+  // wording so a cleared field never strands the About page.
+  const coreValues = Array.isArray(row.core_values)
+    ? row.core_values.map((v: any) => ({ title: String(v?.title ?? ""), gloss: String(v?.gloss ?? "") }))
+    : [];
   return {
     guidelinesUrl: row.guidelines_url || undefined,
     guidelinesName: row.guidelines_name || undefined,
@@ -1218,6 +1223,10 @@ export function mapHomepageSettings(row: any): HomepageSettings {
     // <input type="time"> controls expect.
     officeHoursStart: (row.office_hours_start || "").slice(0, 5) || defaultHomepageSettings.officeHoursStart,
     officeHoursEnd: (row.office_hours_end || "").slice(0, 5) || defaultHomepageSettings.officeHoursEnd,
+    briefInfo: row.brief_info || defaultHomepageSettings.briefInfo,
+    vision: row.vision || defaultHomepageSettings.vision,
+    mission: row.mission || defaultHomepageSettings.mission,
+    coreValues: coreValues.length > 0 ? coreValues : defaultHomepageSettings.coreValues,
   };
 }
 
@@ -1242,7 +1251,8 @@ export async function uploadGuidelinesFile(file: File): Promise<string> {
  * 115: persist the homepage settings through the Chief-gated RPC.  The RPC
  * re-validates every field server-side (email shape, HH:MM office hours,
  * guidelines URL bucket) and returns the saved row, which becomes the new
- * client state.
+ * client state.  119: the About CNNHS content (brief info, Vision,
+ * Mission, Core Values) rides in the same row and RPC.
  */
 export async function saveHomepageSettingsRpc(payload: {
   guidelinesUrl: string | null;
@@ -1251,6 +1261,10 @@ export async function saveHomepageSettingsRpc(payload: {
   location: string;
   officeHoursStart: string;
   officeHoursEnd: string;
+  briefInfo: string;
+  vision: string;
+  mission: string;
+  coreValues: Array<{ title: string; gloss: string }>;
 }): Promise<HomepageSettings> {
   if (!supabase) throw new Error("Supabase is not configured.");
   const { data, error } = await supabase.rpc("save_homepage_settings_rpc", {
@@ -1260,6 +1274,10 @@ export async function saveHomepageSettingsRpc(payload: {
     p_location: payload.location,
     p_office_hours_start: payload.officeHoursStart,
     p_office_hours_end: payload.officeHoursEnd,
+    p_brief_info: payload.briefInfo,
+    p_vision: payload.vision,
+    p_mission: payload.mission,
+    p_core_values: payload.coreValues,
   });
   if (error) {
     const msg = [error.message, error.details, error.hint].filter(Boolean).join(" | ");
@@ -1632,7 +1650,10 @@ export async function createCommissioner(
  * UI gate is convenience, not security).  Multiple co-commissioners per
  * role are allowed.  104: the 'appointment' role is accepted too — its
  * co-commissioner is RECORDS-ONLY (no account) and the RPC returns a
- * null password, so no credential modal is shown.
+ * null password, so no credential modal is shown.  118: account-backed
+ * co-commissioners get the role's CO-PREFIXED default password
+ * (coelectoral123 / cogrievance123 / coscreening123), distinct from
+ * their primary's role default.
  */
 export async function createCoCommissioner(
   name: string,
@@ -2130,7 +2151,9 @@ export async function listPastElections(): Promise<PastElectionSummary[]> {
       if (!proclamationsRes.error && !periodsRes.error) {
         const tieIds = new Set(
           (proclamationsRes.data || [])
-            .filter((row: any) => row.resolution_method === "manual")
+            // 117 — 'tie_both' (a 2-way Grade Level Representative tie that
+            // proclaimed both winners) badges the card as a tie of record.
+            .filter((row: any) => row.resolution_method === "manual" || row.resolution_method === "tie_both")
             .map((row: any) => row.election_period_id as string),
         );
         const complaintIds = new Set(
@@ -2240,7 +2263,9 @@ export async function getProclamationAnnotations(
     if (proclamationsRes.error || periodRes.error) return { ties: [] };
     const ties: ProclamationTieAnnotation[] = (proclamationsRes.data || []).map((row: any) => ({
       position: row.winning_position,
-      wasTie: row.resolution_method === "manual",
+      // 117 — 'tie_both' (a 2-way Grade Level Representative tie that
+      // proclaimed both winners) is a tie of record just like 'manual'.
+      wasTie: row.resolution_method === "manual" || row.resolution_method === "tie_both",
       tieBreakNote: row.tie_break_note || undefined,
       candidateId: row.candidate_id || undefined,
     }));
@@ -2271,6 +2296,9 @@ export async function getPastElectionResults(
     results.election.complaintNote = annotations.complaintNote;
     results.election.decisionReason = annotations.decisionReason;
     for (const position of results.positions) {
+      // 117 — a Grade Level Representative position can carry TWO
+      // proclamation rows; a tie annotation on any of them flags the
+      // position, and the first recorded tie-break note wins.
       const tie = annotations.ties.find((t) => t.position === position.position && t.wasTie);
       if (tie) {
         position.wasTie = true;
@@ -2502,17 +2530,36 @@ export async function getProclamationTallyRpc(electionId: string): Promise<Procl
   }));
 }
 
-/** How the Electoral Board resolves a tied position before proclaiming.
- *  081 — the pick records how the tie was resolved (e.g. "Coin Toss"). */
-export type TieResolution =
-  | { method: "manual"; candidateId: string; tieBreak?: string };
+/** How the Electoral Board resolves a tied position before proclaiming,
+ *  and — 117 — affirms a default winner when a complaint is on record.
+ *  081 — the pick records how the tie was resolved (e.g. "Coin Toss").
+ *  117 — Grade Level Representative positions elect TWO winners: a manual
+ *  resolution names the Board's pick(s) in candidateIds (1 for a single
+ *  seat, 2 for a 3+-way Grade Rep tie), while a 2-way Grade Rep tie
+ *  proclaims BOTH automatically and needs no resolution at all. */
+export type TieResolution = {
+  /** 'manual' when the board picked the winner(s) of a tied position. */
+  method?: "manual";
+  /** The board's pick(s) among the tied candidates. */
+  candidateIds?: string[];
+  /** How the tie was resolved — the one shared decision (085b). */
+  tieBreak?: string;
+  /** 117 — the board affirmed the default (highest-vote) winner stands
+   *  despite the complaint on record. */
+  remainWinner?: boolean;
+};
 
 export interface ProclaimedWinner {
   position: string;
   winnerName: string;
   votes: number;
-  /** 'manual' when the position was a Board-resolved tie, otherwise null. */
+  /** 'manual' when the seat was a Board-resolved tie, 'tie_both' when a
+   *  2-way Grade Level Representative tie proclaimed both winners, else
+   *  null for a default winner. */
   resolutionMethod: string | null;
+  /** 117 — the Board affirmed this default winner stands ("Remain
+   *  Winner") because a complaint was on record. */
+  remainWinner?: boolean;
   /** Candidate photo (public storage URL) for the Stage 5 winners grid. */
   picture?: string | null;
   /** Winner's candidate row id — present on rows read back from the ledger. */
@@ -2520,12 +2567,16 @@ export interface ProclaimedWinner {
 }
 
 /**
- * 069 — proclaim the winners.  A tied position (two or more candidates on
- * the same top count, including an all-zero position) must carry a
- * resolution naming the tied candidate the Electoral Board chose.  081 adds
- * the per-tie how-resolved text and the board's complaint note.  The RPC's
- * other optional params (p_decision_reason) are simply left at their
- * defaults.
+ * 069 — proclaim the winners.  117 — Grade Level Representative positions
+ * elect TWO winners: a unique 1-2 finish or a 2-way top tie proclaims both
+ * automatically, while a 3+-way tie (or a tie for the remaining seat) must
+ * carry a manual resolution naming the Board's pick(s).  A single-seat tie
+ * keeps the 069 behavior: exactly one of the tied candidates must be named.
+ * When ANY complaint is on record, every default (highest-vote) winner must
+ * be affirmed with remainWinner — the RPC rejects the proclamation
+ * otherwise.  081 adds the per-tie how-resolved text and the board's
+ * complaint note.  The RPC's other optional params (p_decision_reason) are
+ * simply left at their defaults.
  */
 export async function proclaimWinnersRpc(
   pElectionId: string,
@@ -2533,13 +2584,21 @@ export async function proclaimWinnersRpc(
   decision?: { complaintNote?: string; decisionReason?: string },
 ): Promise<ProclaimedWinner[]> {
   if (!supabase) throw new Error("Supabase is not configured.");
-  const payload: Record<string, { method: string; candidate_id?: string; tie_break?: string }> = {};
+  const payload: Record<
+    string,
+    { method?: string; candidate_id?: string; candidate_ids?: string[]; tie_break?: string; remain_winner?: boolean }
+  > = {};
   for (const [position, resolution] of Object.entries(resolutions)) {
-    payload[position] = {
-      method: "manual",
-      candidate_id: resolution.candidateId,
-      tie_break: resolution.tieBreak || undefined,
-    };
+    const entry: (typeof payload)[string] = {};
+    if (resolution.method === "manual" && resolution.candidateIds?.length) {
+      entry.method = "manual";
+      entry.candidate_ids = resolution.candidateIds;
+      entry.tie_break = resolution.tieBreak || undefined;
+    }
+    if (resolution.remainWinner) {
+      entry.remain_winner = true;
+    }
+    payload[position] = entry;
   }
   const { data, error } = await supabase.rpc("proclaim_winners_rpc", {
     p_election_id: pElectionId,
@@ -2577,7 +2636,7 @@ export async function getProclaimedWinners(
     const { data, error } = await supabase
       .from("proclamations")
       .select(
-        "winning_position, candidate_id, votes, resolution_method, " +
+        "winning_position, candidate_id, votes, resolution_method, remain_winner, " +
         "candidates(surname, given_name, picture_url)"
       )
       .eq("election_period_id", electionPeriodId)
@@ -2590,6 +2649,7 @@ export async function getProclaimedWinners(
         winnerName: cand ? `${cand.given_name} ${cand.surname}`.trim() : "",
         votes: row.votes,
         resolutionMethod: row.resolution_method ?? null,
+        remainWinner: row.remain_winner === true,
         candidateId: row.candidate_id || null,
         picture: cand?.picture_url || null,
       };

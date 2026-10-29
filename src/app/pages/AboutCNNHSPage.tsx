@@ -2,19 +2,33 @@ import { motion } from "motion/react";
 import {
   Building2, Eye, Flag, Target,
 } from "lucide-react";
+import { useApp, defaultHomepageSettings } from "../context/AppContext";
 
 /**
  * The public About CNNHS page (top header + footer).  A brief school
  * profile followed by the DepEd Vision, Mission, and Core Values — nothing
- * else.  The Vision/Mission wording follows the official DepEd statement.
+ * else.  119: the wording is editable Homepage Setting content — the Chief
+ * Commissioner saves it under Homepage Setting; an empty field or an empty
+ * Core Values list falls back to the school's shipped statement.
  */
 export default function AboutCNNHSPage() {
-  const coreValues = [
-    { title: "Maka-Diyos", gloss: "Love for God" },
-    { title: "Maka-Tao", gloss: "Love for Fellowmen" },
-    { title: "Maka-Kalikasan", gloss: "Love for Nature" },
-    { title: "Maka-Bansa", gloss: "Love for Country" },
-  ];
+  const { homepageSettings = defaultHomepageSettings } = useApp();
+
+  const briefInfo = homepageSettings.briefInfo || defaultHomepageSettings.briefInfo;
+  const vision = homepageSettings.vision || defaultHomepageSettings.vision;
+  const mission = homepageSettings.mission || defaultHomepageSettings.mission;
+  const coreValues = homepageSettings.coreValues?.length
+    ? homepageSettings.coreValues
+    : defaultHomepageSettings.coreValues;
+
+  // Mission lines starting with the '•' bullet render as the styled bullet
+  // list; every other line is a plain paragraph (blank lines are dropped).
+  const missionParagraphs = mission.split("\n").filter((line) => line.trim() !== "" && !line.trim().startsWith("•"));
+  const missionBullets = mission
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("•"))
+    .map((line) => line.slice(1).trim());
 
   return (
     <div className="min-h-[70vh] bg-gray-50">
@@ -40,12 +54,11 @@ export default function AboutCNNHSPage() {
         {/* Brief school information */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 sm:p-8 mb-6">
           <h2 className="text-lg text-gray-900 font-medium">Camarines Norte National High School</h2>
-          <p className="text-gray-600 text-sm leading-relaxed mt-2">
-            CNNHS is a public secondary school in Daet, Camarines Norte, serving
-            its learner community under the Department of Education. The school
-            upholds the DepEd Vision, Mission, and Core Values in everything it
-            does — including the election of its learner leaders.
-          </p>
+          {briefInfo.split("\n").filter((line) => line.trim() !== "").map((line, i) => (
+            <p key={i} className="text-gray-600 text-sm leading-relaxed mt-2 whitespace-pre-wrap">
+              {line}
+            </p>
+          ))}
         </div>
 
         {/* DepEd Vision */}
@@ -53,16 +66,11 @@ export default function AboutCNNHSPage() {
           <h2 className="text-lg text-gray-900 font-medium flex items-center gap-2 mb-3">
             <Eye size={18} style={{ color: "#5C0102" }} /> DepEd Vision
           </h2>
-          <p className="text-gray-600 text-sm leading-relaxed">
-            We dream of Filipinos who passionately love their country and whose
-            values and competencies enable them to realize their full potential
-            and contribute meaningfully to building the nation.
-          </p>
-          <p className="text-gray-600 text-sm leading-relaxed mt-3">
-            As a learner-centered public institution, the Department of
-            Education continuously improves itself to better serve its
-            stakeholders.
-          </p>
+          {vision.split("\n").filter((line) => line.trim() !== "").map((line, i) => (
+            <p key={i} className={`text-gray-600 text-sm leading-relaxed whitespace-pre-wrap ${i === 0 ? "" : "mt-3"}`}>
+              {line}
+            </p>
+          ))}
         </div>
 
         {/* DepEd Mission */}
@@ -70,23 +78,21 @@ export default function AboutCNNHSPage() {
           <h2 className="text-lg text-gray-900 font-medium flex items-center gap-2 mb-3">
             <Target size={18} style={{ color: "#5C0102" }} /> DepEd Mission
           </h2>
-          <p className="text-gray-600 text-sm leading-relaxed">
-            To protect and promote the right of every Filipino to quality,
-            equitable, culture-based, and complete basic education where:
-          </p>
-          <ul className="mt-3 space-y-2.5">
-            {[
-              "Students learn in a child-friendly, gender-sensitive, safe, and motivating environment.",
-              "Teachers facilitate learning and constantly nurture every learner.",
-              "Administrators and staff, as stewards of the institution, ensure an enabling and supportive environment for effective learning to happen.",
-              "Family, community, and other stakeholders are actively engaged and share responsibility for developing lifelong learners.",
-            ].map((line) => (
-              <li key={line} className="flex items-start gap-2.5 text-sm text-gray-600">
-                <span className="mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: "#5C0102" }} />
-                <span>{line}</span>
-              </li>
-            ))}
-          </ul>
+          {missionParagraphs.map((line, i) => (
+            <p key={i} className={`text-gray-600 text-sm leading-relaxed whitespace-pre-wrap ${i === 0 ? "" : "mt-3"}`}>
+              {line}
+            </p>
+          ))}
+          {missionBullets.length > 0 && (
+            <ul className="mt-3 space-y-2.5">
+              {missionBullets.map((line) => (
+                <li key={line} className="flex items-start gap-2.5 text-sm text-gray-600">
+                  <span className="mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: "#5C0102" }} />
+                  <span>{line}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         {/* Core Values */}
@@ -98,7 +104,7 @@ export default function AboutCNNHSPage() {
             {coreValues.map((value) => (
               <div key={value.title} className="rounded-xl bg-gray-50 border border-gray-100 p-4">
                 <p className="font-medium" style={{ color: "#5C0102" }}>{value.title}</p>
-                <p className="text-gray-500 text-sm mt-0.5">{value.gloss}</p>
+                {value.gloss && <p className="text-gray-500 text-sm mt-0.5">{value.gloss}</p>}
               </div>
             ))}
           </div>

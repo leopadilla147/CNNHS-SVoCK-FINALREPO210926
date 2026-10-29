@@ -466,6 +466,11 @@ export default function AdminElectionSetup() {
   const filedComplaintSubjects = electionComplaints
     .filter((c) => c.status === "filed")
     .map((c) => c.subject);
+  // 117 — ANY complaint on record (filed or resolved) makes the Board's
+  // "Remain Winner" affirmation mandatory in the proclamation dialog for
+  // every default (highest-vote) winner.  The UI affordance mirrors the
+  // authoritative gate inside proclaim_winners_rpc.
+  const hasComplaints = electionComplaints.length > 0 || complaintsPending;
 
   // 097/114 — already-resolved complaints, classified by the Grievance
   // Commissioner.  ANY Findings decision (Substantiated, Unsubstantiated, or
@@ -883,8 +888,11 @@ export default function AdminElectionSetup() {
       showFieldError("campaign", missingCampaign.message, missingCampaign.fields);
       return;
     }
-    if (campaignEnd < campaignStart) {
-      showFieldError("campaign", "The campaign end date must be after the start date.", ["campaignEnd"]);
+    // 113 — the Campaign window may not open and close on the same day:
+    // save_campaign_window_rpc rejects end <= start server-side, and the
+    // UI holds the slightly stricter next-day line.
+    if (campaignEnd < addDaysStr(campaignStart, 1)) {
+      showFieldError("campaign", "The Campaign Period must end at least one day after it starts.", ["campaignEnd"]);
       return;
     }
     // Calendar rule: tomorrow or later, but only when a date is being moved —
@@ -897,17 +905,6 @@ export default function AdminElectionSetup() {
     }
     if (campaignEnd !== savedEnd && campaignEnd < tomorrowDateStr()) {
       showFieldError("campaign", "The campaign end date must be tomorrow or later.", ["campaignEnd"]);
-      return;
-    }
-    // 113 — spacing: the Campaign Period opens two days after the Rules
-    // Discussion Meeting and runs at least one full day — again binding
-    // only when a date is being moved.
-    if (campaignStart !== savedStart && campaignStartMin && campaignStart < campaignStartMin) {
-      showFieldError("campaign", "The Campaign Period must start at least two days after the Rules Discussion Meeting.", ["campaignStart"]);
-      return;
-    }
-    if ((campaignEnd !== savedEnd || campaignStart !== savedStart) && campaignEnd < addDaysStr(campaignStart, 1)) {
-      showFieldError("campaign", "The Campaign Period must end at least one day after it starts.", ["campaignEnd"]);
       return;
     }
     const isUpdate = hasCampaignWindow;
@@ -1094,17 +1091,6 @@ export default function AdminElectionSetup() {
       showFieldError("voting", "The voting start date must be tomorrow or later.", ["votingStart"]);
       return;
     }
-    // 113 — spacing: voting opens two days after the Campaign Period ends —
-    // only when the start date is being moved (keeping the saved day is
-    // never blocked, matching the calendar rule above).
-    if (
-      form.startDate !== electionPeriod.startDate
-      && campaignEndAnchor
-      && form.startDate < addDaysStr(campaignEndAnchor, 2)
-    ) {
-      showFieldError("voting", "Voting must start at least two days after the Campaign Period ends.", ["votingStart"]);
-      return;
-    }
     if (venueChoice === "classroom" && !venueDetail.trim()) {
       showError("Enter the classroom number or name.", "voting");
       return;
@@ -1198,17 +1184,6 @@ export default function AdminElectionSetup() {
     // an election whose saved day is today must keep working.
     if (form.startDate !== electionPeriod.startDate && form.startDate < tomorrowDateStr()) {
       showFieldError("voting", "The voting start date must be tomorrow or later.", ["votingStart"]);
-      return;
-    }
-    // 113 — spacing: voting opens two days after the Campaign Period ends —
-    // only when the start date is being moved (keeping the saved day is
-    // never blocked, matching the calendar rule above).
-    if (
-      form.startDate !== electionPeriod.startDate
-      && campaignEndAnchor
-      && form.startDate < addDaysStr(campaignEndAnchor, 2)
-    ) {
-      showFieldError("voting", "Voting must start at least two days after the Campaign Period ends.", ["votingStart"]);
       return;
     }
     // The venue dropdown needs its detail filled in for the composite
@@ -1447,13 +1422,13 @@ export default function AdminElectionSetup() {
       addLog({
         user: logUser, role: "Admin",
         action: "Results Published & Winners Proclaimed",
-        details: `Results published and winners proclaimed for ${winners.length} positions.`
+        details: `Results published and ${winners.length} winners proclaimed.`
           + (decision.tieBreak ? ` Tie resolution: ${decision.tieBreak}.` : "")
           + (decision.complaintReason ? ` Complaint resolution and justification: ${decision.complaintReason}.` : "")
           + (decision.complaintNote ? ` Complaint note: ${decision.complaintNote}.` : ""),
         type: "success",
       });
-      showSuccess(`Results published and winners proclaimed for ${winners.length} positions.`);
+      showSuccess(`Results published and ${winners.length} winners proclaimed.`);
     } catch (err: any) {
       // Keep the dialog open so the board can see what went wrong and retry.
       setTallyError(err.message || "Failed to publish and proclaim.");
@@ -1539,27 +1514,9 @@ export default function AdminElectionSetup() {
   const scheduleLocked =
     electionPeriod.isActive || currentStage === "results" || votingScheduleLocked;
   const hasMeeting = !!electionPeriod.rulesDiscussionAt;
-  // 113 — spacing rule: no two stage boundaries share a day. The Rules
-  // Discussion Meeting anchors the plan — the Campaign Period opens TWO
-  // days after it, runs at least ONE full day, and Voting opens TWO days
-  // after the campaign ends (the voting end day may share its start day).
-  // These floors feed both the pickers' min attributes and the save guards.
-  const savedMeetingDay = toLocalInput(electionPeriod.rulesDiscussionAt).slice(0, 10);
-  const campaignStartMin = savedMeetingDay ? addDaysStr(savedMeetingDay, 2) : undefined;
-  const campaignEndMin = (() => {
-    const anchor = campaignStart || campaignStartMin;
-    return anchor ? addDaysStr(anchor, 1) : undefined;
-  })();
-  // The voting floor hangs off the campaign end — the picker's live value
-  // first (it mirrors the saved row), then the saved end, then the minimum
-  // implied by the meeting — and never earlier than tomorrow.
-  const campaignEndAnchor =
-    campaignEnd || toLocalInput(electionPeriod.campaignEndDate).slice(0, 10) || campaignEndMin;
-  const votingStartMin = (() => {
-    const floors = [tomorrowDateStr()];
-    if (campaignEndAnchor) floors.push(addDaysStr(campaignEndAnchor, 2));
-    return floors.sort()[floors.length - 1];
-  })();
+  // 113 — the Campaign window may not open and close on the same day: the
+  // end picker opens the day after whichever start is chosen.
+  const campaignEndMin = campaignStart ? addDaysStr(campaignStart, 1) : undefined;
   // The Campaign window is committed by "Start Campaign"; once saved, the
   // button becomes "Update Campaign Window".
   const hasCampaignWindow = !!(electionPeriod.campaignStartDate && electionPeriod.campaignEndDate);
@@ -1947,8 +1904,7 @@ export default function AdminElectionSetup() {
                 <input
                   id="campaign-start"
                   type="date"
-                  /* 113 — at least two days after the Rules Discussion Meeting. */
-                  min={campaignStartMin ?? tomorrowDateStr()}
+                  min={tomorrowDateStr()}
                   value={campaignStart}
                   disabled={campaignWindowLocked}
                   onChange={(e) => { setCampaignStart(e.target.value); clearFieldError("campaignStart"); }}
@@ -1961,7 +1917,8 @@ export default function AdminElectionSetup() {
                   <input
                     id="campaign-end"
                     type="date"
-                    /* 113 — at least one day after the campaign start. */
+                    /* 113 — the window may not open and close on the same
+                        day: the end picker opens the day after the start. */
                     min={campaignEndMin ?? tomorrowDateStr()}
                     value={campaignEnd}
                     disabled={campaignWindowLocked}
@@ -2205,7 +2162,7 @@ export default function AdminElectionSetup() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label htmlFor="voting-start" className="block text-xs text-gray-600 mb-1">Start Date</label>
-                <input id="voting-start" type="date" value={form.startDate} min={votingStartMin}
+                <input id="voting-start" type="date" value={form.startDate} min={tomorrowDateStr()}
                   onChange={(e) => { setForm({ ...form, startDate: e.target.value }); clearFieldError("votingStart"); }}
                   disabled={scheduleLocked}
                   className={pickerClassName(fieldErrors.votingStart, "w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed")} />
@@ -2539,7 +2496,7 @@ export default function AdminElectionSetup() {
             </div>
           )}
 
-          <div className="flex gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             {!electionPeriod.proclaimed && (
               <button
                 onClick={handlePublishAndProclaim}
@@ -2572,7 +2529,7 @@ export default function AdminElectionSetup() {
                 onClick={() => { setGateError(null); setGatePassword(""); setVoteGate("void"); }}
                 disabled={loading}
                 title="Discard every recorded vote and restart the Voting Stage in this same election period."
-                className="px-5 py-2.5 bg-red-100 text-red-700 border border-red-200 rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-red-200 disabled:opacity-50">
+                className="px-5 py-2.5 bg-red-100 text-red-700 border border-red-200 rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-red-200 disabled:opacity-50 ml-auto">
                 {loading ? <Loader2 size={16} className="animate-spin" /> : <XCircle size={16} />}
                 Void Election
               </button>
@@ -2585,8 +2542,10 @@ export default function AdminElectionSetup() {
                 <Trophy size={16} /> Proclaimed Winners
               </h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {/* 117 — a Grade Level Representative position can hold TWO
+                    proclaimed winners, so the key is position + candidate. */}
                 {proclaimedWinners.map((w) => (
-                  <div key={w.position} className="bg-white p-3 rounded-lg border border-amber-100 text-sm flex items-center gap-3">
+                  <div key={`${w.position}:${w.candidateId ?? w.winnerName}`} className="bg-white p-3 rounded-lg border border-amber-100 text-sm flex items-center gap-3">
                     {w.picture ? (
                       <img
                         src={w.picture}
@@ -2609,6 +2568,16 @@ export default function AdminElectionSetup() {
                       {w.resolutionMethod === "manual" && (
                         <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-700 flex items-center gap-1">
                           <Gavel size={11} /> Tie — board choice
+                        </div>
+                      )}
+                      {w.resolutionMethod === "tie_both" && (
+                        <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-700 flex items-center gap-1">
+                          <Gavel size={11} /> Tie — both proclaimed
+                        </div>
+                      )}
+                      {w.remainWinner && w.resolutionMethod !== "manual" && (
+                        <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-green-700 flex items-center gap-1">
+                          <CheckCircle2 size={11} /> Remain Winner
                         </div>
                       )}
                     </div>
@@ -2697,6 +2666,7 @@ export default function AdminElectionSetup() {
         tally={tally}
         profiles={candidateProfiles}
         complaintSubjects={filedComplaintSubjects}
+        hasComplaints={hasComplaints}
         substantiatedGrievances={substantiatedGrievances}
         otherResolved={otherResolvedDecisions}
         onCancel={closeProclamation}

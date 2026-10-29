@@ -31,9 +31,9 @@ const chiefTopItems: NavItem[] = [
   { label: "Officer Management", href: "/admin/officers", icon: <UserPlus size={18} /> },
   { label: "Election Reports", href: "/admin/reports", icon: <FileText size={18} /> },
   { label: "Live Results", href: "/admin/live-results", icon: <Eye size={18} /> },
-  { label: "Homepage Setting", href: "/admin/homepage-settings", icon: <Home size={18} /> },
   { label: "All System Logs", href: "/admin/logs", icon: <Activity size={18} /> },
   { label: "Admin Profile", href: "/admin/profile", icon: <UserCheck size={18} /> },
+  { label: "Homepage Setting", href: "/admin/homepage-settings", icon: <Home size={18} /> },
 ];
 
 // v1.2 (Chief's request): the other commissioners' tab groups

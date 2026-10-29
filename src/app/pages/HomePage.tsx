@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 import { motion } from "motion/react";
-import { Shield, Users, Calendar, ChevronRight, Award } from "lucide-react";
+import { Shield, Users, Calendar, ChevronRight, Award, UserPlus, FileText, Vote, Trophy } from "lucide-react";
 import { useApp } from "../context/AppContext";
 import { distinctPartyNames, FULL_POSITION_ORDER as POSITIONS } from "../lib/partyScope";
 import cnnhsHero from "../assets/CNNHS1.jpg";
@@ -131,38 +131,73 @@ export default function HomePage() {
                 <p className="text-gray-500 text-sm">Key dates and deadlines for the SSLG election process</p>
               </div>
 
-              <div className="space-y-8">
-                {/* Timeline Items */}
-                <div className="space-y-6">
-                  <div className="flex items-start gap-4">
-                    <div className="w-2 h-2 rounded-full bg-[#5C0102] flex-shrink-0 mt-0.5" />
-                    <div className="space-y-1">
-                      <h3 className="text-gray-900 font-medium">Registration Period</h3>
-                      <p className="text-gray-600 text-sm">{electionPeriod.startDate || "To be announced"}{electionPeriod.endDate && ` - ${electionPeriod.endDate}`}</p>
+              <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+                {[
+                  {
+                    step: "01",
+                    icon: <UserPlus size={20} />,
+                    title: "Registration Period",
+                    when: electionPeriod.startDate
+                      ? `${electionPeriod.startDate}${electionPeriod.endDate ? ` – ${electionPeriod.endDate}` : ""}`
+                      : "",
+                    desc: "Students are verified against the school masterlist and cleared to participate.",
+                  },
+                  {
+                    step: "02",
+                    icon: <FileText size={20} />,
+                    title: "Candidacy Filing",
+                    when: electionPeriod.startDate
+                      ? `${electionPeriod.startDate}${electionPeriod.endDate ? ` – ${electionPeriod.endDate}` : ""}`
+                      : "",
+                    desc: "Aspiring candidates submit their application forms and supporting documents.",
+                  },
+                  {
+                    step: "03",
+                    icon: <Vote size={20} />,
+                    title: "Voting Day",
+                    when: electionPeriod.startDate
+                      ? `${electionPeriod.startDate}${electionPeriod.startTime ? ` at ${electionPeriod.startTime}` : ""}`
+                      : "",
+                    desc: "Cast your ballot at the biometric kiosks — one scan, one secure vote.",
+                  },
+                  {
+                    step: "04",
+                    icon: <Trophy size={20} />,
+                    title: "Results Publication",
+                    when: "Within 48 hours after voting closes",
+                    desc: "Official results are posted publicly once the vote is concluded.",
+                  },
+                ].map((milestone) => (
+                  <div
+                    key={milestone.step}
+                    className="group relative bg-white rounded-2xl border border-gray-100 shadow-sm p-6 transition-all duration-300 hover:shadow-lg hover:-translate-y-1"
+                  >
+                    <div className="flex items-start justify-between mb-4">
+                      <div
+                        className="w-11 h-11 rounded-xl flex items-center justify-center transition-colors group-hover:bg-[#5C0102]"
+                        style={{ backgroundColor: "rgba(92, 1, 2, 0.08)", color: "#5C0102" }}
+                      >
+                        {milestone.icon}
+                      </div>
+                      <span
+                        className="text-3xl font-bold select-none transition-colors group-hover:text-[#5C0102]"
+                        style={{ color: "rgba(92, 1, 2, 0.12)" }}
+                      >
+                        {milestone.step}
+                      </span>
                     </div>
+                    <h3 className="text-gray-900 font-medium">{milestone.title}</h3>
+                    {milestone.when ? (
+                      <p className="text-sm font-medium mt-1.5" style={{ color: "#5C0102" }}>{milestone.when}</p>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 mt-1.5 text-xs text-gray-400 bg-gray-100 px-2.5 py-1 rounded-full">
+                        <span className="w-1.5 h-1.5 rounded-full bg-gray-300" />
+                        To be announced
+                      </span>
+                    )}
+                    <p className="text-gray-500 text-xs leading-relaxed mt-2.5">{milestone.desc}</p>
                   </div>
-                  <div className="flex items-start gap-4">
-                    <div className="w-2 h-2 rounded-full bg-[#5C0102] flex-shrink-0 mt-0.5" />
-                    <div className="space-y-1">
-                      <h3 className="text-gray-900 font-medium">Candidacy Filing</h3>
-                      <p className="text-gray-600 text-sm">{electionPeriod.startDate || "To be announced"}{electionPeriod.endDate && ` - ${electionPeriod.endDate}`}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-4">
-                    <div className="w-2 h-2 rounded-full bg-[#5C0102] flex-shrink-0 mt-0.5" />
-                    <div className="space-y-1">
-                      <h3 className="text-gray-900 font-muted">Voting Day</h3>
-                      <p className="text-gray-600 text-sm">{electionPeriod.startDate || "To be announced"} {electionPeriod.startTime && `at ${electionPeriod.startTime}`}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-4">
-                    <div className="w-2 h-2 rounded-full bg-[#5C0102] flex-shrink-0 mt-0.5" />
-                    <div className="space-y-1">
-                      <h3 className="text-gray-900 font-medium">Results Publication</h3>
-                      <p className="text-gray-600 text-sm">Within 48 hours after voting closes</p>
-                    </div>
-                  </div>
-                </div>
+                ))}
               </div>
             </div>
           </div>

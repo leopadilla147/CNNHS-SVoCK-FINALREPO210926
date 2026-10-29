@@ -290,7 +290,7 @@ describe("ChiefAppointments per-commissioner co-commissioners (104)", () => {
     mockCreateCoCommissioner.mockResolvedValue({
       name: "Ramon Cruz",
       email: "ramon.cruz@cnnhs.edu",
-      password: "electoral123",
+      password: "coelectoral123",
     });
     renderPage();
 

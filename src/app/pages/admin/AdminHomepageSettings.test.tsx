@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AdminHomepageSettings from "./AdminHomepageSettings";
 import type { CurrentUser, HomepageSettings } from "../../context/AppContext";
+import { defaultHomepageSettings } from "../../context/AppContext";
 
 // The page reads everything through useApp, so it renders against a flat
 // context stub — no provider, no Supabase (same pattern as
@@ -35,6 +36,7 @@ vi.mock("../../context/AppContext", async (importOriginal) => {
 });
 
 const shippedSettings: HomepageSettings = {
+  ...defaultHomepageSettings,
   contactEmail: "voting@cnnhs.edu.ph",
   location: "Camarines Norte National High School, Daet, Camarines Norte, Philippines",
   officeHoursStart: "08:00",
@@ -80,15 +82,20 @@ describe("AdminHomepageSettings — access", () => {
     mockConfirm.mockResolvedValue(true);
   });
 
-  it("shows both sections to the Chief Commissioner", () => {
+  it("shows all three sections to the Chief Commissioner", () => {
     stubContext(chief());
     renderSettings();
 
     expect(screen.getByText("Election Guidelines")).toBeTruthy();
     expect(screen.getByText("Contact Us")).toBeTruthy();
+    expect(screen.getByText("About CNNHS")).toBeTruthy();
     expect((screen.getByLabelText("Email") as HTMLInputElement).value).toBe(shippedSettings.contactEmail);
     expect(screen.getByLabelText("Office hours opening time")).toBeTruthy();
     expect(screen.getByLabelText("Office hours closing time")).toBeTruthy();
+    expect((screen.getByLabelText("Brief Information") as HTMLTextAreaElement).value).toBe(shippedSettings.briefInfo);
+    expect((screen.getByLabelText("Vision") as HTMLTextAreaElement).value).toBe(shippedSettings.vision);
+    expect((screen.getByLabelText("Mission") as HTMLTextAreaElement).value).toBe(shippedSettings.mission);
+    expect((screen.getByLabelText("Core value 1 title") as HTMLInputElement).value).toBe("Maka-Diyos");
   });
 
   it("refuses a commissioner who is not the Chief", () => {
@@ -131,6 +138,10 @@ describe("AdminHomepageSettings — Contact Us", () => {
         location: shippedSettings.location,
         officeHoursStart: "07:30",
         officeHoursEnd: "17:00",
+        briefInfo: shippedSettings.briefInfo,
+        vision: shippedSettings.vision,
+        mission: shippedSettings.mission,
+        coreValues: shippedSettings.coreValues,
       });
     });
     await waitFor(() => {
@@ -273,7 +284,7 @@ describe("AdminHomepageSettings — Election Guidelines file", () => {
     mockSaveSettingsRpc.mockResolvedValue(shippedSettings);
     renderSettings();
 
-    fireEvent.click(screen.getByRole("button", { name: /Remove/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
 
     await waitFor(() => {
       expect(mockSaveSettingsRpc).toHaveBeenCalledWith(
@@ -282,6 +293,94 @@ describe("AdminHomepageSettings — Election Guidelines file", () => {
     });
     await waitFor(() => {
       expect(setHomepageSettings).toHaveBeenCalledWith(shippedSettings);
+    });
+  });
+});
+
+describe("AdminHomepageSettings — About CNNHS content (119)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockConfirm.mockResolvedValue(true);
+  });
+
+  it("saves the edited About content through the RPC and updates the context", async () => {
+    const { setHomepageSettings } = stubContext(chief());
+    mockSaveSettingsRpc.mockResolvedValue({
+      ...shippedSettings,
+      briefInfo: "Updated school profile.",
+    });
+    renderSettings();
+
+    fireEvent.change(screen.getByLabelText("Brief Information"), {
+      target: { value: "Updated school profile." },
+    });
+    fireEvent.change(screen.getByLabelText("Core value 1 title"), {
+      target: { value: "Maka-Diyos at Maka-Tao" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Save About CNNHS/ }));
+
+    await waitFor(() => {
+      expect(mockSaveSettingsRpc).toHaveBeenCalledWith({
+        guidelinesUrl: null,
+        guidelinesName: null,
+        contactEmail: shippedSettings.contactEmail,
+        location: shippedSettings.location,
+        officeHoursStart: shippedSettings.officeHoursStart,
+        officeHoursEnd: shippedSettings.officeHoursEnd,
+        briefInfo: "Updated school profile.",
+        vision: shippedSettings.vision,
+        mission: shippedSettings.mission,
+        coreValues: [
+          { title: "Maka-Diyos at Maka-Tao", gloss: "Love for God" },
+          { title: "Maka-Tao", gloss: "Love for Fellowmen" },
+          { title: "Maka-Kalikasan", gloss: "Love for Nature" },
+          { title: "Maka-Bansa", gloss: "Love for Country" },
+        ],
+      });
+    });
+    await waitFor(() => {
+      expect(setHomepageSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ briefInfo: "Updated school profile." }),
+      );
+    });
+  });
+
+  it("adds and removes core value rows", () => {
+    stubContext(chief());
+    renderSettings();
+
+    fireEvent.click(screen.getByRole("button", { name: /Add Core Value/ }));
+    expect((screen.getByLabelText("Core value 5 title") as HTMLInputElement).value).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove core value 1" }));
+    expect(screen.queryByLabelText("Core value 5 title")).toBeNull();
+    // the rows shift up — the added blank row is now the last one
+    expect((screen.getByLabelText("Core value 1 title") as HTMLInputElement).value).toBe("Maka-Tao");
+    expect((screen.getByLabelText("Core value 4 title") as HTMLInputElement).value).toBe("");
+  });
+
+  it("blocks the save when a core value row has no title", async () => {
+    stubContext(chief());
+    renderSettings();
+
+    fireEvent.change(screen.getByLabelText("Core value 1 title"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save About CNNHS/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Every core value needs a title.")).toBeTruthy();
+    });
+    expect(mockSaveSettingsRpc).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the RPC's error message when the About save is refused", async () => {
+    stubContext(chief());
+    mockSaveSettingsRpc.mockRejectedValue(new Error("Only the Chief Commissioner can manage officers."));
+    renderSettings();
+
+    fireEvent.click(screen.getByRole("button", { name: /Save About CNNHS/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Only the Chief Commissioner/)).toBeTruthy();
     });
   });
 });

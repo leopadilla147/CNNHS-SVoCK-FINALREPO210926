@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 import {
   FileText, Upload, Trash2, ExternalLink, Mail, MapPin, Clock, Save,
-  AlertCircle, CheckCircle, ShieldAlert, Globe,
+  AlertCircle, CheckCircle, ShieldAlert, Globe, BookOpen, Plus, X,
 } from "lucide-react";
-import { useApp, formatOfficeTime } from "../../context/AppContext";
+import { useApp, formatOfficeTime, type CoreValue } from "../../context/AppContext";
 import { uploadGuidelinesFile, saveHomepageSettingsRpc } from "../../lib/supabaseData";
 import { useConfirm } from "../../lib/useConfirm";
 
@@ -12,6 +12,10 @@ import { useConfirm } from "../../lib/useConfirm";
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const FILE_EXTENSIONS = ["pdf", "doc", "docx"];
 const FILE_ACCEPT = FILE_EXTENSIONS.map((ext) => `.${ext}`).join(",");
+
+// Mirrors the 119 RPC caps for the About CNNHS content.
+const MAX_ABOUT_CHARS = 5000;
+const MAX_CORE_VALUES = 12;
 
 export default function AdminHomepageSettings() {
   const { currentUser, homepageSettings, setHomepageSettings, addLog } = useApp();
@@ -31,6 +35,11 @@ export default function AdminHomepageSettings() {
     description: "The homepage footer's Contact Us section updates for every visitor.",
     confirmText: "Save",
   });
+  const saveAboutConfirm = useConfirm({
+    title: "Save About CNNHS?",
+    description: "The public About CNNHS page updates for every visitor.",
+    confirmText: "Save",
+  });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [guidelinesUploading, setGuidelinesUploading] = useState(false);
@@ -46,6 +55,16 @@ export default function AdminHomepageSettings() {
   const [contactError, setContactError] = useState("");
   const [contactSaved, setContactSaved] = useState(false);
 
+  // 119: the About CNNHS content — brief info, Vision, Mission, Core Values.
+  const [briefInfo, setBriefInfo] = useState(homepageSettings.briefInfo);
+  const [vision, setVision] = useState(homepageSettings.vision);
+  const [mission, setMission] = useState(homepageSettings.mission);
+  const [coreValues, setCoreValues] = useState<Array<CoreValue>>(homepageSettings.coreValues);
+  const [aboutDirty, setAboutDirty] = useState(false);
+  const [aboutSaving, setAboutSaving] = useState(false);
+  const [aboutError, setAboutError] = useState("");
+  const [aboutSaved, setAboutSaved] = useState(false);
+
   // The settings row arrives with the post-login state fetch, which can land
   // after this page mounts — follow the context until the Chief edits a field.
   useEffect(() => {
@@ -55,6 +74,14 @@ export default function AdminHomepageSettings() {
     setHoursStart(homepageSettings.officeHoursStart);
     setHoursEnd(homepageSettings.officeHoursEnd);
   }, [dirty, homepageSettings]);
+
+  useEffect(() => {
+    if (aboutDirty) return;
+    setBriefInfo(homepageSettings.briefInfo);
+    setVision(homepageSettings.vision);
+    setMission(homepageSettings.mission);
+    setCoreValues(homepageSettings.coreValues);
+  }, [aboutDirty, homepageSettings]);
 
   if (!currentUser) return null;
 
@@ -113,6 +140,10 @@ export default function AdminHomepageSettings() {
         location: homepageSettings.location,
         officeHoursStart: homepageSettings.officeHoursStart,
         officeHoursEnd: homepageSettings.officeHoursEnd,
+        briefInfo: homepageSettings.briefInfo,
+        vision: homepageSettings.vision,
+        mission: homepageSettings.mission,
+        coreValues: homepageSettings.coreValues,
       });
       setHomepageSettings(saved);
       setGuidelinesSaved(true);
@@ -138,6 +169,10 @@ export default function AdminHomepageSettings() {
         location: homepageSettings.location,
         officeHoursStart: homepageSettings.officeHoursStart,
         officeHoursEnd: homepageSettings.officeHoursEnd,
+        briefInfo: homepageSettings.briefInfo,
+        vision: homepageSettings.vision,
+        mission: homepageSettings.mission,
+        coreValues: homepageSettings.coreValues,
       });
       setHomepageSettings(saved);
       logAction("Election Guidelines Removed", "Removed the Election Guidelines file from the homepage.");
@@ -173,6 +208,10 @@ export default function AdminHomepageSettings() {
         location: trimmedLocation,
         officeHoursStart: hoursStart,
         officeHoursEnd: hoursEnd,
+        briefInfo: homepageSettings.briefInfo,
+        vision: homepageSettings.vision,
+        mission: homepageSettings.mission,
+        coreValues: homepageSettings.coreValues,
       });
       setHomepageSettings(saved);
       setDirty(false);
@@ -189,6 +228,77 @@ export default function AdminHomepageSettings() {
     }
   };
 
+  // 119: save the About CNNHS content (brief info, Vision, Mission, Core
+  // Values).  The RPC re-validates the caps server-side; the other saved
+  // sections ride along unchanged from the stored row.
+  const handleSaveAbout = async () => {
+    setAboutError("");
+
+    const trimmedBrief = briefInfo.trim();
+    const trimmedVision = vision.trim();
+    const trimmedMission = mission.trim();
+    if (trimmedBrief.length > MAX_ABOUT_CHARS || trimmedVision.length > MAX_ABOUT_CHARS || trimmedMission.length > MAX_ABOUT_CHARS) {
+      setAboutError("The brief information, Vision, and Mission are limited to 5000 characters each.");
+      return;
+    }
+    const cleanedValues = coreValues
+      .map((v) => ({ title: v.title.trim(), gloss: v.gloss.trim() }))
+      .filter((v) => v.title !== "" || v.gloss !== "");
+    if (cleanedValues.some((v) => v.title === "")) {
+      setAboutError("Every core value needs a title.");
+      return;
+    }
+    if (cleanedValues.length > MAX_CORE_VALUES) {
+      setAboutError("At most 12 core values are allowed.");
+      return;
+    }
+
+    const confirmed = await saveAboutConfirm.confirm();
+    if (!confirmed) return;
+
+    setAboutSaving(true);
+    try {
+      const saved = await saveHomepageSettingsRpc({
+        guidelinesUrl: homepageSettings.guidelinesUrl ?? null,
+        guidelinesName: homepageSettings.guidelinesName ?? null,
+        contactEmail: homepageSettings.contactEmail,
+        location: homepageSettings.location,
+        officeHoursStart: homepageSettings.officeHoursStart,
+        officeHoursEnd: homepageSettings.officeHoursEnd,
+        briefInfo: trimmedBrief,
+        vision: trimmedVision,
+        mission: trimmedMission,
+        coreValues: cleanedValues,
+      });
+      setHomepageSettings(saved);
+      setAboutDirty(false);
+      setAboutSaved(true);
+      setTimeout(() => setAboutSaved(false), 2500);
+      logAction(
+        "About CNNHS Updated",
+        `About CNNHS content saved (${cleanedValues.length} core value${cleanedValues.length === 1 ? "" : "s"}).`,
+      );
+    } catch (err) {
+      setAboutError(err instanceof Error ? err.message : "Could not save the About CNNHS content.");
+    } finally {
+      setAboutSaving(false);
+    }
+  };
+
+  // 119: core value rows — title + gloss, with add/remove.
+  const updateCoreValue = (index: number, patch: Partial<CoreValue>) => {
+    setCoreValues((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+    setAboutDirty(true);
+  };
+  const addCoreValue = () => {
+    setCoreValues((rows) => [...rows, { title: "", gloss: "" }]);
+    setAboutDirty(true);
+  };
+  const removeCoreValue = (index: number) => {
+    setCoreValues((rows) => rows.filter((_, i) => i !== index));
+    setAboutDirty(true);
+  };
+
   const mapsEmbedSrc = `https://www.google.com/maps?q=${encodeURIComponent(location.trim() || homepageSettings.location)}&output=embed`;
 
   return (
@@ -196,7 +306,8 @@ export default function AdminHomepageSettings() {
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
         <h1 className="text-gray-900 mb-1">Homepage Setting</h1>
         <p className="text-gray-500 text-sm">
-          Manage the Election Guidelines file and the Contact Us details shown on the public homepage.
+          Manage the Election Guidelines file, the Contact Us details, and the About CNNHS content shown on the public
+          homepage.
         </p>
       </motion.div>
 
@@ -368,9 +479,125 @@ export default function AdminHomepageSettings() {
           </button>
         </div>
       </div>
+      {/* About CNNHS content (119) */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden mt-6">
+        <div className="p-5 text-white flex items-center gap-3" style={{ backgroundColor: "#5C0102" }}>
+          <BookOpen size={20} />
+          <div>
+            <h2 className="text-white text-base">About CNNHS</h2>
+            <p className="text-white/70 text-xs">
+              The brief information, Vision & Mission, and Core Values on the public About CNNHS page.
+            </p>
+          </div>
+        </div>
+        <div className="p-6 space-y-4">
+          <div>
+            <label htmlFor="about-brief" className="block text-xs text-gray-600 mb-1">Brief Information</label>
+            <textarea
+              id="about-brief"
+              rows={3}
+              maxLength={MAX_ABOUT_CHARS}
+              value={briefInfo}
+              onChange={(e) => { setBriefInfo(e.target.value); setAboutDirty(true); }}
+              placeholder="A short profile of Camarines Norte National High School."
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="about-vision" className="block text-xs text-gray-600 mb-1">Vision</label>
+            <textarea
+              id="about-vision"
+              rows={6}
+              maxLength={MAX_ABOUT_CHARS}
+              value={vision}
+              onChange={(e) => { setVision(e.target.value); setAboutDirty(true); }}
+              placeholder="The DepEd Vision statement."
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 whitespace-pre-wrap"
+            />
+            <p className="text-xs text-gray-400 mt-1">Line breaks are kept on the page.</p>
+          </div>
+
+          <div>
+            <label htmlFor="about-mission" className="block text-xs text-gray-600 mb-1">Mission</label>
+            <textarea
+              id="about-mission"
+              rows={6}
+              maxLength={MAX_ABOUT_CHARS}
+              value={mission}
+              onChange={(e) => { setMission(e.target.value); setAboutDirty(true); }}
+              placeholder={"The DepEd Mission statement.\n• Start a line with • to render it as a bullet."}
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 whitespace-pre-wrap"
+            />
+            <p className="text-xs text-gray-400 mt-1">Lines starting with • render as bullet points.</p>
+          </div>
+
+          <div>
+            <p className="block text-xs text-gray-600 mb-1">Our Core Values</p>
+            <div className="space-y-2">
+              {coreValues.map((value, index) => (
+                <div key={index} className="flex items-center gap-2">
+                  <input
+                    aria-label={`Core value ${index + 1} title`}
+                    value={value.title}
+                    maxLength={100}
+                    onChange={(e) => updateCoreValue(index, { title: e.target.value })}
+                    placeholder="Title (e.g. Maka-Diyos)"
+                    className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50"
+                  />
+                  <input
+                    aria-label={`Core value ${index + 1} description`}
+                    value={value.gloss}
+                    maxLength={200}
+                    onChange={(e) => updateCoreValue(index, { gloss: e.target.value })}
+                    placeholder="Description (e.g. Love for God)"
+                    className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50"
+                  />
+                  <button
+                    type="button"
+                    aria-label={`Remove core value ${index + 1}`}
+                    onClick={() => removeCoreValue(index)}
+                    disabled={aboutSaving}
+                    className="p-2 rounded-lg border border-gray-200 text-gray-400 hover:text-red-600 hover:border-red-200 hover:bg-red-50 transition-colors disabled:opacity-60"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={addCoreValue}
+              disabled={aboutSaving || coreValues.length >= MAX_CORE_VALUES}
+              className="mt-2 px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-60 flex items-center gap-1"
+            >
+              <Plus size={12} /> Add Core Value
+            </button>
+            <p className="text-xs text-gray-400 mt-1">
+              Clearing a field or removing every value restores the school's standard text.
+            </p>
+          </div>
+
+          {aboutError && (
+            <p className="text-xs text-red-500 flex items-center gap-1">
+              <AlertCircle size={12} /> {aboutError}
+            </p>
+          )}
+          <button
+            onClick={handleSaveAbout}
+            disabled={aboutSaving}
+            className="px-4 py-2.5 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:opacity-90 disabled:opacity-60"
+            style={{ backgroundColor: "#5C0102" }}
+          >
+            {aboutSaved ? <><CheckCircle size={14} /> Saved</> : <><Save size={14} /> Save About CNNHS</>}
+          </button>
+        </div>
+      </div>
+
       {uploadConfirm.dialog}
       {removeConfirm.dialog}
       {saveConfirm.dialog}
+      {saveAboutConfirm.dialog}
     </div>
   );
 }

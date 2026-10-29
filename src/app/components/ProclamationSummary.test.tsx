@@ -3,19 +3,29 @@ import { describe, expect, it } from "vitest";
 import { ProclamationSummary } from "./ProclamationSummary";
 import type { PositionTally } from "./ProclamationDialog";
 
+// 117 — fixtures carry the full seat-aware shape: seats, picksNeeded,
+// pickGroup, autoWinners and bothWin, exactly as groupTally derives them.
 const positions: PositionTally[] = [
   {
     position: "President",
+    seats: 1,
     candidates: [
       { position: "President", candidateId: "p1", candidateName: "Ada Leader", partyName: "Alpha", votes: 10 },
       { position: "President", candidateId: "p2", candidateName: "Bea Runner", partyName: "Beta", votes: 4 },
     ],
     topVotes: 10,
-    tied: [],
+    tied: [{ position: "President", candidateId: "p1", candidateName: "Ada Leader", partyName: "Alpha", votes: 10 }],
     isTie: false,
+    picksNeeded: 0,
+    pickGroup: [],
+    autoWinners: [
+      { position: "President", candidateId: "p1", candidateName: "Ada Leader", partyName: "Alpha", votes: 10 },
+    ],
+    bothWin: false,
   },
   {
     position: "Secretary",
+    seats: 1,
     candidates: [
       { position: "Secretary", candidateId: "s1", candidateName: "Cara One", partyName: null, votes: 0 },
       { position: "Secretary", candidateId: "s2", candidateName: "Dana Two", partyName: null, votes: 0 },
@@ -26,6 +36,37 @@ const positions: PositionTally[] = [
       { position: "Secretary", candidateId: "s2", candidateName: "Dana Two", partyName: null, votes: 0 },
     ],
     isTie: true,
+    picksNeeded: 1,
+    pickGroup: [
+      { position: "Secretary", candidateId: "s1", candidateName: "Cara One", partyName: null, votes: 0 },
+      { position: "Secretary", candidateId: "s2", candidateName: "Dana Two", partyName: null, votes: 0 },
+    ],
+    autoWinners: [],
+    bothWin: false,
+  },
+  {
+    // 117 — a 2-way Grade Level Representative tie proclaims BOTH winners
+    // automatically, with no board pick and no tie-break method needed.
+    position: "Grade 12 Representative",
+    seats: 2,
+    candidates: [
+      { position: "Grade 12 Representative", candidateId: "g1", candidateName: "Ella Tied", partyName: "Alpha", votes: 7 },
+      { position: "Grade 12 Representative", candidateId: "g2", candidateName: "Fe Tied", partyName: "Beta", votes: 7 },
+      { position: "Grade 12 Representative", candidateId: "g3", candidateName: "Gil Third", partyName: "Gamma", votes: 1 },
+    ],
+    topVotes: 7,
+    tied: [
+      { position: "Grade 12 Representative", candidateId: "g1", candidateName: "Ella Tied", partyName: "Alpha", votes: 7 },
+      { position: "Grade 12 Representative", candidateId: "g2", candidateName: "Fe Tied", partyName: "Beta", votes: 7 },
+    ],
+    isTie: false,
+    picksNeeded: 0,
+    pickGroup: [],
+    autoWinners: [
+      { position: "Grade 12 Representative", candidateId: "g1", candidateName: "Ella Tied", partyName: "Alpha", votes: 7 },
+      { position: "Grade 12 Representative", candidateId: "g2", candidateName: "Fe Tied", partyName: "Beta", votes: 7 },
+    ],
+    bothWin: true,
   },
 ];
 
@@ -55,14 +96,16 @@ describe("ProclamationSummary", () => {
     );
 
     expect(screen.getByText("Proclamation Summary")).toBeInTheDocument();
-    // The clean win counts; the tie without a pick does not yet.
-    expect(screen.getByText("Winners to proclaim — 1 of 2 selected")).toBeInTheDocument();
-    expect(screen.getByText("1 of 2 winners selected")).toBeInTheDocument();
+    // 117 — the default winners (President's leader + BOTH tied Grade 12
+    // representatives) count; the Secretary tie without a pick does not.
+    expect(screen.getByText("Winners to proclaim — 3 of 4 selected")).toBeInTheDocument();
+    expect(screen.getByText("3 of 4 winners selected")).toBeInTheDocument();
     // No names and no per-position decisions on the compact summary.
     expect(screen.queryByText("Ada Leader")).not.toBeInTheDocument();
     expect(screen.queryByText("Tie — no winner chosen yet")).not.toBeInTheDocument();
     expect(screen.queryByText("Tie — board choice")).not.toBeInTheDocument();
-    // The other recorded rows stay.
+    // The other recorded rows stay.  (The both-win Grade Rep tie needs no
+    // resolution method, so the tie-resolution row reflects the Secretary.)
     expect(screen.getByText(/Tie resolution:/)).toBeInTheDocument();
     expect(screen.getAllByText("Not recorded yet").length).toBeGreaterThan(0);
     expect(screen.getByText(/Complaint Resolution and Justification:/)).toBeInTheDocument();
@@ -74,7 +117,7 @@ describe("ProclamationSummary", () => {
     render(
       <ProclamationSummary
         positions={positions}
-        resolutions={{ Secretary: { method: "manual", candidateId: "s1" } }}
+        resolutions={{ Secretary: { method: "manual", candidateIds: ["s1"] } }}
         tieBreakLabel="Coin Toss"
         complaintNote="Weighed against the turnout record."
         complaintReason="The grievance did not change the outcome."
@@ -84,8 +127,8 @@ describe("ProclamationSummary", () => {
       />,
     );
 
-    expect(screen.getByText("Winners to proclaim — 2 of 2 selected")).toBeInTheDocument();
-    expect(screen.getByText("2 of 2 winners selected")).toBeInTheDocument();
+    expect(screen.getByText("Winners to proclaim — 4 of 4 selected")).toBeInTheDocument();
+    expect(screen.getByText("4 of 4 winners selected")).toBeInTheDocument();
     expect(screen.getByText("Coin Toss")).toBeInTheDocument();
     expect(screen.getByText(/The grievance did not change the outcome\./)).toBeInTheDocument();
     expect(screen.getByText(/Weighed against the turnout record\./)).toBeInTheDocument();
@@ -105,7 +148,7 @@ describe("ProclamationSummary", () => {
           p1: { picture: "http://example.com/ada.png", gradeLevel: "Grade 12" },
         }}
         positions={positions}
-        resolutions={{ Secretary: { method: "manual", candidateId: "s1" } }}
+        resolutions={{ Secretary: { method: "manual", candidateIds: ["s1"] } }}
         tieBreakLabel="Coin Toss"
         complaintNote=""
         complaintReason=""
@@ -124,10 +167,40 @@ describe("ProclamationSummary", () => {
     expect(screen.queryByRole("img", { name: "Cara One" })).not.toBeInTheDocument();
     expect(screen.getByText("Ada Leader")).toBeInTheDocument();
     expect(screen.getByText("Cara One")).toBeInTheDocument();
+    // 117 — BOTH tied Grade 12 representatives appear without a pick.
+    expect(screen.getByText("Ella Tied")).toBeInTheDocument();
+    expect(screen.getByText("Fe Tied")).toBeInTheDocument();
     // Each card names its position.
     expect(screen.getByText("President")).toBeInTheDocument();
     expect(screen.getByText("Secretary")).toBeInTheDocument();
-    // Only the board's tie pick carries the badge; the clean win does not.
+    // Only the board's tie pick carries the board-choice badge; the 2-way
+    // Grade Rep tie is marked as both proclaimed instead.
+    expect(screen.getAllByText("Tie — board choice").length).toBe(1);
+    expect(screen.getAllByText("Tie — both proclaimed").length).toBe(2);
+  });
+
+  it("flags a Remain Winner affirmation on the affirmed default winner", () => {
+    // 117 — with a complaint on record, the board affirms the default
+    // winner stands; the final confirmation carries the badge.
+    render(
+      <ProclamationSummary
+        winnersDetail
+        positions={positions}
+        resolutions={{
+          Secretary: { method: "manual", candidateIds: ["s1"] },
+          President: { remainWinner: true },
+        }}
+        tieBreakLabel="Coin Toss"
+        complaintNote=""
+        complaintReason=""
+        complaintSubjects={[]}
+        substantiated={[]}
+        otherResolved={[]}
+      />,
+    );
+
+    expect(screen.getByText("Remain Winner")).toBeInTheDocument();
+    // The affirmation never lands on a board pick.
     expect(screen.getAllByText("Tie — board choice").length).toBe(1);
   });
 });

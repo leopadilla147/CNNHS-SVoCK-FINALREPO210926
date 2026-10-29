@@ -28,6 +28,8 @@ import { useConfirm } from "../../lib/useConfirm";
  * (including the appointment record).  New accounts get their ROLE'S
  * default password (electoral123 / grievance123 / screening123 /
  * sslg123 — bcrypt-hashed at rest, shown once in the D-03 modal).
+ * 118 — a Co-commissioner gets the role's CO-PREFIXED default instead
+ * (coelectoral123 / cogrievance123 / coscreening123).
  * The appointment commissioner's co-commissioner is records-only like
  * the appointment commissioner itself: name + email, no account, no
  * password, and the RPC returns null so no modal appears.
@@ -106,6 +108,15 @@ interface SslgAdviserRow {
 const toOfficerStatus = (raw: string): OfficerStatus =>
   (OFFICER_STATUSES as string[]).includes(raw) ? (raw as OfficerStatus) : "active";
 
+/**
+ * Capitalize the first letter of every word in a name part — covers
+ * multi-word names ("mary jane" → "Mary Jane", "delos santos" →
+ * "Delos Santos") and a typed middle initial ("r." → "R."). The rest
+ * of each word is left as typed.
+ */
+const capitalizeNamePart = (value: string) =>
+  value.replace(/\S+/g, (word) => word.charAt(0).toUpperCase() + word.slice(1));
+
 /** Split a stored full name into the dialog's first/last fields. */
 const splitName = (full: string): { first: string; last: string } => {
   const trimmed = full.trim();
@@ -165,7 +176,7 @@ function OfficerFormDialog({
               <input
                 autoFocus
                 value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
+                onChange={(e) => setFirstName(capitalizeNamePart(e.target.value))}
                 placeholder="First name"
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50"
               />
@@ -174,7 +185,7 @@ function OfficerFormDialog({
               <label className="block text-xs text-gray-600 mb-1">Last Name</label>
               <input
                 value={lastName}
-                onChange={(e) => setLastName(e.target.value)}
+                onChange={(e) => setLastName(capitalizeNamePart(e.target.value))}
                 placeholder="Last name"
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50"
               />
@@ -201,7 +212,7 @@ function OfficerFormDialog({
             <button
               type="button"
               disabled={busy || !valid}
-              onClick={() => onSubmit(`${firstName.trim()} ${lastName.trim()}`, email)}
+              onClick={() => onSubmit(`${capitalizeNamePart(firstName.trim())} ${capitalizeNamePart(lastName.trim())}`, email)}
               className="px-4 py-2 text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
               style={{ backgroundColor: "#5C0102" }}
             >
@@ -346,7 +357,7 @@ export default function ChiefAppointments() {
     destructive: true,
   });
 
-  const fullName = (f: string, l: string) => `${f.trim().charAt(0).toUpperCase() + f.trim().slice(1)} ${l.trim().charAt(0).toUpperCase() + l.trim().slice(1)}`.trim();
+  const fullName = (f: string, l: string) => `${capitalizeNamePart(f.trim())} ${capitalizeNamePart(l.trim())}`.trim();
 
   const appointCommissioner = async () => {
     if (!cForm.firstName.trim() || !cForm.lastName.trim() || !cForm.email.trim()) return;
@@ -545,7 +556,7 @@ export default function ChiefAppointments() {
             <label className="block text-xs text-gray-600 mb-1">First Name</label>
             <input
               value={cForm.firstName}
-              onChange={(e) => setCForm({ ...cForm, firstName: e.target.value })}
+              onChange={(e) => setCForm({ ...cForm, firstName: capitalizeNamePart(e.target.value) })}
               placeholder="First name"
               className={inputClass}
             />
@@ -554,7 +565,7 @@ export default function ChiefAppointments() {
             <label className="block text-xs text-gray-600 mb-1">Last Name</label>
             <input
               value={cForm.lastName}
-              onChange={(e) => setCForm({ ...cForm, lastName: e.target.value })}
+              onChange={(e) => setCForm({ ...cForm, lastName: capitalizeNamePart(e.target.value) })}
               placeholder="Last name"
               className={inputClass}
             />
@@ -748,7 +759,7 @@ export default function ChiefAppointments() {
             <label className="block text-xs text-gray-600 mb-1">First Name</label>
             <input
               value={sslForm.firstName}
-              onChange={(e) => setSslForm({ ...sslForm, firstName: e.target.value })}
+              onChange={(e) => setSslForm({ ...sslForm, firstName: capitalizeNamePart(e.target.value) })}
               placeholder="First name"
               className={inputClass}
             />
@@ -757,7 +768,7 @@ export default function ChiefAppointments() {
             <label className="block text-xs text-gray-600 mb-1">Last Name</label>
             <input
               value={sslForm.lastName}
-              onChange={(e) => setSslForm({ ...sslForm, lastName: e.target.value })}
+              onChange={(e) => setSslForm({ ...sslForm, lastName: capitalizeNamePart(e.target.value) })}
               placeholder="Last name"
               className={inputClass}
             />

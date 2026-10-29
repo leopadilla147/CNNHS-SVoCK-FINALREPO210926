@@ -398,6 +398,12 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
  * the Resources dropdown and the footer's Contact Us block.  A deliberate
  * singleton — the footer renders for logged-out visitors, so the row is
  * world-readable and only the RPC writes it.
+ *
+ * 119: the About CNNHS page's content rides in the same row — the brief
+ * school information, the DepEd Vision and Mission, and Our Core Values.
+ * An empty text field or an empty core_values array means "show the
+ * school's shipped wording" (mapHomepageSettings / AboutCNNHSPage fall
+ * back to the defaults below).
  */
 export interface HomepageSettings {
   /** Public URL of the uploaded guidelines file (homepage-files bucket). */
@@ -410,7 +416,52 @@ export interface HomepageSettings {
   /** 'HH:MM' strings, exactly what <input type="time"> submits. */
   officeHoursStart: string;
   officeHoursEnd: string;
+  /** The profile paragraph under the school name on the About page. */
+  briefInfo: string;
+  /** The DepEd Vision statement (line breaks preserved on render). */
+  vision: string;
+  /** The DepEd Mission; lines starting with '•' render as bullet items. */
+  mission: string;
+  /** The "Our Core Values" cards — title + short gloss each. */
+  coreValues: Array<{ title: string; gloss: string }>;
 }
+
+/** One "Our Core Values" card on the About page. */
+export interface CoreValue {
+  title: string;
+  gloss: string;
+}
+
+/** The wording AboutCNNHSPage (and the footer) shipped with before the settings became editable. */
+export const shippedAboutContent = {
+  briefInfo:
+    "CNNHS is a public secondary school in Daet, Camarines Norte, serving its learner community under the Department of Education. The school upholds the DepEd Vision, Mission, and Core Values in everything it does — including the election of its learner leaders.",
+  vision: [
+    "We dream of Filipinos",
+    "who passionately love their country.",
+    "And whose values also competencies.",
+    "Also enable them to realize their full potential.",
+    "And contribute meaningfully to building the nation.",
+    "",
+    "As a learner-centered public institution,",
+    "the Department of Education.",
+    "Continuously improves itself",
+    "to better serve its stakeholders.",
+  ].join("\n"),
+  mission: [
+    "To protect and promote the right of Filipino. To quality and equitable. Culture-base as well as complete basic education where:",
+    "• Students also learn in a child-friendly. Gender-sensitive too. And also safe and motivating environment.",
+    "• Teachers facilitate learning to nurture every learner.",
+    "• Administrators and staff. As stewards of the institution also ensure enabling and supportive environment. And effective learning to happen.",
+    "• Family, community, and stakeholders. Are also actively engaged. Also share responsibility for developing learners.",
+  ].join("\n"),
+  coreValues: [
+    { title: "Maka-Diyos", gloss: "Love for God" },
+    { title: "Maka-Tao", gloss: "Love for Fellowmen" },
+    { title: "Maka-Kalikasan", gloss: "Love for Nature" },
+    { title: "Maka-Bansa", gloss: "Love for Country" },
+  ] as Array<CoreValue>,
+};
 
 /** The values the footer shipped with before settings became editable. */
 export const defaultHomepageSettings: HomepageSettings = {
@@ -418,6 +469,7 @@ export const defaultHomepageSettings: HomepageSettings = {
   location: "Camarines Norte National High School, Daet, Camarines Norte, Philippines",
   officeHoursStart: "08:00",
   officeHoursEnd: "17:00",
+  ...shippedAboutContent,
 };
 
 /** '08:00' -> '8:00 AM' — how homepage_settings office hours render everywhere. */

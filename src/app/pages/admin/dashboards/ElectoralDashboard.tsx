@@ -108,6 +108,28 @@ const VOTER_FILTERS = [
   { value: "not-voted", label: "Not Voted" },
 ] as const;
 
+/** Students shown per page in the Voter List. */
+const VOTER_PAGE_SIZE = 50;
+
+/**
+ * Compact page list for the Voter List pagination: every page when there are
+ * only a few, otherwise the ends and the pages around the current one with
+ * ellipsis gaps, e.g. [1, "…", 4, 5, 6, "…", 20].
+ */
+function voterPageList(current: number, total: number): (number | "…")[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = new Set<number>([1, total, current - 1, current, current + 1]);
+  const sorted = [...pages].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+  const out: (number | "…")[] = [];
+  let prev = 0;
+  for (const p of sorted) {
+    if (p - prev > 1) out.push("…");
+    out.push(p);
+    prev = p;
+  }
+  return out;
+}
+
 type VoterFilter = (typeof VOTER_FILTERS)[number]["value"];
 
 /** Compact "Voted At" cell text; "—" for not-voted rows. */
@@ -253,6 +275,28 @@ export default function ElectoralDashboard() {
     });
   }, [voterRows, voterSearch, voterFilter, kioskFilter]);
 
+  // ---- Pagination: 50 students per page ----
+  const [voterPage, setVoterPage] = useState(1);
+
+  // Filters narrowed or changed — always land back on the first page.
+  useEffect(() => {
+    setVoterPage(1);
+  }, [voterSearch, voterFilter, kioskFilter]);
+
+  const totalVoterPages = Math.max(1, Math.ceil(filteredVoters.length / VOTER_PAGE_SIZE));
+  // Guard against a stale page index after the list shrinks.
+  const safeVoterPage = Math.min(voterPage, totalVoterPages);
+  const pagedVoters = useMemo(
+    () =>
+      filteredVoters.slice(
+        (safeVoterPage - 1) * VOTER_PAGE_SIZE,
+        safeVoterPage * VOTER_PAGE_SIZE,
+      ),
+    [filteredVoters, safeVoterPage],
+  );
+  const startRow = filteredVoters.length === 0 ? 0 : (safeVoterPage - 1) * VOTER_PAGE_SIZE + 1;
+  const endRow = Math.min(safeVoterPage * VOTER_PAGE_SIZE, filteredVoters.length);
+
   return (
     <div className="p-6 md:p-8 max-w-7xl mx-auto">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
@@ -386,7 +430,7 @@ export default function ElectoralDashboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {filteredVoters.map((row) => (
+              {pagedVoters.map((row) => (
                 <tr key={row.student.id} className="hover:bg-gray-50 transition-colors">
                   <td className="py-3 px-5">
                     <div className="flex items-center gap-2">
@@ -443,8 +487,46 @@ export default function ElectoralDashboard() {
           </table>
         </div>
 
-        <div className="px-5 py-3 border-t border-gray-100 text-xs text-gray-400">
-          Showing {filteredVoters.length.toLocaleString()} of {voterRows.length.toLocaleString()} approved students
+        {/* Pagination — 50 students per page */}
+        <div className="px-5 py-3 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="text-xs text-gray-400">
+            Showing {startRow.toLocaleString()}–{endRow.toLocaleString()} of{" "}
+            {filteredVoters.length.toLocaleString()} approved students
+          </div>
+          {totalVoterPages > 1 && (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setVoterPage(Math.max(1, safeVoterPage - 1))}
+                disabled={safeVoterPage === 1}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Previous
+              </button>
+              {voterPageList(safeVoterPage, totalVoterPages).map((p, i) =>
+                p === "…" ? (
+                  <span key={`gap-${i}`} className="px-1 text-xs text-gray-400">
+                    …
+                  </span>
+                ) : (
+                  <button
+                    key={p}
+                    onClick={() => setVoterPage(p)}
+                    className={`w-8 h-8 rounded-lg text-xs font-medium transition-all ${p === safeVoterPage ? "text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                    style={p === safeVoterPage ? { backgroundColor: "#5C0102" } : {}}
+                  >
+                    {p}
+                  </button>
+                ),
+              )}
+              <button
+                onClick={() => setVoterPage(Math.min(totalVoterPages, safeVoterPage + 1))}
+                disabled={safeVoterPage === totalVoterPages}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
+            </div>
+          )}
         </div>
       </section>
     </div>

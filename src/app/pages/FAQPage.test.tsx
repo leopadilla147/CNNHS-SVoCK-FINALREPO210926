@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import FAQPage from "./FAQPage";
 import type { HomepageSettings } from "../context/AppContext";
+import { defaultHomepageSettings } from "../context/AppContext";
 
 // The page reads the settings through useApp, so it renders against a flat
 // context stub — no provider, no Supabase.
@@ -18,6 +19,7 @@ vi.mock("../context/AppContext", async (importOriginal) => {
 });
 
 const settings: HomepageSettings = {
+  ...defaultHomepageSettings,
   contactEmail: "sslgoffice@cnnhs.edu.ph",
   location: "Camarines Norte National High School, Daet",
   officeHoursStart: "08:00",

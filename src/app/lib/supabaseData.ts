@@ -1561,6 +1561,47 @@ export async function updateAdminPassword(
 }
 
 /**
+ * Forgot-password (email OTP) — request half.  Posts { email } to the
+ * send_password_reset edge function (verify_jwt = false; pre-login, so no
+ * x-session-token exists yet and none is attached).  The server answers
+ * ok:true whether or not the account exists (anti-enumeration), so the
+ * caller always shows the same "check your inbox" copy on success.  A
+ * thrown error means a real infrastructure problem (Brevo outage /
+ * secrets missing) or malformed input, not "email unknown".
+ */
+export async function requestPasswordResetCode(email: string): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client.functions.invoke("send_password_reset", {
+    body: { email },
+  });
+  if (error) {
+    throw new Error("Unable to send the reset code right now. Please try again later.");
+  }
+}
+
+/**
+ * Forgot-password — verify half.  The code + new password go to the
+ * verify_password_reset RPC (migration 120, SECURITY DEFINER; granted to
+ * anon per the 108 convention because the caller has no session yet).
+ * The new password travels PLAINTEXT over TLS — same convention as
+ * changePasswordForCurrentUser; the server bcrypt-hashes it (023 D-10),
+ * bumps session_version and kills every active session (D-14).
+ */
+export async function resetPasswordWithCode(
+  email: string,
+  code: string,
+  newPassword: string
+): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client.rpc("verify_password_reset", {
+    p_email: email,
+    p_code: code,
+    p_new_password: newPassword,
+  });
+  if (error) throw new Error(error.message);
+}
+
+/**
  * The party President's decision on a join request.  The database decides
  * whether the caller actually presides over that party — the President id is
  * never passed from the client, precisely because that is the one thing a

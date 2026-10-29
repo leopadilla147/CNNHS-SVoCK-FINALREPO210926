@@ -37,3 +37,10 @@ verify_jwt = false
 # by the 022 session spine, not a platform JWT.
 [functions.delete_profile_picture]
 verify_jwt = false
+
+# send_password_reset is PRE-LOGIN (forgot-password flow): there is no
+# session token yet and no platform JWT, so JWT verification must stay
+# off.  Abuse is bounded by the function's per-email throttle + daily cap
+# and the 120 verify RPC's shared 023 login lockout, not by a JWT.
+[functions.send_password_reset]
+verify_jwt = false

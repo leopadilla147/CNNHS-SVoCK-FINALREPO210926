@@ -406,6 +406,16 @@ export default function LoginPage() {
                   "Login"
                 )}
               </button>
+
+              <div className="text-center">
+                <button
+                  type="button"
+                  onClick={() => navigate("/forgot-password")}
+                  className="text-xs font-semibold text-[#5C0102] hover:underline underline-offset-4 cursor-pointer"
+                >
+                  Forgot password?
+                </button>
+              </div>
             </div>
 
             {mode === "student" && (

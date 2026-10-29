@@ -13,6 +13,7 @@ import OfficialResultsPage from "./pages/OfficialResultsPage";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
+import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import StudentDashboard from "./pages/student/StudentDashboard";
 import StudentCandidates from "./pages/student/StudentCandidates";
 import StudentApplyCandidacy from "./pages/student/StudentApplyCandidacy";
@@ -60,6 +61,13 @@ export const router = createBrowserRouter([
     // /login when the flag is not set.
     path: "/change-password",
     Component: ChangePasswordPage,
+  },
+  {
+    // Forgot-password (email OTP reset, migration 120) — pre-login flow,
+    // no session exists, so it renders outside both layouts like its
+    // sibling /change-password.
+    path: "/forgot-password",
+    Component: ForgotPasswordPage,
   },
   {
     path: "/student",

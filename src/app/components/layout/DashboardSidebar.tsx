@@ -1,97 +1,18 @@
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
-import {
-  LayoutDashboard, Users, UserCheck, FileText, BarChart2,
-  AlertCircle, LogOut, Menu, X,
-  Shield, GraduationCap, ChevronRight, Activity, UserPlus, Trophy,
-  HelpCircle, UserCog, Archive, FolderArchive, Settings, Eye, Home,
-} from "lucide-react";
-import { useApp, UserRole, CommissionerRole } from "../../context/AppContext";
+import { LogOut, Menu, X, ChevronRight } from "lucide-react";
+import { useApp } from "../../context/AppContext";
 import { useConfirm } from "../../lib/useConfirm";
 import { supabase, isSupabaseConfigured } from "../../lib/supabase";
 import { NotificationBell } from "../notifications/NotificationBell";
 import cnnhsLogo from "../../assets/CNNHS_Logo1.png";
-
-interface NavItem {
-  label: string;
-  href: string;
-  icon: React.ReactNode;
-}
-
-const studentNavItems: NavItem[] = [
-  { label: "Dashboard", href: "/student/dashboard", icon: <LayoutDashboard size={18} /> },
-  { label: "View Candidates", href: "/student/candidates", icon: <Users size={18} /> },
-  { label: "Apply for Candidacy", href: "/student/apply", icon: <UserPlus size={18} /> },
-  { label: "My Complaints", href: "/student/complaints", icon: <AlertCircle size={18} /> },
-  { label: "My Profile", href: "/student/profile", icon: <UserCheck size={18} /> },
-];
-
-const chiefTopItems: NavItem[] = [
-  { label: "Dashboard", href: "/admin/dashboard", icon: <LayoutDashboard size={18} /> },
-  { label: "Officer Management", href: "/admin/officers", icon: <UserPlus size={18} /> },
-  { label: "Election Reports", href: "/admin/reports", icon: <FileText size={18} /> },
-  { label: "Live Results", href: "/admin/live-results", icon: <Eye size={18} /> },
-  { label: "All System Logs", href: "/admin/logs", icon: <Activity size={18} /> },
-  { label: "Admin Profile", href: "/admin/profile", icon: <UserCheck size={18} /> },
-  { label: "Homepage Setting", href: "/admin/homepage-settings", icon: <Home size={18} /> },
-];
-
-// v1.2 (Chief's request): the other commissioners' tab groups
-// (Screening & Validation, Electoral Board, Grievance) are REMOVED from
-// the Chief's sidebar — those tabs stay available to the commissioners
-// themselves via their own role navs below.
-const sslgAdviserTopItems: NavItem[] = [
-  { label: "Dashboard", href: "/admin/dashboard", icon: <LayoutDashboard size={18} /> },
-  { label: "Student Enrollment", href: "/admin/students", icon: <GraduationCap size={18} /> },
-  { label: "System Logs", href: "/admin/logs", icon: <Activity size={18} /> },
-  { label: "My Profile", href: "/admin/profile", icon: <UserCheck size={18} /> },
-];
-
-const screeningNavItems: NavItem[] = [
-  { label: "Dashboard", href: "/admin/dashboard", icon: <LayoutDashboard size={18} /> },
-  { label: "Candidates Review", href: "/admin/candidates", icon: <Trophy size={18} /> },
-  { label: "Candidates Archived Document", href: "/admin/archive", icon: <Archive size={18} /> },
-  { label: "My Profile", href: "/admin/profile", icon: <UserCheck size={18} /> },
-];
-
-const electoralNavItems: NavItem[] = [
-  { label: "Dashboard", href: "/admin/dashboard", icon: <LayoutDashboard size={18} /> },
-  { label: "Election Setup", href: "/admin/election", icon: <Settings size={18} /> },
-  { label: "Live Results", href: "/admin/live-results", icon: <Eye size={18} /> },
-  { label: "My Profile", href: "/admin/profile", icon: <UserCheck size={18} /> },
-];
-
-const grievanceNavItems: NavItem[] = [
-  { label: "Dashboard", href: "/admin/dashboard", icon: <LayoutDashboard size={18} /> },
-  { label: "Complaints", href: "/admin/complaints", icon: <AlertCircle size={18} /> },
-  { label: "Complaints Archive", href: "/admin/complaints-archive", icon: <FolderArchive size={18} /> },
-  { label: "Election Help Desk", href: "/admin/help-desk", icon: <HelpCircle size={18} /> },
-  { label: "My Profile", href: "/admin/profile", icon: <UserCheck size={18} /> },
-];
-
-const roleConfig: Record<NonNullable<UserRole>, { items: NavItem[]; label: string; color: string }> = {
-  student: { items: studentNavItems, label: "Student Portal", color: "#5C0102" },
-  admin: { items: [], label: "Admin Portal", color: "#5C0102" },
-  sslg_adviser: { items: [], label: "SSLG Adviser Portal", color: "#5C0102" },
-};
-
-// 103: 'appointment' is a records-only designation (no login), so its nav
-// never renders — the entries below exist only to satisfy the Record type.
-const commissionerNavMap: Record<CommissionerRole, NavItem[]> = {
-  chief: chiefTopItems,
-  screening_validation: screeningNavItems,
-  electoral_board: electoralNavItems,
-  grievance: grievanceNavItems,
-  appointment: screeningNavItems,
-};
-
-const commissionerLabelMap: Record<CommissionerRole, string> = {
-  chief: "Chief Commissioner",
-  screening_validation: "Commissioner of Screening & Validation",
-  electoral_board: "Commissioner of Electoral Board",
-  grievance: "Commissioner of Grievance",
-  appointment: "Commissioner of Appointment",
-};
+import {
+  chiefTopItems,
+  sslgAdviserTopItems,
+  getUserNavItems,
+  getUserPortalLabel,
+  getUserRoleTitle,
+} from "./roleNav";
 
 export function DashboardSidebar() {
   const { currentUser, setCurrentUser, candidates, electionPeriod, students } = useApp();
@@ -104,17 +25,8 @@ export function DashboardSidebar() {
   const isChief = currentUser.role === "admin" && currentUser.commissionerRole === "chief";
   const isSslgAdviser = currentUser.role === "sslg_adviser";
 
-  let navItems: NavItem[];
-  let portalLabel: string;
-
-  if (currentUser.role === "admin" && currentUser.commissionerRole) {
-    navItems = commissionerNavMap[currentUser.commissionerRole];
-    portalLabel = commissionerLabelMap[currentUser.commissionerRole];
-  } else {
-    const config = roleConfig[currentUser.role];
-    navItems = config.items;
-    portalLabel = config.label;
-  }
+  const navItems = getUserNavItems(currentUser);
+  const portalLabel = getUserPortalLabel(currentUser);
 
   const hasApprovedCandidacy = candidates.some((c) => c.studentId === currentUser?.id && c.status === "approved");
   const hasCandidacy = candidates.some((c) => c.studentId === currentUser?.id);
@@ -161,11 +73,7 @@ export function DashboardSidebar() {
           </div>
           <div className="min-w-0 flex-1">
             <div className="text-white text-sm font-medium truncate">{currentUser.name}</div>
-            <div className="text-white/60 text-xs capitalize">
-              {currentUser.commissionerRole
-                ? commissionerLabelMap[currentUser.commissionerRole]
-                : currentUser.role}
-            </div>
+            <div className="text-white/60 text-xs">{getUserRoleTitle(currentUser)}</div>
           </div>
           <NotificationBell align="left" />
         </div>

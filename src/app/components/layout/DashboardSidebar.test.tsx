@@ -13,6 +13,7 @@ const { mockCurrentUser } = vi.hoisted(() => ({
     commissionerRole: "electoral_board" as CommissionerRole | undefined,
     mustChangePassword: false,
     profilePictureUrl: undefined as string | undefined,
+    isCoCommissioner: false as boolean | undefined,
   },
 }));
 
@@ -51,6 +52,7 @@ describe("DashboardSidebar", () => {
     mockCurrentUser.commissionerRole = "electoral_board";
     mockCurrentUser.role = "admin";
     mockCurrentUser.profilePictureUrl = undefined;
+    mockCurrentUser.isCoCommissioner = false;
   });
 
   it("shows Live Results for the Electoral Board", () => {
@@ -118,6 +120,22 @@ describe("DashboardSidebar", () => {
     });
   });
 
+  describe("Election Calendar tab", () => {
+    // Every role now carries the calendar tab (directly above the profile
+    // tab); /admin/calendar is no longer bounced for the Adviser — see
+    // DashboardLayout.
+    it("shows Election Calendar to the SSLG Adviser", () => {
+      mockCurrentUser.role = "sslg_adviser";
+      mockCurrentUser.commissionerRole = undefined;
+
+      renderSidebar();
+
+      expect(
+        screen.getByRole("link", { name: /Election Calendar/i }).getAttribute("href"),
+      ).toBe("/admin/calendar");
+    });
+  });
+
   describe("archive tabs (092)", () => {
     it("shows the renamed Candidates Archived Document tab for the Screening & Validation commissioner", () => {
       mockCurrentUser.commissionerRole = "screening_validation";
@@ -148,5 +166,44 @@ describe("DashboardSidebar", () => {
         screen.getByRole("link", { name: /Complaints Archive/i }).getAttribute("href"),
       ).toBe("/admin/complaints-archive");
     });
+  });
+
+  describe("co-commissioner title under the name", () => {
+    // The uppercase portal label also carries the primary's title, so
+    // assertions count occurrences: the header switches from the primary's
+    // title (2 renderings) to the co title (1 rendering of each).
+    it("titles a co-commissioner after their primary's board", () => {
+      mockCurrentUser.isCoCommissioner = true;
+
+      renderSidebar();
+
+      expect(screen.getByText("Co-commissioner of Electoral Board")).toBeTruthy();
+      expect(screen.getAllByText("Commissioner of Electoral Board")).toHaveLength(1);
+    });
+
+    it("keeps the primary's own title for a non-co commissioner", () => {
+      renderSidebar();
+
+      expect(screen.getAllByText("Commissioner of Electoral Board")).toHaveLength(2);
+      expect(screen.queryByText("Co-commissioner of Electoral Board")).toBeNull();
+    });
+
+    it.each(["screening_validation", "grievance"] as const)(
+      "titles a %s co-commissioner after that board",
+      (commissionerRole) => {
+        mockCurrentUser.commissionerRole = commissionerRole;
+        mockCurrentUser.isCoCommissioner = true;
+
+        renderSidebar();
+
+        expect(
+          screen.getByText(
+            commissionerRole === "screening_validation"
+              ? "Co-commissioner of Screening & Validation"
+              : "Co-commissioner of Grievance",
+          ),
+        ).toBeTruthy();
+      },
+    );
   });
 });

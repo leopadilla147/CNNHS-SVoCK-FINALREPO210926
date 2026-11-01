@@ -44,7 +44,7 @@ export function EAFPreviewDocument({ candidate, student, partyName, onPrint, scr
     <div className="bg-white rounded-lg shadow-sm text-black print:shadow-none print:rounded-none" style={{ fontFamily: "Times New Roman, serif" }}>
       <div
         data-eaf-document="true"
-        className="eaf-preview mx-auto w-[816px] min-h-[1056px] bg-white p-8 text-[10px] leading-tight print:w-[8.5in] print:min-h-[11in] print:p-[0.32in]"
+        className="eaf-preview mx-auto w-[816px] min-h-[1056px] bg-white px-14 py-8 text-[10px] leading-tight print:w-[8.5in] print:min-h-[11in] print:px-[0.6in] print:py-[0.32in]"
       >
         {/* 111: the seal leads the letterhead — centred above the address
             block (it previously sat in a left gutter). */}
@@ -200,7 +200,7 @@ export function EAFPreviewDocument({ candidate, student, partyName, onPrint, scr
       {/* Page 2 – Leadership Capsule */}
       <div
         data-eaf-page2="true"
-        className="eaf-preview mx-auto w-[816px] min-h-[1056px] bg-white p-8 text-[10px] leading-tight print:w-[8.5in] print:min-h-[11in] print:p-[0.32in] print:page-break-before:always"
+        className="eaf-preview mx-auto w-[816px] min-h-[1056px] bg-white px-14 py-8 text-[10px] leading-tight print:w-[8.5in] print:min-h-[11in] print:px-[0.6in] print:py-[0.32in] print:page-break-before:always"
         style={{ fontFamily: "Times New Roman, serif" }}
       >
         {/* Same centred letterhead as page 1; "Back Page" stays pinned to the

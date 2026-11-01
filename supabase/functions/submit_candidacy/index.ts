@@ -9,6 +9,21 @@ const corsHeaders = {
 
 const POSITIONS = ["President", "Vice President", "Secretary", "Treasurer", "Auditor", "PIO", "Protocol Officer", "Grade 7 Representative", "Grade 8 Representative", "Grade 9 Representative", "Grade 10 Representative", "Grade 11 Representative", "Grade 12 Representative"];
 const GRADE_LEVELS = ["Grade 7", "Grade 8", "Grade 9", "Grade 10", "Grade 11", "Grade 12"];
+// Each executive office is gated to specific grades (migration 124):
+//   President / Vice President -> Grade 11-12 (keeps party creation SHS-only,
+//     since a party is founded by running for its President)
+//   Secretary / Treasurer      -> Grade 10
+//   Auditor / PIO / Protocol Officer -> Grade 8-9
+// Grade 7 has no executive office — only its representative seat.
+const POSITION_GRADE_GATE: Record<string, string[]> = {
+  "President": ["Grade 11", "Grade 12"],
+  "Vice President": ["Grade 11", "Grade 12"],
+  "Secretary": ["Grade 10"],
+  "Treasurer": ["Grade 10"],
+  "Auditor": ["Grade 8", "Grade 9"],
+  "PIO": ["Grade 8", "Grade 9"],
+  "Protocol Officer": ["Grade 8", "Grade 9"],
+};
 const GENDERS = ["Male", "Female"];
 
 interface CandidatePayload {
@@ -46,6 +61,10 @@ function validate(p: CandidatePayload): string[] {
   if (!p.position || !POSITIONS.includes(p.position)) errors.push("Valid position is required.");
   if (p.position && p.position.endsWith("Representative") && p.position !== `${p.gradeLevel} Representative`) {
     errors.push(`${p.gradeLevel} students can only apply for ${p.gradeLevel} Representative.`);
+  }
+  const allowedGrades = p.position ? POSITION_GRADE_GATE[p.position] : undefined;
+  if (allowedGrades && !allowedGrades.includes(p.gradeLevel)) {
+    errors.push(`${p.position} is only open to ${allowedGrades.join(" and ")} students.`);
   }
   if (!p.gender || !GENDERS.includes(p.gender)) errors.push("Valid gender is required.");
   if (!p.dateOfBirth) errors.push("Date of birth is required.");

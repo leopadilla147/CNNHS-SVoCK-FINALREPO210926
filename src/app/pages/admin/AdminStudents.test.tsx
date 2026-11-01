@@ -14,6 +14,8 @@
 //    the valid rows still import
 //  - a matched PENDING registration is still auto-approved from the
 //    same upload
+//  - "rows inserted" + "awaiting registration" share ONE combined
+//    banner line (adaptive wording per count combination)
 // =============================================================
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -180,8 +182,15 @@ describe("AdminStudents masterlist upload (partial import)", () => {
     const { container } = renderPage();
     uploadFile(container);
 
-    // Imported count
-    expect(await screen.findByText("2 masterlist rows inserted.")).toBeInTheDocument();
+    // Inserted + awaiting share ONE combined box: 2 new rows imported, but
+    // 3 students have no registered account yet (222 was already listed).
+    expect(
+      await screen.findByText("2 masterlist rows inserted; 3 students listed as awaiting student registration.")
+    ).toBeInTheDocument();
+    // The matched registration's auto-approval keeps its own (green) box.
+    expect(
+      screen.getByText("1 registered student auto-approved via the masterlist match.")
+    ).toBeInTheDocument();
 
     // Skipped-duplicates count + per-row reasons (real describeSkippedLrn)
     expect(
@@ -237,6 +246,53 @@ describe("AdminStudents masterlist upload (partial import)", () => {
       await screen.findByText("2 rows could not be imported — nothing was imported. Fix the highlighted rows and upload the sheet again:")
     ).toBeInTheDocument();
     expect(mockImportStudentMasterlistDocx).not.toHaveBeenCalled();
+  });
+
+  it("collapses the combined line on a fresh upload where inserted === awaiting", async () => {
+    // Fresh sheet: both rows are new and none matches a registered LRN,
+    // so inserted (2) and awaiting (2) are the same rows reported once.
+    mockExtractAndParse.mockResolvedValue({
+      parsed: {
+        rows: [row("111111111111", 2), row("222222222222", 3)],
+        skipped: 0,
+        errors: [],
+      },
+      text: "STUDENT MASTER LIST\nSY: 2026-2027",
+    });
+    mockFindExistingLrns.mockResolvedValue(new Map());
+    mockImportStudentMasterlistDocx.mockResolvedValue({ imported: 2, skipped: 0, errors: [] });
+
+    const { container } = renderPage();
+    uploadFile(container);
+
+    expect(
+      await screen.findByText("2 masterlist rows inserted — all listed as awaiting student registration.")
+    ).toBeInTheDocument();
+    // Nothing matched a registered account — no green box.
+    expect(screen.queryByText(/auto-approved via the masterlist match/)).toBeNull();
+  });
+
+  it("keeps the inserted-only line when the new row matches a registered student", async () => {
+    // LRN 777 belongs to registered Maria Santos, but the sheet's details
+    // differ (name/birthdate/grade) → forReview, NOT auto-approved and
+    // NOT awaiting: only the insert count has anything to report.
+    mockExtractAndParse.mockResolvedValue({
+      parsed: {
+        rows: [row("777777777777", 2)],
+        skipped: 0,
+        errors: [],
+      },
+      text: "STUDENT MASTER LIST\nSY: 2026-2027",
+    });
+    mockFindExistingLrns.mockResolvedValue(new Map());
+    mockImportStudentMasterlistDocx.mockResolvedValue({ imported: 1, skipped: 0, errors: [] });
+
+    const { container } = renderPage();
+    uploadFile(container);
+
+    expect(await screen.findByText("1 masterlist row inserted.")).toBeInTheDocument();
+    expect(screen.queryByText(/awaiting student registration/)).toBeNull();
+    expect(mockReviewStudentRpc).not.toHaveBeenCalled();
   });
 });
 

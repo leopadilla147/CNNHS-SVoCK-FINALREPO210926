@@ -3,6 +3,7 @@ import { PublicLayout } from "./components/layout/PublicLayout";
 import { DashboardLayout } from "./components/layout/DashboardLayout";
 import HomePage from "./pages/HomePage";
 import CurrentElectionPage from "./pages/CurrentElectionPage";
+import ElectionCalendarPage from "./pages/ElectionCalendarPage";
 import GuidelinesPage from "./pages/GuidelinesPage";
 import FAQPage from "./pages/FAQPage";
 import ContactInformationPage from "./pages/ContactInformationPage";
@@ -44,6 +45,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, Component: HomePage },
       { path: "current-election", Component: CurrentElectionPage },
+      { path: "calendar", Component: ElectionCalendarPage },
       { path: "guidelines", Component: GuidelinesPage },
       { path: "faq", Component: FAQPage },
       { path: "contact", Component: ContactInformationPage },
@@ -74,6 +76,7 @@ export const router = createBrowserRouter([
     Component: StudentLayout,
     children: [
       { path: "dashboard", Component: StudentDashboard },
+      { path: "calendar", Component: ElectionCalendarPage },
       { path: "candidates", Component: StudentCandidates },
       { path: "apply", Component: StudentApplyCandidacy },
       { path: "complaints", Component: StudentComplaints },
@@ -85,6 +88,7 @@ export const router = createBrowserRouter([
     Component: AdminLayout,
     children: [
       { path: "dashboard", Component: AdminDashboard },
+      { path: "calendar", Component: ElectionCalendarPage },
       { path: "students", Component: AdminStudents },
       { path: "candidates", Component: AdminCandidates },
       { path: "reports", Component: AdminReports },

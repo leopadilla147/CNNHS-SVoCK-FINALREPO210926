@@ -15,6 +15,38 @@ export const EXECUTIVE_POSITIONS = ["President", "Vice President", "Secretary", 
 export const GRADE_LEVELS = ["Grade 7", "Grade 8", "Grade 9", "Grade 10", "Grade 11", "Grade 12"];
 
 /**
+ * ...and each of those offices is gated to specific grades:
+ *   * President / Vice President — Grade 11-12 only, which is also what keeps
+ *     party creation SHS-only, since a party is founded by running for its
+ *     President;
+ *   * Secretary / Treasurer — Grade 10 only;
+ *   * Auditor / PIO / Protocol Officer — Grade 8-9 only.
+ * Grade 7 holds no executive office — its roster is the Grade 7
+ * Representative seat alone.  FULL_POSITION_ORDER — the canonical
+ * ballot/results order — is unchanged.
+ */
+export const EXECUTIVE_GRADE_GATE: Record<string, string[]> = {
+  President: ["Grade 11", "Grade 12"],
+  "Vice President": ["Grade 11", "Grade 12"],
+  Secretary: ["Grade 10"],
+  Treasurer: ["Grade 10"],
+  Auditor: ["Grade 8", "Grade 9"],
+  PIO: ["Grade 8", "Grade 9"],
+  "Protocol Officer": ["Grade 8", "Grade 9"],
+};
+
+/** The grades that may contest an executive office; empty for ungated positions. */
+export function gradesForPosition(position: string): string[] {
+  return EXECUTIVE_GRADE_GATE[position] ?? [];
+}
+
+/** Grade 11 and Grade 12 — the only levels eligible for President, and
+ *  therefore the only ones who can create a party. */
+export function isSeniorHighGrade(gradeLevel: string): boolean {
+  return gradeLevel === "Grade 11" || gradeLevel === "Grade 12";
+}
+
+/**
  * ... plus one representative seat per grade level: the full canonical
  * position order shared by every results / ballot / proclamation view.
  * (The old "PRO" office was removed from the election entirely — see
@@ -25,12 +57,40 @@ export const FULL_POSITION_ORDER = [
   ...GRADE_LEVELS.map((grade) => `${grade} Representative`),
 ];
 
-/** The seats a student of `gradeLevel` may contest. */
+/**
+ * The canonical rank of a position in FULL_POSITION_ORDER — 0 for President
+ * through 12 for Grade 12 Representative.  Positions outside the canonical
+ * list (legacy rows) rank after every known one, keeping the proclaimed
+ * winners, tally and results views in the Board's reading order instead of
+ * the database's alphabetical one.
+ */
+export function positionRank(position: string): number {
+  const index = FULL_POSITION_ORDER.indexOf(position);
+  return index === -1 ? FULL_POSITION_ORDER.length : index;
+}
+
+/** 117 — Grade Level Representative positions elect TWO winners; every
+ *  other position elects one.  (Kept in step with
+ *  ProclamationDialog.seatsForPosition.) */
+export function isGradeRepresentativePosition(position: string): boolean {
+  return position.endsWith(" Representative");
+}
+
+/**
+ * The seats a student of `gradeLevel` may contest.
+ *
+ * Each executive office is offered only to the grades in its gate above, and
+ * each grade keeps its own Representative seat — Grade 7's roster is that
+ * seat alone.  An unknown grade (including an empty one before the student
+ * record loads) offers no seats at all — a roster can only be built for a
+ * grade the school actually has.
+ */
 export function getPositionsForGrade(gradeLevel: string): string[] {
-  const base = [...EXECUTIVE_POSITIONS];
-  if (gradeLevel && GRADE_LEVELS.includes(gradeLevel)) {
-    base.push(`${gradeLevel} Representative`);
-  }
+  if (!gradeLevel || !GRADE_LEVELS.includes(gradeLevel)) return [];
+  const base = EXECUTIVE_POSITIONS.filter((position) =>
+    gradesForPosition(position).includes(gradeLevel)
+  );
+  base.push(`${gradeLevel} Representative`);
   return base;
 }
 
@@ -269,13 +329,20 @@ export interface SeatSummary {
 /**
  * Every office this student could hold, with its state.
  *
- * `partyId` undefined means the Independent race (rows with no party), which
- * has always been contestable: 001:269 treated NULL party ids as distinct, so
- * multiple Independent students can run for one office.
+ * `partyId` undefined means the Independent race.  Independents do NOT
+ * contest a shared seat: each runs their own candidacy for the office, so
+ * another Independent's request — or Screening-approved win — never fills
+ * or closes a seat (055 already allowed multiple rows per office; this is
+ * the matching UI rule).  Nor is the applicant told how many others are
+ * running: independent seats carry no claimant data at all.
  *
- * The roster is the student's own grade, so "full" is grade-relative — a party
- * with all 8 executive seats won is still open to a Grade 11 student whose
- * Grade 11 Representative seat has no winner.
+ * For a party (partyId given) the roster is the party's slate: an office
+ * the party President has already awarded is filled, and 055's contest
+ * model lets several students queue behind the President's decision.
+ *
+ * The roster is the student's own grade, so "full" is grade-relative — a
+ * party with every executive seat won is still open to a Grade 11 student
+ * whose Grade 11 Representative seat has no winner.
  */
 export function partySeatSummaries(
   candidates: Candidate[],
@@ -300,6 +367,19 @@ export function partySeatSummaries(
 
   return getPositionsForGrade(gradeLevel).map((position) => {
     const claimants = byPosition.get(position) ?? [];
+
+    // Independent race: every office stays enterable, and the applicant is
+    // not shown how many others are running — an Independent does not share
+    // a seat, so there is no shared race to report on.
+    if (!partyId) {
+      return {
+        position,
+        state: "open" as SeatState,
+        requestCount: 0,
+        requesters: [],
+      };
+    }
+
     const approved = claimants.find(isSeatWinner);
     const requesters = claimants.filter((candidate) => candidate.id !== approved?.id);
     const state: SeatState = approved

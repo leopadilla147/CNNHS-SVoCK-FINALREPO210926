@@ -1,8 +1,9 @@
 import { motion, AnimatePresence } from "motion/react";
 import { Link } from "react-router";
 import { useApp, Candidate } from "../../context/AppContext";
-import { Archive, FileText, Download, Search, Eye, Clock, CheckCircle, XCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Archive, FileText, Download, Search, Eye, Clock, CheckCircle, XCircle, Loader2, AlertCircle } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ArchivePdfDocument, archivePdfFileName, downloadArchiveDocumentPdf } from "../../components/ArchiveDocumentPdf";
 
 // One row of the archive list.  It carries the SOURCE record (not just its
 // title) so the preview modal can render the actual documents — the display
@@ -27,6 +28,13 @@ export default function AdminArchive() {
   const { candidates, archivedCandidates } = useApp();
   const [search, setSearch] = useState("");
   const [preview, setPreview] = useState<ArchivedDoc | null>(null);
+  // PDF download: `pdfDoc` mounts the off-screen archive document (rendered
+  // below), the effect rasterizes it; `downloadingId` drives the row button's
+  // spinner and `pdfError` surfaces generation failures.
+  const [pdfDoc, setPdfDoc] = useState<ArchivedDoc | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  const pdfMountRef = useRef<HTMLDivElement | null>(null);
 
   // A pending application is the one thing this archive cannot answer —
   // send the commissioner back to the live review surface instead.
@@ -59,6 +67,33 @@ export default function AdminArchive() {
     return () => document.removeEventListener("keydown", onKey);
   }, [preview]);
 
+  // Downloading: the off-screen document above is mounted by the `pdfDoc`
+  // state; once committed, rasterize it page by page and save the PDF.
+  // One download at a time — the row button guards against re-entry.
+  useEffect(() => {
+    if (!pdfDoc) return;
+    let cancelled = false;
+    const mount = pdfMountRef.current;
+    const job = mount
+      ? downloadArchiveDocumentPdf(mount, archivePdfFileName(pdfDoc.candidate))
+      : Promise.reject(new Error("Could not prepare the archive document for download."));
+    job
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setPdfError(err instanceof Error ? err.message : "Could not generate the PDF download.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setPdfDoc(null);
+          setDownloadingId(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pdfDoc]);
+
   return (
     <div className="p-6 md:p-8 max-w-7xl mx-auto">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
@@ -82,6 +117,13 @@ export default function AdminArchive() {
               Review now
             </Link>
           </div>
+        </div>
+      )}
+
+      {/* PDF generation failure — the row button stays usable for a retry. */}
+      {pdfError && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-6 flex items-center gap-2 text-sm text-red-800">
+          <AlertCircle size={16} className="flex-shrink-0" /> {pdfError}
         </div>
       )}
 
@@ -132,11 +174,18 @@ export default function AdminArchive() {
                 <Eye size={16} />
               </button>
               <button
-                onClick={(e) => e.stopPropagation()}
-                className="p-2 text-gray-400 hover:text-[#5C0102] rounded-lg hover:bg-gray-100 transition-colors"
-                title="Download"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (downloadingId) return; // one PDF at a time
+                  setPdfError(null);
+                  setDownloadingId(doc.id);
+                  setPdfDoc(doc);
+                }}
+                disabled={!!downloadingId}
+                className="p-2 text-gray-400 hover:text-[#5C0102] rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-50 disabled:cursor-wait"
+                title={downloadingId === doc.id ? "Generating PDF..." : "Download PDF"}
               >
-                <Download size={16} />
+                {downloadingId === doc.id ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
               </button>
             </div>
           </div>
@@ -187,6 +236,20 @@ export default function AdminArchive() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Off-screen print layout for the PDF download — mounted only while a
+          download is being generated; downloadArchiveDocumentPdf rasterizes
+          it one letter page per section. */}
+      {pdfDoc && (
+        <div
+          ref={pdfMountRef}
+          data-archive-pdf-mount="true"
+          aria-hidden="true"
+          style={{ position: "fixed", top: 0, left: "-10000px" }}
+        >
+          <ArchivePdfDocument candidate={pdfDoc.candidate} />
+        </div>
+      )}
     </div>
   );
 }
@@ -222,12 +285,13 @@ function StatusBadge({ status }: { status: Candidate["status"] }) {
 // checklist flag, so it is rendered as a checklist rather than a file.
 // The EAF covers the old Application/Screening/Report Card/Good Moral list —
 // those are all sections of the EAF itself, so only the EAF flag remains.
+// EAF Front/Back are not checklist rows either: they are photos of the
+// submitted EAF, shown in the EAF Photos section below (and included in the
+// PDF download).
 function CandidacyPreview({ candidate }: { candidate: Candidate }) {
   const docs: { label: string; present: boolean }[] = [
     { label: "EAF (Election Application Form)", present: candidate.documents.applicationForm },
     { label: "Introductory Profile", present: candidate.documents.introductoryProfile },
-    { label: "EAF Front", present: !!candidate.eafFrontImage || !!candidate.documents.eafFront },
-    { label: "EAF Back", present: !!candidate.eafBackImage || !!candidate.documents.eafBack },
   ];
   const complete = docs.filter((d) => d.present).length;
 

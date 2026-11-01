@@ -1,0 +1,688 @@
+/* ═══════════════════════════════════════════════════════════════════
+   PROCLAMATION CERTIFICATE — component styles
+   Ported from the standalone proclamation/ generator.  Everything is
+   scoped under .proclamation-certificate so the app CSS can never leak
+   in, and plain hex values are used throughout so the PDF rasterizer
+   (html2canvas-pro) reproduces the design exactly.
+   Letter landscape: 11in x 8.5in = 1056px x 816px at 96dpi.
+   ═══════════════════════════════════════════════════════════════════ */
+
+.proclamation-certificate {
+  /* SVoCK brand theme: academic deep maroon & certificate gold */
+  --cert-maroon-dark: #4a0001;
+  --cert-maroon: #800001;
+  --cert-maroon-bright: #991b1b;
+  --cert-gold-deep: #78350f;
+  --cert-gold: #b45309;
+  --cert-gold-rich: #d97706;
+  --cert-gold-pale: #fef3c7;
+  --cert-slate-900: #0f172a;
+  --cert-slate-800: #1e293b;
+  --cert-slate-700: #334155;
+  --cert-slate-600: #475569;
+  --cert-slate-500: #64748b;
+  --cert-slate-300: #cbd5e1;
+  --cert-slate-100: #f1f5f9;
+
+  /* Typography */
+  --cert-font-display: "Cinzel", "Times New Roman", Times, serif;
+  --cert-font-body: "Playfair Display", "Cormorant Garamond", Georgia, serif;
+  --cert-font-reading: "Cormorant Garamond", Georgia, "Times New Roman", serif;
+  --cert-font-sans: "Montserrat", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  width: 1056px;
+  min-width: 1056px;
+  max-width: 1056px;
+  height: 816px;
+  min-height: 816px;
+  max-height: 816px;
+  background-color: #ffffff;
+  color: var(--cert-slate-800);
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+  font-family: var(--cert-font-sans);
+  text-align: left;
+}
+
+.proclamation-certificate,
+.proclamation-certificate *,
+.proclamation-certificate *::before,
+.proclamation-certificate *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ── Multi-layer certificate frame & borders ──────────────────────── */
+.proclamation-certificate .cert-outer-border {
+  position: absolute;
+  inset: 14px;
+  border: 4.5px solid var(--cert-maroon);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.proclamation-certificate .cert-mid-border {
+  position: absolute;
+  inset: 22px;
+  border: 1.5px solid var(--cert-gold-rich);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.proclamation-certificate .cert-inner-border {
+  position: absolute;
+  inset: 27px;
+  border: 1px solid rgba(128, 0, 1, 0.35);
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* Corner filigrees (golden ornaments at all 4 corners) */
+.proclamation-certificate .corner-filigree {
+  position: absolute;
+  width: 48px;
+  height: 48px;
+  z-index: 6;
+  pointer-events: none;
+  border-color: var(--cert-gold-rich);
+  border-style: solid;
+}
+
+.proclamation-certificate .corner-tl {
+  top: 18px;
+  left: 18px;
+  border-width: 3px 0 0 3px;
+}
+.proclamation-certificate .corner-tl::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 14px;
+  height: 14px;
+  border-top: 2px solid var(--cert-maroon);
+  border-left: 2px solid var(--cert-maroon);
+}
+
+.proclamation-certificate .corner-tr {
+  top: 18px;
+  right: 18px;
+  border-width: 3px 3px 0 0;
+}
+.proclamation-certificate .corner-tr::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 14px;
+  height: 14px;
+  border-top: 2px solid var(--cert-maroon);
+  border-right: 2px solid var(--cert-maroon);
+}
+
+.proclamation-certificate .corner-bl {
+  bottom: 18px;
+  left: 18px;
+  border-width: 0 0 3px 3px;
+}
+.proclamation-certificate .corner-bl::after {
+  content: "";
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  width: 14px;
+  height: 14px;
+  border-bottom: 2px solid var(--cert-maroon);
+  border-left: 2px solid var(--cert-maroon);
+}
+
+.proclamation-certificate .corner-br {
+  bottom: 18px;
+  right: 18px;
+  border-width: 0 3px 3px 0;
+}
+.proclamation-certificate .corner-br::after {
+  content: "";
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  width: 14px;
+  height: 14px;
+  border-bottom: 2px solid var(--cert-maroon);
+  border-right: 2px solid var(--cert-maroon);
+}
+
+/* Watermark seal */
+.proclamation-certificate .cert-watermark {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.05;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.proclamation-certificate .watermark-img {
+  width: 520px;
+  height: 520px;
+  object-fit: contain;
+  filter: grayscale(100%);
+}
+
+/* Certificate body layout */
+.proclamation-certificate .cert-body {
+  position: relative;
+  z-index: 4;
+  height: 100%;
+  padding: 38px 46px 32px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+/* ── Certificate header ───────────────────────────────────────────── */
+.proclamation-certificate .cert-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
+  border-bottom: 2px solid rgba(217, 119, 6, 0.45);
+  padding-bottom: 12px;
+  margin-bottom: 8px;
+}
+
+.proclamation-certificate .cert-logo-slot {
+  width: 90px;
+  height: 90px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.proclamation-certificate .cert-school-logo {
+  width: 84px;
+  height: 84px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.15));
+}
+
+.proclamation-certificate .cert-header-text {
+  flex: 1;
+  text-align: center;
+}
+
+.proclamation-certificate .rep-title {
+  font-family: var(--cert-font-reading);
+  font-size: 0.88rem;
+  letter-spacing: 0.04em;
+  color: var(--cert-slate-600);
+  text-transform: uppercase;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.proclamation-certificate .deped-title {
+  font-family: var(--cert-font-display);
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--cert-slate-800);
+  text-transform: uppercase;
+  line-height: 1.25;
+}
+
+.proclamation-certificate .region-title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--cert-slate-500);
+  text-transform: uppercase;
+  margin-top: 1px;
+}
+
+.proclamation-certificate .school-name {
+  font-family: var(--cert-font-display);
+  font-size: 1.35rem;
+  font-weight: 900;
+  color: var(--cert-maroon);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin: 3px 0 1px;
+  line-height: 1.2;
+}
+
+.proclamation-certificate .school-address {
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--cert-slate-600);
+}
+
+.proclamation-certificate .election-office {
+  font-family: var(--cert-font-sans);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--cert-gold-deep);
+  text-transform: uppercase;
+  margin-top: 4px;
+}
+
+/* ── Certificate title ribbon ─────────────────────────────────────── */
+.proclamation-certificate .cert-title-container {
+  text-align: center;
+  margin: 6px 0 12px;
+}
+
+.proclamation-certificate .title-ribbon-line {
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--cert-gold-rich) 25%,
+    var(--cert-maroon) 50%,
+    var(--cert-gold-rich) 75%,
+    transparent 100%
+  );
+  margin: 2px auto;
+  width: 85%;
+}
+
+.proclamation-certificate .cert-main-title {
+  font-family: var(--cert-font-display);
+  font-size: 2.2rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  color: var(--cert-maroon);
+  text-transform: uppercase;
+  margin: 3px 0;
+  line-height: 1.15;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.proclamation-certificate .cert-sub-heading {
+  font-family: var(--cert-font-display);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--cert-gold-deep);
+  text-transform: uppercase;
+}
+
+/* ── Main content columns: left (photo + votes) & right (text) ────── */
+.proclamation-certificate .cert-main-content {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 24px;
+  align-items: stretch;
+  flex: 1;
+}
+
+.proclamation-certificate .cert-left-column {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* Winner profile picture frame */
+.proclamation-certificate .cert-profile-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.proclamation-certificate .profile-frame-outer {
+  padding: 4px;
+  border-radius: 14px;
+  background: linear-gradient(
+    135deg,
+    var(--cert-gold-rich) 0%,
+    var(--cert-maroon) 50%,
+    var(--cert-gold-rich) 100%
+  );
+  box-shadow: 0 6px 16px rgba(128, 0, 1, 0.25);
+}
+
+.proclamation-certificate .profile-frame-gold {
+  padding: 3px;
+  border-radius: 11px;
+  background: #ffffff;
+}
+
+.proclamation-certificate .profile-image-wrapper {
+  width: 175px;
+  height: 205px;
+  border-radius: 9px;
+  overflow: hidden;
+  background: var(--cert-slate-100);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.proclamation-certificate .profile-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center top;
+}
+
+.proclamation-certificate .default-avatar-wrap {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%);
+  color: #94a3b8;
+  gap: 6px;
+}
+
+.proclamation-certificate .avatar-svg {
+  width: 72px;
+  height: 72px;
+  opacity: 0.85;
+  color: #64748b;
+}
+
+.proclamation-certificate .avatar-tag {
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #64748b;
+}
+
+.proclamation-certificate .winner-official-badge {
+  margin-top: -10px;
+  z-index: 2;
+  padding: 3px 16px;
+  background: linear-gradient(135deg, var(--cert-maroon) 0%, #a11414 100%);
+  color: #ffffff;
+  border: 1.5px solid var(--cert-gold-pale);
+  border-radius: 9999px;
+  font-family: var(--cert-font-sans);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.25);
+}
+
+/* Number of votes received (visually prominent) */
+.proclamation-certificate .cert-vote-card {
+  background: linear-gradient(145deg, #ffffff 0%, #fffbf5 100%);
+  border: 2px solid var(--cert-gold-rich);
+  border-radius: 12px;
+  padding: 10px 12px;
+  text-align: center;
+  box-shadow: 0 4px 12px rgba(180, 83, 9, 0.12), inset 0 0 0 1px rgba(254, 243, 199, 0.8);
+  position: relative;
+  overflow: hidden;
+}
+
+.proclamation-certificate .cert-vote-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--cert-gold) 0%, var(--cert-maroon) 50%, var(--cert-gold) 100%);
+}
+
+.proclamation-certificate .vote-ribbon-tag {
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  color: var(--cert-gold-deep);
+  text-transform: uppercase;
+}
+
+.proclamation-certificate .vote-number-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 2px 0 1px;
+}
+
+.proclamation-certificate .vote-icon {
+  color: var(--cert-maroon);
+  display: flex;
+  align-items: center;
+}
+
+.proclamation-certificate .vote-number {
+  font-family: var(--cert-font-sans);
+  font-size: 1.85rem;
+  font-weight: 900;
+  color: var(--cert-maroon);
+  letter-spacing: -0.01em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.proclamation-certificate .vote-label {
+  font-family: var(--cert-font-display);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--cert-slate-800);
+  text-transform: uppercase;
+}
+
+.proclamation-certificate .vote-verified-note {
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--cert-slate-500);
+  margin-top: 2px;
+}
+
+/* ── Right column: winner identity & official proclamation text ───── */
+.proclamation-certificate .cert-right-column {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.proclamation-certificate .winner-identity-block {
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.proclamation-certificate .identity-lead-label {
+  font-family: var(--cert-font-reading);
+  font-size: 0.86rem;
+  font-style: italic;
+  letter-spacing: 0.08em;
+  color: var(--cert-slate-500);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.proclamation-certificate .winner-display-name {
+  font-family: var(--cert-font-display);
+  font-size: 2.3rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  color: var(--cert-maroon);
+  text-transform: uppercase;
+  line-height: 1.15;
+  margin: 2px 0 4px;
+  text-shadow: 0 1px 2px rgba(128, 0, 1, 0.12);
+  word-break: break-word;
+}
+
+.proclamation-certificate .winner-name-underline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 2px auto 6px;
+  width: 75%;
+}
+
+.proclamation-certificate .winner-name-underline::before,
+.proclamation-certificate .winner-name-underline::after {
+  content: "";
+  flex: 1;
+  height: 1.5px;
+  background: linear-gradient(90deg, transparent 0%, var(--cert-gold-rich) 50%, transparent 100%);
+}
+
+.proclamation-certificate .underline-diamond {
+  color: var(--cert-gold-rich);
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+.proclamation-certificate .elected-position-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 18px;
+  background: var(--cert-gold-pale);
+  border: 1.5px solid var(--cert-gold-rich);
+  border-radius: 6px;
+}
+
+.proclamation-certificate .position-prefix {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--cert-gold-deep);
+}
+
+.proclamation-certificate .position-title {
+  font-family: var(--cert-font-display);
+  font-size: 1.1rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  color: var(--cert-maroon);
+}
+
+/* Official required proclamation text */
+.proclamation-certificate .cert-official-message {
+  background: rgba(254, 252, 248, 0.7);
+  border-left: 3px solid var(--cert-maroon);
+  padding: 10px 16px;
+  border-radius: 0 8px 8px 0;
+  margin: 4px 0 8px;
+}
+
+.proclamation-certificate .msg-para {
+  font-family: var(--cert-font-reading);
+  font-size: 0.98rem;
+  line-height: 1.48;
+  color: var(--cert-slate-800);
+  text-align: justify;
+  margin-bottom: 6px;
+}
+
+.proclamation-certificate .msg-para:last-child {
+  margin-bottom: 0;
+}
+
+.proclamation-certificate .msg-para strong {
+  font-family: var(--cert-font-display);
+  color: var(--cert-maroon);
+  font-weight: 800;
+}
+
+.proclamation-certificate .para-godspeed {
+  font-weight: 600;
+  color: var(--cert-gold-deep);
+  font-style: italic;
+}
+
+/* Leadership quotation box */
+.proclamation-certificate .cert-quote-box {
+  background: #f8fafc;
+  border: 1px solid rgba(203, 213, 225, 0.8);
+  border-radius: 6px;
+  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.proclamation-certificate .leadership-quote {
+  font-family: var(--cert-font-reading);
+  font-size: 0.86rem;
+  font-style: italic;
+  color: var(--cert-slate-600);
+  line-height: 1.35;
+}
+
+.proclamation-certificate .quote-author {
+  font-family: var(--cert-font-sans);
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--cert-maroon);
+  white-space: nowrap;
+}
+
+/* ── Certificate footer & official signatures ─────────────────────── */
+.proclamation-certificate .cert-footer {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1.5px solid rgba(217, 119, 6, 0.4);
+}
+
+.proclamation-certificate .proclamation-date-line {
+  text-align: center;
+  font-family: var(--cert-font-reading);
+  font-size: 0.84rem;
+  font-style: italic;
+  color: var(--cert-slate-600);
+  margin-bottom: 14px;
+}
+
+.proclamation-certificate .proclamation-date-line span {
+  font-weight: 700;
+  color: var(--cert-slate-800);
+}
+
+.proclamation-certificate .signatures-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: 24px;
+  align-items: flex-end;
+}
+
+.proclamation-certificate .sig-block {
+  text-align: center;
+}
+
+.proclamation-certificate .sig-line {
+  width: 80%;
+  height: 1.5px;
+  background-color: var(--cert-slate-700);
+  margin: 18px auto 5px;
+}
+
+.proclamation-certificate .sig-title {
+  font-family: var(--cert-font-display);
+  font-size: 0.76rem;
+  font-weight: 800;
+  color: var(--cert-maroon);
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+}
+
+.proclamation-certificate .sig-office {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--cert-slate-500);
+  margin-top: 2px;
+}

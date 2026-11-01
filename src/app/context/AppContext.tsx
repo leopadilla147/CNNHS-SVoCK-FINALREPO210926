@@ -34,6 +34,12 @@ export interface CurrentUser {
   role: UserRole;
   email: string;
   commissionerRole?: CommissionerRole;
+  /** 103: true when the signed-in officer is a co_commissioner — the
+   *  sidebar titles them "Co-commissioner of …" (their primary's board)
+   *  instead of with the primary's own title.  Set at login
+   *  (mapStaffLoginRow) and re-derived from the profile RPC's role_type
+   *  on every mount. */
+  isCoCommissioner?: boolean;
   /** 030 forced-change flag (D-04): the next login must go through /change-password. */
   mustChangePassword: boolean;
   /** 073: optional photo.  Staff read it straight from here (profile RPC
@@ -609,13 +615,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
             (profile.full_name || currentUser.name) !== currentUser.name ||
             (profile.email || currentUser.email) !== currentUser.email ||
             (profile.profile_picture_url || undefined) !== currentUser.profilePictureUrl;
-          if (flagChanged || identityChanged) {
+          // The profile RPC returns the raw adminprofiles.role_type as
+          // `role` for staff (073), so the co-commissioner flag is
+          // re-derived here — stored blobs written before the flag existed
+          // self-heal instead of showing the primary's title until the
+          // next login.
+          const isCoCommissioner = profile.role === "co_commissioner";
+          const coChanged = isCoCommissioner !== Boolean(currentUser.isCoCommissioner);
+          if (flagChanged || identityChanged || coChanged) {
             const merged: CurrentUser = {
               ...currentUser,
               name: profile.full_name || currentUser.name,
               email: profile.email || currentUser.email,
               mustChangePassword: profile.must_change_password,
               profilePictureUrl: profile.profile_picture_url || undefined,
+              isCoCommissioner,
             };
             localStorage.setItem("svock_current_user", JSON.stringify(merged));
             setCurrentUser(merged);

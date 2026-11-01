@@ -4,6 +4,10 @@ import {
   buildPartyPositionBoard,
   candidatesInLivePeriod,
   distinctPartyNames,
+  FULL_POSITION_ORDER,
+  getPositionsForGrade,
+  gradesForPosition,
+  isGradeRepresentativePosition,
   isInPartyRace,
   isPartyFounder,
   isPartyPositionOpen,
@@ -15,6 +19,7 @@ import {
   livePeriodPartyNames,
   partyApprovalBlockForSubmit,
   partySeatSummaries,
+  positionRank,
 } from "../partyScope";
 import type { Candidate, ElectionPeriod } from "../../context/AppContext";
 
@@ -315,7 +320,8 @@ describe("partySeatSummaries", () => {
   }
 
   it("marks a seat with an approved holder as filled", () => {
-    const seats = partySeatSummaries(rows, period(), "p-alpha", "Grade 12");
+    // Secretary is a Grade 10 office, so the roster is read for that grade.
+    const seats = partySeatSummaries(rows, period(), "p-alpha", "Grade 10");
     const secretary = stateOf(seats, "Secretary");
 
     expect(secretary?.state).toBe("filled");
@@ -337,7 +343,7 @@ describe("partySeatSummaries", () => {
       [candidate({ id: "sec-1", partyId: "p-alpha", position: "Secretary", positionApprovalStatus: "presidentApprovalRequired" })],
       period(),
       "p-alpha",
-      "Grade 12"
+      "Grade 10"
     );
 
     expect(stateOf(seats, "Secretary")).toMatchObject({ state: "contested", requestCount: 1 });
@@ -345,7 +351,7 @@ describe("partySeatSummaries", () => {
   });
 
   it("treats a declined candidacy as leaving the seat open", () => {
-    const seats = partySeatSummaries(rows, period(), "p-alpha", "Grade 12");
+    const seats = partySeatSummaries(rows, period(), "p-alpha", "Grade 10");
 
     expect(stateOf(seats, "Treasurer")).toMatchObject({ state: "open", requestCount: 0 });
   });
@@ -366,14 +372,23 @@ describe("partySeatSummaries", () => {
   });
 
   it("reads the Independent race when no party id is given", () => {
+    // Auditor is a Grade 8-9 office, so the roster has to be read for one of
+    // those grades.  Independents do NOT contest a shared seat: a pending —
+    // or even Screening-approved — Independent never fills or closes the
+    // office, and the applicant is shown no claimant count at all.
     const independent = [
-      candidate({ id: "ind-1", partyId: undefined, partyAffiliation: undefined, position: "Auditor", positionApprovalStatus: "notRequired", status: "pending" }),
+      candidate({ id: "ind-won", partyId: undefined, partyAffiliation: undefined, position: "Auditor", positionApprovalStatus: "notRequired", status: "approved" }),
+      candidate({ id: "ind-pending", partyId: undefined, partyAffiliation: undefined, position: "Auditor", positionApprovalStatus: "notRequired", status: "pending" }),
     ];
+    const auditor = stateOf(partySeatSummaries(independent, period(), undefined, "Grade 9"), "Auditor");
 
-    expect(stateOf(partySeatSummaries(independent, period(), undefined, "Grade 12"), "Auditor")).toMatchObject({
-      state: "contested",
+    expect(auditor).toMatchObject({ state: "open", requestCount: 0, requesters: [] });
+    expect(isSeatSelectable(auditor!)).toBe(true);
+    // Independent rows never leak into a party's slate either.
+    expect(stateOf(partySeatSummaries(independent, period(), "p-alpha", "Grade 9"), "Auditor")).toMatchObject({
+      state: "open",
+      requestCount: 0,
     });
-    expect(stateOf(partySeatSummaries(independent, period(), "p-alpha", "Grade 12"), "Auditor")?.state).toBe("open");
   });
 
   it("hides a candidate from their own seat so re-applying is allowed", () => {
@@ -462,17 +477,12 @@ describe("buildPartyOptions", () => {
   });
 
   it("blocks a party whose every seat already has a winner", () => {
-    // A Grade 12 roster is 8 seats: the 7 executive offices plus that grade's
-    // own representative seat, so all eight have to be filled before the party
-    // counts as full.
+    // A Grade 12 roster is 3 seats: the two chief offices (President and Vice
+    // President) plus that grade's own representative seat, so all three have
+    // to be filled before the party counts as full.
     const full = [
       "President",
       "Vice President",
-      "Secretary",
-      "Treasurer",
-      "Auditor",
-      "PIO",
-      "Protocol Officer",
       "Grade 12 Representative",
     ].map((position, index) =>
       candidate({
@@ -491,14 +501,9 @@ describe("buildPartyOptions", () => {
   });
 
   it("is not full while the student's own grade seat is still open", () => {
-    const executive = [
+    const chief = [
       "President",
       "Vice President",
-      "Secretary",
-      "Treasurer",
-      "Auditor",
-      "PIO",
-      "Protocol Officer",
     ].map((position, index) =>
       candidate({
         id: `f-${index}`,
@@ -508,11 +513,12 @@ describe("buildPartyOptions", () => {
       })
     );
 
-    const alpha = buildPartyOptions(parties, [...executive, ...candidates], period(), "Grade 12").find(
+    const alpha = buildPartyOptions(parties, [...chief, ...candidates], period(), "Grade 12").find(
       (party) => party.name === "Alpha"
     );
 
-    // The same party is still open to a Grade 11 student.
+    // The same party is still open to a Grade 11 student, whose roster is the
+    // same two chief offices plus the Grade 11 Representative seat.
     expect(alpha?.isFull).toBe(false);
     expect(alpha?.blockedReason).toBeUndefined();
   });
@@ -683,5 +689,137 @@ describe("partyApprovalBlockForSubmit", () => {
 
   it("clears a party candidate that never needed a gate at all", () => {
     expect(partyApprovalBlockForSubmit(partySeat())).toBe(null);
+  });
+});
+
+describe("positionRank", () => {
+  it("ranks the executive offices first, in the Board's reading order", () => {
+    expect(positionRank("President")).toBe(0);
+    expect(positionRank("Vice President")).toBe(1);
+    expect(positionRank("Secretary")).toBe(2);
+    expect(positionRank("Treasurer")).toBe(3);
+    expect(positionRank("Auditor")).toBe(4);
+    expect(positionRank("PIO")).toBe(5);
+    expect(positionRank("Protocol Officer")).toBe(6);
+  });
+
+  it("ranks every Grade Level Representative after the executive offices", () => {
+    expect(positionRank("Grade 7 Representative")).toBe(7);
+    expect(positionRank("Grade 8 Representative")).toBe(8);
+    expect(positionRank("Grade 12 Representative")).toBe(12);
+    expect(positionRank("Grade 7 Representative")).toBeGreaterThan(positionRank("President"));
+  });
+
+  it("ranks unknown positions after every canonical one", () => {
+    expect(positionRank("Some Legacy Office")).toBe(FULL_POSITION_ORDER.length);
+    expect(positionRank("Some Legacy Office")).toBeGreaterThan(positionRank("Grade 12 Representative"));
+  });
+
+  it("sorts proclaimed winners out of the database's alphabetical order", () => {
+    // getProclaimedWinners reads the ledger ORDER BY winning_position —
+    // alphabetical — so "Auditor" would land on top and "Vice President"
+    // near the bottom.  positionRank restores the Board's order.
+    const alphabetical = ["Auditor", "Grade 10 Representative", "President", "Vice President"];
+    const sorted = [...alphabetical].sort((a, b) => positionRank(a) - positionRank(b));
+    expect(sorted).toEqual(["President", "Vice President", "Auditor", "Grade 10 Representative"]);
+  });
+});
+
+describe("isGradeRepresentativePosition", () => {
+  it("marks every Grade Level Representative seat as a two-winner position", () => {
+    for (const grade of ["7", "8", "9", "10", "11", "12"]) {
+      expect(isGradeRepresentativePosition(`Grade ${grade} Representative`)).toBe(true);
+    }
+  });
+
+  it("keeps the executive offices single-seat", () => {
+    expect(isGradeRepresentativePosition("President")).toBe(false);
+    expect(isGradeRepresentativePosition("Vice President")).toBe(false);
+    expect(isGradeRepresentativePosition("Protocol Officer")).toBe(false);
+  });
+
+  it("matches the 117 rule ProclamationDialog.seatsForPosition applies", () => {
+    // Any "... Representative" suffix is a two-winner position — the same
+    // suffix check seatsForPosition has always used for Grade Rep seats.
+    expect(isGradeRepresentativePosition("Classroom Representative")).toBe(true);
+  });
+});
+
+describe("getPositionsForGrade", () => {
+  it("gives Grade 11-12 the two chief offices plus their representative seat", () => {
+    expect(getPositionsForGrade("Grade 11")).toEqual([
+      "President",
+      "Vice President",
+      "Grade 11 Representative",
+    ]);
+    expect(getPositionsForGrade("Grade 12")).toEqual([
+      "President",
+      "Vice President",
+      "Grade 12 Representative",
+    ]);
+  });
+
+  it("gives Grade 10 the Secretary and Treasurer offices plus its representative seat", () => {
+    expect(getPositionsForGrade("Grade 10")).toEqual([
+      "Secretary",
+      "Treasurer",
+      "Grade 10 Representative",
+    ]);
+  });
+
+  it("gives Grade 8-9 the three supporting offices plus their representative seat", () => {
+    expect(getPositionsForGrade("Grade 9")).toEqual([
+      "Auditor",
+      "PIO",
+      "Protocol Officer",
+      "Grade 9 Representative",
+    ]);
+    expect(getPositionsForGrade("Grade 8")).toEqual([
+      "Auditor",
+      "PIO",
+      "Protocol Officer",
+      "Grade 8 Representative",
+    ]);
+  });
+
+  it("leaves Grade 7 with only its representative seat", () => {
+    expect(getPositionsForGrade("Grade 7")).toEqual(["Grade 7 Representative"]);
+  });
+
+  it("keeps the supporting offices in the canonical ballot order", () => {
+    const seats = getPositionsForGrade("Grade 9");
+    expect(seats.indexOf("Auditor")).toBeLessThan(seats.indexOf("PIO"));
+    expect(seats.indexOf("PIO")).toBeLessThan(seats.indexOf("Protocol Officer"));
+  });
+
+  it("never offers an office outside the grade's gate", () => {
+    // The President seat is only claimable by creating a party, so the
+    // Grade 11-12 gate is also what keeps party creation SHS-only.
+    expect(getPositionsForGrade("Grade 7")).not.toContain("President");
+    expect(getPositionsForGrade("Grade 10")).not.toContain("President");
+    expect(getPositionsForGrade("Grade 9")).not.toContain("Secretary");
+    expect(getPositionsForGrade("Grade 12")).not.toContain("Auditor");
+  });
+
+  it("offers no seats for an unknown or missing grade", () => {
+    expect(getPositionsForGrade("")).toEqual([]);
+    expect(getPositionsForGrade("College")).toEqual([]);
+  });
+});
+
+describe("gradesForPosition", () => {
+  it("maps each executive office to its eligible grades", () => {
+    expect(gradesForPosition("President")).toEqual(["Grade 11", "Grade 12"]);
+    expect(gradesForPosition("Vice President")).toEqual(["Grade 11", "Grade 12"]);
+    expect(gradesForPosition("Secretary")).toEqual(["Grade 10"]);
+    expect(gradesForPosition("Treasurer")).toEqual(["Grade 10"]);
+    expect(gradesForPosition("Auditor")).toEqual(["Grade 8", "Grade 9"]);
+    expect(gradesForPosition("PIO")).toEqual(["Grade 8", "Grade 9"]);
+    expect(gradesForPosition("Protocol Officer")).toEqual(["Grade 8", "Grade 9"]);
+  });
+
+  it("gates nothing for positions outside the executive offices", () => {
+    // Grade Representative seats carry their own one-grade rule instead.
+    expect(gradesForPosition("Grade 7 Representative")).toEqual([]);
   });
 });

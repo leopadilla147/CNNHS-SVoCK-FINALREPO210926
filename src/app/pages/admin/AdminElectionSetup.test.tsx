@@ -2292,9 +2292,10 @@ describe("AdminElectionSetup", () => {
       await user.type(within(dialog).getByLabelText(/Complaint Resolution and Justification/), "Results were tainted by the substantiated grievance.");
 
       // 117 — a complaint is on record, so the default President winner
-      // must be affirmed with "Remain Winner" before proclaiming unlocks.
+      // must be affirmed with "Keep Current Winner" before proclaiming
+      // unlocks.
       expect(proclaim).toBeDisabled();
-      await user.click(within(dialog).getByRole("button", { name: "Remain Winner" }));
+      await user.click(within(dialog).getByRole("button", { name: "Keep Current Winner" }));
       expect(proclaim).toBeEnabled();
     });
 
@@ -2362,7 +2363,7 @@ describe("AdminElectionSetup", () => {
 
       // 117 — the complaint on record obliges the board to affirm the
       // default President winner before proclaiming.
-      await user.click(within(dialog).getByRole("button", { name: "Remain Winner" }));
+      await user.click(within(dialog).getByRole("button", { name: "Keep Current Winner" }));
       expect(proclaim).toBeEnabled();
 
       await user.click(proclaim);
@@ -2393,13 +2394,15 @@ describe("AdminElectionSetup", () => {
       const dialog = await screen.findByRole("dialog");
 
       // Neither requirement answered yet — tied candidates are not pickable,
-      // and the pickable rows are greyed out.
+      // and the pickable rows are greyed out.  (123 — the locked message
+      // shows in BOTH footers: the Secretary tie's and the President
+      // choice-mode's.)
       expect(within(dialog).queryByRole("button", { name: /Cara One/ })).not.toBeInTheDocument();
       expect(
-        within(dialog).getByText(
+        within(dialog).getAllByText(
           /Record the Complaint Resolution and Justification and how the tie was resolved above before choosing a winner/,
-        ),
-      ).toBeInTheDocument();
+        ).length,
+      ).toBe(2);
       expect(within(dialog).getByText("Cara One").closest("div.opacity-60")).not.toBeNull();
 
       await user.type(within(dialog).getByLabelText(/Complaint Resolution and Justification/), "The grievance did not change the outcome.");
@@ -2527,7 +2530,7 @@ describe("AdminElectionSetup", () => {
       });
     });
 
-    it("requires Remain Winner on every default winner while a complaint is on record (117)", async () => {
+    it("requires Keep Current Winner on every default winner while a complaint is on record (117)", async () => {
       const user = userEvent.setup();
       electionPeriod = publishedPeriod();
       // A resolved complaint is on record — publishing may proceed, but
@@ -2553,19 +2556,20 @@ describe("AdminElectionSetup", () => {
 
       const proclaim = within(dialog).getByRole("button", { name: /Publish & Proclaim Winners/ });
       // The reason is owed for the decision on record, and BOTH positions
-      // with a default winner show the "Remain Winner" affirmation.
+      // with a default winner show the "Keep Current Winner" affirmation
+      // on their header (117).
       await user.type(within(dialog).getByLabelText(/Complaint Resolution and Justification/), "The grievance did not change the outcome.");
-      expect(within(dialog).getAllByText("Complaint on record").length).toBe(2);
+      expect(within(dialog).getAllByRole("button", { name: "Keep Current Winner" }).length).toBe(2);
       expect(proclaim).toBeDisabled();
 
       // Affirming one position is not enough — the other still blocks.
-      const remainButtons = within(dialog).getAllByRole("button", { name: "Remain Winner" });
+      const remainButtons = within(dialog).getAllByRole("button", { name: "Keep Current Winner" });
       expect(remainButtons.length).toBe(2);
       await user.click(remainButtons[0]);
-      expect(within(dialog).getByRole("button", { name: "Remain Winner — affirmed" })).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: "Current Winner Stands" })).toBeInTheDocument();
       expect(proclaim).toBeDisabled();
 
-      await user.click(within(dialog).getByRole("button", { name: "Remain Winner" }));
+      await user.click(within(dialog).getByRole("button", { name: "Keep Current Winner" }));
       expect(proclaim).toBeEnabled();
 
       await user.click(proclaim);
@@ -2575,6 +2579,293 @@ describe("AdminElectionSetup", () => {
           {
             President: { remainWinner: true },
             "Grade 7 Representative": { remainWinner: true },
+          },
+          { complaintNote: undefined, decisionReason: "The grievance did not change the outcome." },
+        );
+      });
+    });
+
+    it("requires Keep Current Winner on a 2-way Grade Rep tie that elects both by rule (122)", async () => {
+      const user = userEvent.setup();
+      electionPeriod = publishedPeriod();
+      // A resolved complaint is on record — publishing may proceed, but the
+      // affirmation now covers the both-win tie too (122).
+      complaints = [{
+        id: "c1",
+        status: "accepted",
+        subject: "Late filing",
+        electionPeriodId: PERIOD_ID,
+        decision: "unsubstantiated",
+        findings: "No evidence supported the claim.",
+      }];
+      mockGetProclamationTallyRpc.mockResolvedValue([
+        { position: "Grade 12 Representative", candidateId: "g1", candidateName: "Ella Tied", partyName: "Alpha", votes: 7 },
+        { position: "Grade 12 Representative", candidateId: "g2", candidateName: "Fe Tied", partyName: "Beta", votes: 7 },
+        { position: "Grade 12 Representative", candidateId: "g3", candidateName: "Gil Third", partyName: "Gamma", votes: 1 },
+        { position: "President", candidateId: "p1", candidateName: "Ada Leader", partyName: "Alpha", votes: 10 },
+        { position: "President", candidateId: "p2", candidateName: "Bea Runner", partyName: "Beta", votes: 4 },
+      ]);
+      renderPage();
+
+      await user.click(screen.getByRole("button", { name: /Publish & Proclaim Winners/ }));
+      const dialog = await screen.findByRole("dialog");
+
+      const proclaim = within(dialog).getByRole("button", { name: /Publish & Proclaim Winners/ });
+      await user.type(within(dialog).getByLabelText(/Complaint Resolution and Justification/), "The grievance did not change the outcome.");
+
+      // The 2-way Grade Rep tie proclaims both with no pick, and — 122 —
+      // it now owes the same affirmation a unique default winner owes.
+      // 123 — until affirmed, the badge offers the board's choice instead.
+      expect(within(dialog).getByText("2-way tie — pick 2")).toBeInTheDocument();
+      expect(proclaim).toBeDisabled();
+
+      // One affirmation per position: President's default winner AND the
+      // Grade 12 Representative's two winners.
+      const remainButtons = within(dialog).getAllByRole("button", { name: "Keep Current Winner" });
+      expect(remainButtons.length).toBe(2);
+      await user.click(remainButtons[0]);
+      expect(proclaim).toBeDisabled();
+
+      // The Grade 12 Representative toggle affirms BOTH of its winners at
+      // once, in the position header beside the both-win badge.
+      await user.click(within(dialog).getByRole("button", { name: "Keep Current Winner" }));
+      expect(proclaim).toBeEnabled();
+      // Affirmed — the default outcome is back on the badge.
+      expect(within(dialog).getByText("2-way tie — both win")).toBeInTheDocument();
+
+      await user.click(proclaim);
+      await waitFor(() => {
+        expect(mockProclaimWinnersRpc).toHaveBeenCalledWith(
+          PERIOD_ID,
+          {
+            President: { remainWinner: true },
+            "Grade 12 Representative": { remainWinner: true },
+          },
+          { complaintNote: undefined, decisionReason: "The grievance did not change the outcome." },
+        );
+      });
+    });
+
+    it("lets the board choose the winner instead of affirming while a complaint is on record (123)", async () => {
+      const user = userEvent.setup();
+      electionPeriod = publishedPeriod();
+      complaints = [{
+        id: "c1",
+        status: "accepted",
+        subject: "Late filing",
+        electionPeriodId: PERIOD_ID,
+        decision: "unsubstantiated",
+        findings: "No evidence supported the claim.",
+      }];
+      mockGetProclamationTallyRpc.mockResolvedValue([
+        { position: "President", candidateId: "p1", candidateName: "Ada Leader", partyName: "Alpha", votes: 10 },
+        { position: "President", candidateId: "p2", candidateName: "Bea Runner", partyName: "Beta", votes: 4 },
+      ]);
+      renderPage();
+
+      await user.click(screen.getByRole("button", { name: /Publish & Proclaim Winners/ }));
+      const dialog = await screen.findByRole("dialog");
+
+      const proclaim = within(dialog).getByRole("button", { name: /Publish & Proclaim Winners/ });
+      await user.type(within(dialog).getByLabelText(/Complaint Resolution and Justification/), "The grievance did not change the outcome.");
+
+      // 123 — without the affirmation, EVERY candidate of the position is
+      // pickable: the board may proclaim the runner-up instead.
+      expect(proclaim).toBeDisabled();
+      await user.click(within(dialog).getByRole("button", { name: /Bea Runner/ }));
+      const alert = await screen.findByRole("alertdialog");
+      await user.click(within(alert).getByRole("button", { name: /Confirm Winner/ }));
+      expect(proclaim).toBeEnabled();
+
+      await user.click(proclaim);
+      await waitFor(() => {
+        expect(mockProclaimWinnersRpc).toHaveBeenCalledWith(
+          PERIOD_ID,
+          { President: { method: "manual", candidateIds: ["p2"], tieBreak: "" } },
+          { complaintNote: undefined, decisionReason: "The grievance did not change the outcome." },
+        );
+      });
+    });
+
+    it("lets the board replace a chosen winner before proclaiming (124)", async () => {
+      const user = userEvent.setup();
+      electionPeriod = publishedPeriod();
+      complaints = [{
+        id: "c1",
+        status: "accepted",
+        subject: "Late filing",
+        electionPeriodId: PERIOD_ID,
+        decision: "unsubstantiated",
+        findings: "No evidence supported the claim.",
+      }];
+      mockGetProclamationTallyRpc.mockResolvedValue([
+        { position: "President", candidateId: "p1", candidateName: "Ada Leader", partyName: "Alpha", votes: 10 },
+        { position: "President", candidateId: "p2", candidateName: "Bea Runner", partyName: "Beta", votes: 4 },
+      ]);
+      renderPage();
+
+      await user.click(screen.getByRole("button", { name: /Publish & Proclaim Winners/ }));
+      const dialog = await screen.findByRole("dialog");
+      const proclaim = within(dialog).getByRole("button", { name: /Publish & Proclaim Winners/ });
+      await user.type(within(dialog).getByLabelText(/Complaint Resolution and Justification/), "The grievance did not change the outcome.");
+
+      await user.click(within(dialog).getByRole("button", { name: /Bea Runner/ }));
+      const firstAlert = await screen.findByRole("alertdialog");
+      await user.click(within(firstAlert).getByRole("button", { name: /Confirm Winner/ }));
+
+      // 124 — the choice is not final inside the modal: clicking the other
+      // candidate REPLACES it, and the confirm says so.
+      await user.click(within(dialog).getByRole("button", { name: /Ada Leader/ }));
+      const replaceAlert = await screen.findByRole("alertdialog");
+      expect(within(replaceAlert).getByText(/instead of Bea Runner/)).toBeInTheDocument();
+      await user.click(within(replaceAlert).getByRole("button", { name: /Confirm Winner/ }));
+
+      expect(proclaim).toBeEnabled();
+      await user.click(proclaim);
+      await waitFor(() => {
+        expect(mockProclaimWinnersRpc).toHaveBeenCalledWith(
+          PERIOD_ID,
+          { President: { method: "manual", candidateIds: ["p1"], tieBreak: "" } },
+          { complaintNote: undefined, decisionReason: "The grievance did not change the outcome." },
+        );
+      });
+    });
+
+    it("lets the board withdraw a chosen winner by clicking it again (124)", async () => {
+      const user = userEvent.setup();
+      electionPeriod = publishedPeriod();
+      complaints = [{
+        id: "c1",
+        status: "accepted",
+        subject: "Late filing",
+        electionPeriodId: PERIOD_ID,
+        decision: "unsubstantiated",
+        findings: "No evidence supported the claim.",
+      }];
+      mockGetProclamationTallyRpc.mockResolvedValue([
+        { position: "President", candidateId: "p1", candidateName: "Ada Leader", partyName: "Alpha", votes: 10 },
+        { position: "President", candidateId: "p2", candidateName: "Bea Runner", partyName: "Beta", votes: 4 },
+      ]);
+      renderPage();
+
+      await user.click(screen.getByRole("button", { name: /Publish & Proclaim Winners/ }));
+      const dialog = await screen.findByRole("dialog");
+      const proclaim = within(dialog).getByRole("button", { name: /Publish & Proclaim Winners/ });
+      await user.type(within(dialog).getByLabelText(/Complaint Resolution and Justification/), "The grievance did not change the outcome.");
+
+      await user.click(within(dialog).getByRole("button", { name: /Bea Runner/ }));
+      const alert = await screen.findByRole("alertdialog");
+      await user.click(within(alert).getByRole("button", { name: /Confirm Winner/ }));
+      expect(within(dialog).getByText("Chosen")).toBeInTheDocument();
+
+      // Clicking the chosen row again withdraws it — instantly, with no
+      // confirm — and proclaiming locks again.
+      await user.click(within(dialog).getByRole("button", { name: /Bea Runner/ }));
+      expect(within(dialog).queryByText("Chosen")).not.toBeInTheDocument();
+      expect(proclaim).toBeDisabled();
+    });
+
+    it("overrides a chosen winner when the board affirms Keep Current Winner (124)", async () => {
+      const user = userEvent.setup();
+      electionPeriod = publishedPeriod();
+      complaints = [{
+        id: "c1",
+        status: "accepted",
+        subject: "Late filing",
+        electionPeriodId: PERIOD_ID,
+        decision: "unsubstantiated",
+        findings: "No evidence supported the claim.",
+      }];
+      mockGetProclamationTallyRpc.mockResolvedValue([
+        { position: "President", candidateId: "p1", candidateName: "Ada Leader", partyName: "Alpha", votes: 10 },
+        { position: "President", candidateId: "p2", candidateName: "Bea Runner", partyName: "Beta", votes: 4 },
+      ]);
+      renderPage();
+
+      await user.click(screen.getByRole("button", { name: /Publish & Proclaim Winners/ }));
+      const dialog = await screen.findByRole("dialog");
+      const proclaim = within(dialog).getByRole("button", { name: /Publish & Proclaim Winners/ });
+      await user.type(within(dialog).getByLabelText(/Complaint Resolution and Justification/), "The grievance did not change the outcome.");
+
+      await user.click(within(dialog).getByRole("button", { name: /Bea Runner/ }));
+      const alert = await screen.findByRole("alertdialog");
+      await user.click(within(alert).getByRole("button", { name: /Confirm Winner/ }));
+      expect(within(dialog).getByText("Chosen")).toBeInTheDocument();
+
+      // Affirming overrides the pick: the default winner stands and the
+      // dropped pick no longer counts in the summary.
+      await user.click(within(dialog).getByRole("button", { name: "Keep Current Winner" }));
+      expect(within(dialog).queryByText("Chosen")).not.toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: "Current Winner Stands" })).toBeInTheDocument();
+      expect(within(dialog).getByText("Winners to proclaim — 1 of 1 selected")).toBeInTheDocument();
+      expect(proclaim).toBeEnabled();
+
+      // Deactivating re-opens the choice with a clean slate.
+      await user.click(within(dialog).getByRole("button", { name: "Current Winner Stands" }));
+      expect(within(dialog).getByRole("button", { name: "Keep Current Winner" })).toBeInTheDocument();
+      expect(proclaim).toBeDisabled();
+
+      // Re-affirm and proclaim — the payload carries only the affirmation.
+      await user.click(within(dialog).getByRole("button", { name: "Keep Current Winner" }));
+      expect(proclaim).toBeEnabled();
+      await user.click(proclaim);
+      await waitFor(() => {
+        expect(mockProclaimWinnersRpc).toHaveBeenCalledWith(
+          PERIOD_ID,
+          { President: { remainWinner: true } },
+          { complaintNote: undefined, decisionReason: "The grievance did not change the outcome." },
+        );
+      });
+    });
+
+    it("lets the board choose both winners of a 2-way Grade Rep tie instead of affirming (123)", async () => {
+      const user = userEvent.setup();
+      electionPeriod = publishedPeriod();
+      complaints = [{
+        id: "c1",
+        status: "accepted",
+        subject: "Late filing",
+        electionPeriodId: PERIOD_ID,
+        decision: "unsubstantiated",
+        findings: "No evidence supported the claim.",
+      }];
+      mockGetProclamationTallyRpc.mockResolvedValue([
+        { position: "Grade 12 Representative", candidateId: "g1", candidateName: "Ella Tied", partyName: "Alpha", votes: 7 },
+        { position: "Grade 12 Representative", candidateId: "g2", candidateName: "Fe Tied", partyName: "Beta", votes: 7 },
+        { position: "Grade 12 Representative", candidateId: "g3", candidateName: "Gil Third", partyName: "Gamma", votes: 1 },
+        { position: "President", candidateId: "p1", candidateName: "Ada Leader", partyName: "Alpha", votes: 10 },
+        { position: "President", candidateId: "p2", candidateName: "Bea Runner", partyName: "Beta", votes: 4 },
+      ]);
+      renderPage();
+
+      await user.click(screen.getByRole("button", { name: /Publish & Proclaim Winners/ }));
+      const dialog = await screen.findByRole("dialog");
+
+      const proclaim = within(dialog).getByRole("button", { name: /Publish & Proclaim Winners/ });
+      await user.type(within(dialog).getByLabelText(/Complaint Resolution and Justification/), "The grievance did not change the outcome.");
+
+      // 123 — the both-win tie is no exception: without affirming, the
+      // board picks ANY 2 candidates of the position.
+      await user.click(within(dialog).getByRole("button", { name: /Ella Tied/ }));
+      const firstAlert = await screen.findByRole("alertdialog");
+      await user.click(within(firstAlert).getByRole("button", { name: /Confirm Winner/ }));
+      await user.click(within(dialog).getByRole("button", { name: /Gil Third/ }));
+      const secondAlert = await screen.findByRole("alertdialog");
+      await user.click(within(secondAlert).getByRole("button", { name: /Confirm Winner/ }));
+
+      // President stays on the affirm path — one toggle per position.
+      const remainButtons = within(dialog).getAllByRole("button", { name: "Keep Current Winner" });
+      expect(remainButtons.length).toBe(2);
+      await user.click(remainButtons[0]);
+      expect(proclaim).toBeEnabled();
+
+      await user.click(proclaim);
+      await waitFor(() => {
+        expect(mockProclaimWinnersRpc).toHaveBeenCalledWith(
+          PERIOD_ID,
+          {
+            President: { remainWinner: true },
+            "Grade 12 Representative": { method: "manual", candidateIds: ["g1", "g3"], tieBreak: "" },
           },
           { complaintNote: undefined, decisionReason: "The grievance did not change the outcome." },
         );

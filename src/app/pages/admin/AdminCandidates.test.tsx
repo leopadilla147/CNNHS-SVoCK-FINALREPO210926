@@ -49,6 +49,31 @@ function candidate(status: Candidate["status"], id: string, name: string): Candi
   };
 }
 
+/** A pending candidate with an explicit office and party, for order assertions. */
+function rosterCandidate(
+  id: string,
+  givenName: string,
+  surname: string,
+  position: string,
+  party?: string,
+): Candidate {
+  return { ...candidate("pending", id, surname), givenName, position, partyAffiliation: party };
+}
+
+/** Every expanded panel's member rows, in document order, as "Given Surname". */
+function memberNames(): string[] {
+  return Array.from(document.querySelectorAll("tbody tr")).map(
+    (row) => row.querySelector("td .font-medium")?.textContent ?? "",
+  );
+}
+
+/** Expands every party panel (header buttons carry the member count). */
+async function expandAllPanels(user: ReturnType<typeof userEvent.setup>) {
+  for (const header of screen.getAllByRole("button").filter((b) => /member/.test(b.textContent ?? ""))) {
+    await user.click(header);
+  }
+}
+
 /** Reports the current URL so tests can assert on the deep-link param. */
 function LocationProbe() {
   const location = useLocation();
@@ -152,5 +177,67 @@ describe("AdminCandidates status filter deep links", () => {
     expect(screen.getByText(/Approved Applicant/)).toBeTruthy();
     expect(screen.queryByText(/Pending Applicant/)).toBeNull();
     expect(screen.getByTestId("location").textContent).toBe("/admin/candidates");
+  });
+});
+
+describe("AdminCandidates review order", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Chief, so the party-President gate never hides a row from these assertions.
+    mockUseApp.mockReturnValue({
+      currentUser: {
+        id: "1",
+        name: "Chief Commissioner",
+        role: "admin",
+        commissionerRole: "chief",
+      },
+      // Deliberately unordered: newest-submission-first is what the page used
+      // to render, and it is exactly what these tests pin down a fix for.
+      candidates: [
+        rosterCandidate("i1", "Ivan", "Omega", "President"),
+        rosterCandidate("u1", "Zed", "Zulu", "Grade 12 Representative", "Unity Alliance"),
+        rosterCandidate("p1", "Pia", "Alpha", "President", "Progress Party"),
+        rosterCandidate("u2", "Vic", "Beta", "Vice President", "Unity Alliance"),
+        rosterCandidate("u3", "Uma", "Yankee", "President", "Unity Alliance"),
+        rosterCandidate("u4", "Abe", "Zeta", "President", "Unity Alliance"),
+      ],
+      setCandidates: vi.fn(),
+      electionPeriod: {},
+      addLog: vi.fn(),
+      insertNotification: vi.fn(),
+      students: [],
+    });
+  });
+
+  it("reads panels A→Z with Independent last", () => {
+    renderPage();
+
+    const panelNames = Array.from(
+      document.querySelectorAll("button div.font-semibold"),
+    ).map((el) => el.textContent);
+
+    expect(panelNames).toEqual([
+      "Progress Party",
+      "Unity Alliance",
+      "Independent",
+    ]);
+  });
+
+  it("sorts each roster by ballot order, then surname", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await expandAllPanels(user);
+
+    expect(memberNames()).toEqual([
+      // Progress Party — its single President
+      "Pia Alpha",
+      // Unity Alliance — President (by surname), then the lower offices
+      "Uma Yankee",
+      "Abe Zeta",
+      "Vic Beta",
+      "Zed Zulu",
+      // Independent — last panel
+      "Ivan Omega",
+    ]);
   });
 });

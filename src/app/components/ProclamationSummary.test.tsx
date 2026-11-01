@@ -86,6 +86,7 @@ describe("ProclamationSummary", () => {
       <ProclamationSummary
         positions={positions}
         resolutions={{}}
+        hasComplaints={false}
         tieBreakLabel=""
         complaintNote=""
         complaintReason=""
@@ -118,6 +119,7 @@ describe("ProclamationSummary", () => {
       <ProclamationSummary
         positions={positions}
         resolutions={{ Secretary: { method: "manual", candidateIds: ["s1"] } }}
+        hasComplaints={false}
         tieBreakLabel="Coin Toss"
         complaintNote="Weighed against the turnout record."
         complaintReason="The grievance did not change the outcome."
@@ -144,6 +146,7 @@ describe("ProclamationSummary", () => {
     render(
       <ProclamationSummary
         winnersDetail
+        hasComplaints={false}
         profiles={{
           p1: { picture: "http://example.com/ada.png", gradeLevel: "Grade 12" },
         }}
@@ -179,7 +182,7 @@ describe("ProclamationSummary", () => {
     expect(screen.getAllByText("Tie — both proclaimed").length).toBe(2);
   });
 
-  it("flags a Remain Winner affirmation on the affirmed default winner", () => {
+  it("flags a Winner stands affirmation on the affirmed default winner", () => {
     // 117 — with a complaint on record, the board affirms the default
     // winner stands; the final confirmation carries the badge.
     render(
@@ -190,6 +193,7 @@ describe("ProclamationSummary", () => {
           Secretary: { method: "manual", candidateIds: ["s1"] },
           President: { remainWinner: true },
         }}
+        hasComplaints
         tieBreakLabel="Coin Toss"
         complaintNote=""
         complaintReason=""
@@ -199,8 +203,73 @@ describe("ProclamationSummary", () => {
       />,
     );
 
-    expect(screen.getByText("Remain Winner")).toBeInTheDocument();
+    expect(screen.getByText("Winner stands")).toBeInTheDocument();
     // The affirmation never lands on a board pick.
     expect(screen.getAllByText("Tie — board choice").length).toBe(1);
+  });
+
+  it("flags the affirmation on both winners of an affirmed 2-way Grade Rep tie (122)", () => {
+    // 122 — the 2-way Grade Representative tie elects both by rule, and
+    // the Board's "Keep Current Winner" affirmation covers BOTH of them.
+    render(
+      <ProclamationSummary
+        winnersDetail
+        positions={positions}
+        resolutions={{
+          Secretary: { method: "manual", candidateIds: ["s1"] },
+          "Grade 12 Representative": { remainWinner: true },
+        }}
+        hasComplaints
+        tieBreakLabel=""
+        complaintNote=""
+        complaintReason=""
+        complaintSubjects={[]}
+        substantiated={[]}
+        otherResolved={[]}
+      />,
+    );
+
+    // Both affirmed winners carry the badge — the both-win mark yields to
+    // the affirmation on the sign-off, and the board pick carries none.
+    expect(screen.getAllByText("Winner stands").length).toBe(2);
+    expect(screen.getAllByText("Tie — board choice").length).toBe(1);
+    expect(screen.queryByText("Tie — both proclaimed")).not.toBeInTheDocument();
+  });
+
+  it("lists the board's chosen winners in choice mode when the affirmation is skipped (123)", () => {
+    // 123 — with a complaint on record and NO affirmation, the board
+    // chooses every seat itself from any candidate; each pick reads as
+    // the Board's choice, and the skipped default winners appear nowhere.
+    render(
+      <ProclamationSummary
+        winnersDetail
+        hasComplaints
+        positions={positions}
+        resolutions={{
+          Secretary: { method: "manual", candidateIds: ["s1"] },
+          President: { method: "manual", candidateIds: ["p2"] },
+          "Grade 12 Representative": { method: "manual", candidateIds: ["g1", "g3"] },
+        }}
+        tieBreakLabel=""
+        complaintNote=""
+        complaintReason=""
+        complaintSubjects={[]}
+        substantiated={[]}
+        otherResolved={[]}
+      />,
+    );
+
+    // The board's picks (Bea, Ella, Gil) carry the Board's-choice tag; the
+    // Secretary's tie pick stays a tie pick.
+    expect(screen.getAllByText("Board's choice").length).toBe(3);
+    expect(screen.getAllByText("Tie — board choice").length).toBe(1);
+    expect(screen.getByText("Bea Runner")).toBeInTheDocument();
+    expect(screen.getByText("Ella Tied")).toBeInTheDocument();
+    expect(screen.getByText("Gil Third")).toBeInTheDocument();
+    // The skipped default winners are gone — the board replaced them.
+    expect(screen.queryByText("Ada Leader")).not.toBeInTheDocument();
+    expect(screen.queryByText("Fe Tied")).not.toBeInTheDocument();
+    expect(screen.queryByText("Winner stands")).not.toBeInTheDocument();
+    expect(screen.queryByText("Tie — both proclaimed")).not.toBeInTheDocument();
   });
 });

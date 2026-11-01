@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 import { useApp } from "../../context/AppContext";
 import { supabase, isSupabaseConfigured } from "../../lib/supabase";
+import { getCalendarHref, getUserNavItems, getUserRoleTitle, type NavItem } from "./roleNav";
+import { useConfirm } from "../../lib/useConfirm";
 import cnnhsLogo from "../../assets/CNNHS_Logo1.png";
 
 /** Every dropdown shut — the state each "close all" path returns to. */
@@ -20,7 +22,7 @@ const CLOSED_DROPDOWNS = {
 };
 
 export function Header() {
-  const { currentUser, setCurrentUser, students } = useApp();
+  const { currentUser, setCurrentUser, students, candidates, electionPeriod } = useApp();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -63,7 +65,18 @@ export function Header() {
     closeAll();
   }, [pathname]);
 
+  // Logout asks first — same wording as the dashboard sidebar's confirm.
+  const logoutConfirm = useConfirm({
+    title: "Logout?",
+    description: "Are you sure you want to logout of the voting system?",
+    confirmText: "Logout",
+    cancelText: "Cancel",
+    destructive: true,
+  });
+
   const handleLogout = async () => {
+    const ok = await logoutConfirm.confirm();
+    if (!ok) return;
     if (isSupabaseConfigured && supabase) {
       await supabase.auth.signOut();
     }
@@ -95,6 +108,37 @@ export function Header() {
     currentUser?.role === "student"
       ? students?.find((s) => s.id === currentUser.id)?.profilePictureUrl
       : currentUser?.profilePictureUrl;
+
+  // The signed-in user's profile page — students have their own, staff share
+  // the admin one.  It is the dropdown's "My Profile" entry, so the profile
+  // hrefs are filtered out of the tab list below (no duplicate).
+  const profileHref = !currentUser
+    ? "/"
+    : currentUser.role === "student"
+      ? "/student/profile"
+      : "/admin/profile";
+
+  // The signed-in user's own tabs — the same items their dashboard sidebar
+  // shows (roleNav is the shared source).  Students additionally hide
+  // "View Candidates" until they have a candidacy or the official list is
+  // posted, mirroring the sidebar's rule.
+  const hasCandidacy = candidates?.some((c) => c.studentId === currentUser?.id) ?? false;
+  const userTabs: NavItem[] = !currentUser
+    ? []
+    : getUserNavItems(currentUser)
+        .filter(
+          (item) =>
+            !(
+              item.href === "/student/candidates" &&
+              !hasCandidacy &&
+              !electionPeriod?.officialListPosted
+            ),
+        )
+        .filter((item) => item.href !== "/student/profile" && item.href !== "/admin/profile");
+  // A signed-in user whose role carries no nav still gets a way back in.
+  if (currentUser && userTabs.length === 0) {
+    userTabs.push({ label: "Dashboard", href: getDashboardLink(), icon: <User size={14} /> });
+  }
 
   return (
     <>
@@ -189,7 +233,7 @@ export function Header() {
                       Election Guidelines
                     </Link>
                     <Link
-                      to="/"
+                      to={getCalendarHref(currentUser)}
                       onClick={() => toggleDropdown("resources")}
                       className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
                     >
@@ -249,19 +293,48 @@ export function Header() {
                     <ChevronDown size={14} className="text-gray-500" />
                   </button>
                   {dropdowns.user && (
-                    <div className="absolute right-0 mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg py-2 z-50">
-                      <Link
-                        to={getDashboardLink()}
-                        onClick={() => toggleDropdown("user")}
-                        className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                      >
-                        <User size={14} /> Dashboard
-                      </Link>
+                    <div className="absolute right-0 mt-1 w-60 bg-white border border-gray-200 rounded-lg shadow-lg z-50">
+                      {/* Identity block — photo, name, role/title, My Profile */}
+                      <div className="px-4 pt-3 pb-3 border-b border-gray-100 bg-gray-50/60 rounded-t-lg">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold overflow-hidden flex-shrink-0" style={{ backgroundColor: "#5C0102" }}>
+                            {avatarPictureUrl ? (
+                              <img src={avatarPictureUrl} alt="" className="w-10 h-10 object-cover" />
+                            ) : (
+                              currentUser.name.charAt(0)
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-sm font-semibold text-gray-900 truncate">{currentUser.name}</div>
+                            <div className="text-xs text-gray-500 truncate">{getUserRoleTitle(currentUser)}</div>
+                          </div>
+                        </div>
+                        <Link
+                          to={profileHref}
+                          onClick={() => toggleDropdown("user")}
+                          className="mt-2.5 flex w-full items-center gap-2 rounded-lg bg-white border border-gray-200 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+                        >
+                          <User size={14} /> My Profile
+                        </Link>
+                      </div>
+                      {/* The user's own tabs — mirrors their dashboard sidebar */}
+                      {userTabs.map((item) => (
+                        <Link
+                          key={item.href}
+                          to={item.href}
+                          onClick={() => toggleDropdown("user")}
+                          className="flex w-full items-center gap-2.5 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                        >
+                          {item.icon}
+                          <span>{item.label}</span>
+                        </Link>
+                      ))}
+                      {userTabs.length > 0 && <div className="border-t border-gray-100" />}
                       <button
                         onClick={handleLogout}
-                        className="flex w-full items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 text-left"
+                        className="flex w-full items-center gap-2.5 px-4 py-2 text-sm text-red-600 hover:bg-red-50 text-left"
                       >
-                        <LogOut size={14} /> Logout
+                        <LogOut size={16} /> Logout
                       </button>
                     </div>
                   )}
@@ -392,7 +465,7 @@ export function Header() {
                     Election Guidelines
                   </Link>
                 <Link
-                  to="/"
+                  to={getCalendarHref(currentUser)}
                   onClick={() => {
                     setMobileOpen(false);
                     toggleDropdown("resources");
@@ -446,12 +519,24 @@ export function Header() {
           </>
         ) : (
           <>
+            {/* Signed-in tabs — mirrors the desktop user dropdown */}
+            {userTabs.map((item) => (
+              <Link
+                key={item.href}
+                to={item.href}
+                onClick={() => setMobileOpen(false)}
+                className="flex items-center gap-2 py-2 text-gray-700 text-sm"
+              >
+                {item.icon}
+                <span>{item.label}</span>
+              </Link>
+            ))}
             <Link
-              to={getDashboardLink()}
+              to={profileHref}
               onClick={() => setMobileOpen(false)}
-              className="block py-2 text-gray-700 text-sm"
+              className="flex items-center gap-2 py-2 text-gray-700 text-sm"
             >
-              Dashboard
+              <User size={18} /> My Profile
             </Link>
             <button
               onClick={() => {
@@ -465,6 +550,7 @@ export function Header() {
           </>
         )}
       </div>
+      {logoutConfirm.dialog}
     </>
   );
 }

@@ -31,7 +31,7 @@ export interface VoteListRow {
 export interface VoterListRow {
   student: Student;
   voted: boolean;
-  /** "Kiosk 1" / "Kiosk 2" / "Unknown"; null when the student has not voted. */
+  /** "Kiosk ID: 1" / "Kiosk ID: 2" / "Unknown"; null when the student has not voted. */
   kioskLabel: string | null;
   /** Ballot-level transaction id (the same id is on every row of that ballot). */
   transactionId: string | null;
@@ -81,7 +81,7 @@ export function buildVoterRows(students: Student[], votes: VoteListRow[]): Voter
     }
     if (parsedNumber > 0) {
       resolved.set(voterId, {
-        kioskLabel: `Kiosk ${parsedNumber}`,
+        kioskLabel: `Kiosk ID: ${parsedNumber}`,
         transactionId,
         votedAt: first.voted_at || null,
         parsedNumber,
@@ -110,7 +110,7 @@ export function buildVoterRows(students: Student[], votes: VoteListRow[]): Voter
     const orderedKiosks = [...earliestByKiosk.keys()].sort((a, b) =>
       (earliestByKiosk.get(a) || "").localeCompare(earliestByKiosk.get(b) || ""),
     );
-    const labelByKiosk = new Map(orderedKiosks.map((kioskId, i) => [kioskId, `Kiosk ${maxParsed + 1 + i}`]));
+    const labelByKiosk = new Map(orderedKiosks.map((kioskId, i) => [kioskId, `Kiosk ID: ${maxParsed + 1 + i}`]));
     for (const { voterId, kioskId } of fallbacks) {
       resolved.get(voterId)!.kioskLabel = labelByKiosk.get(kioskId)!;
     }

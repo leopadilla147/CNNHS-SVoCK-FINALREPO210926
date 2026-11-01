@@ -4,7 +4,7 @@ import {
   Calendar, Clock, MapPin, Save, Play, Square, Trophy,
   CheckCircle2, Lock, AlertCircle, Loader2, Eye, FileCheck2,
   Megaphone, Users, KeyRound, RotateCcw, ShieldAlert, X, Fingerprint,
-  Gavel, ChevronDown, ChevronLeft, ChevronRight, Pencil, XCircle,
+  Gavel, ChevronDown, ChevronLeft, ChevronRight, Pencil, XCircle, Download,
 } from "lucide-react";
 import { useApp } from "../../context/AppContext";
 import type { ElectionStage, ElectionPeriod } from "../../context/AppContext";
@@ -33,7 +33,7 @@ import {
 } from "../../lib/supabaseData";
 import type { ProclaimedWinner, ProclamationTallyRow, TieResolution } from "../../lib/supabaseData";
 import { isSupabaseConfigured } from "../../lib/supabase";
-import { FULL_POSITION_ORDER } from "../../lib/partyScope";
+import { FULL_POSITION_ORDER, positionRank, isGradeRepresentativePosition } from "../../lib/partyScope";
 import { resolveStage } from "../../lib/electionStage";
 import type { Stage } from "../../lib/electionStage";
 import { complaintsForElection, substantiatedComplaints, complaintDecisionLabel } from "../../lib/complaints";
@@ -43,6 +43,12 @@ import type { ProclamationDecision, CandidateProfile } from "../../components/Pr
 import { FindingsDisclosure } from "../../components/FindingsDisclosure";
 import { ProclamationSummary } from "../../components/ProclamationSummary";
 import type { SubstantiatedGrievance, OtherResolvedComplaint } from "../../components/ProclamationSummary";
+import {
+  ProclamationCertificate,
+  downloadWinnerCertificatePdf,
+  downloadAllWinnerCertificatesPdf,
+  proclamationDateLabel,
+} from "../../components/ProclamationCertificate";
 
 interface StageConfig {
   id: Stage;
@@ -315,6 +321,11 @@ export default function AdminElectionSetup() {
   const [success, setSuccess] = useState<string | null>(null);
   const [electionId, setElectionId] = useState<string | null>(null);
   const [proclaimedWinners, setProclaimedWinners] = useState<ProclaimedWinner[]>([]);
+  // Proclamation certificates: `certBusy` carries the progress text while a
+  // PDF is being rasterized (a single winner's, or the whole set at once),
+  // `certError` surfaces a generation failure inside the winners panel.
+  const [certBusy, setCertBusy] = useState<string | null>(null);
+  const [certError, setCertError] = useState<string | null>(null);
   // 069 — the proclaim flow reviews the tally first and resolves any tie.
   const [proclamationOpen, setProclamationOpen] = useState(false);
   const [tally, setTally] = useState<ProclamationTallyRow[]>([]);
@@ -467,8 +478,9 @@ export default function AdminElectionSetup() {
     .filter((c) => c.status === "filed")
     .map((c) => c.subject);
   // 117 — ANY complaint on record (filed or resolved) makes the Board's
-  // "Remain Winner" affirmation mandatory in the proclamation dialog for
-  // every default (highest-vote) winner.  The UI affordance mirrors the
+  // "Keep Current Winner" affirmation mandatory in the proclamation dialog
+  // for every default (highest-vote) winner — 122: including both winners
+  // of a 2-way Grade Representative tie.  The UI affordance mirrors the
   // authoritative gate inside proclaim_winners_rpc.
   const hasComplaints = electionComplaints.length > 0 || complaintsPending;
 
@@ -498,10 +510,50 @@ export default function AdminElectionSetup() {
   const candidateProfiles = useMemo(() => {
     const map: Record<string, CandidateProfile> = {};
     for (const c of candidates) {
-      map[c.id] = { picture: c.picture, gradeLevel: c.gradeLevel };
+      map[c.id] = { picture: c.picture, gradeLevel: c.gradeLevel, gender: c.gender };
     }
     return map;
   }, [candidates]);
+
+  // Stage 5 — the proclaimed winners in the Board's canonical order
+  // (FULL_POSITION_ORDER, the same reading order the proclamation dialog
+  // reviews in) instead of the ledger's alphabetical one, each carrying
+  // its off-screen certificate's capture index.  The list then splits
+  // into the elected officers and the Grade Level Representatives — the
+  // same labelled separation as the final confirmation modal.
+  const sortedProclaimedWinners = useMemo(
+    () =>
+      [...proclaimedWinners].sort(
+        (a, b) =>
+          positionRank(a.position) - positionRank(b.position) ||
+          a.winnerName.localeCompare(b.winnerName),
+      ),
+    [proclaimedWinners],
+  );
+  const rankedProclaimedWinners = useMemo(
+    () => sortedProclaimedWinners.map((winner, captureIndex) => ({ winner, captureIndex })),
+    [sortedProclaimedWinners],
+  );
+  const proclaimedOfficers = useMemo(
+    () => rankedProclaimedWinners.filter((x) => !isGradeRepresentativePosition(x.winner.position)),
+    [rankedProclaimedWinners],
+  );
+  const proclaimedGradeReps = useMemo(
+    () => rankedProclaimedWinners.filter((x) => isGradeRepresentativePosition(x.winner.position)),
+    [rankedProclaimedWinners],
+  );
+
+  // The certificate date line — the moment the Board ACTUALLY proclaimed,
+  // never the download date.  The winners ledger stamps each row at
+  // proclaim time and is authoritative; the period's stamp covers the
+  // offline path, and the label itself falls back to today only when
+  // neither exists.
+  const proclamationStamp = useMemo(
+    () =>
+      sortedProclaimedWinners.find((w) => w.proclaimedAt)?.proclaimedAt ??
+      electionPeriod.proclaimedAt,
+    [sortedProclaimedWinners, electionPeriod.proclaimedAt],
+  );
 
   const clearErrors = useCallback(() => {
     setStageErrors({});
@@ -1383,9 +1435,11 @@ export default function AdminElectionSetup() {
   ) => {
     setTallyError(null);
     const ok = await proclaimConfirm.confirm({
-      // 113b — the final confirmation lists every selected winner with their
-      // full name and position, so it opens as wide as the review dialog.
-      className: "sm:max-w-3xl",
+      // 113b/122 — the final confirmation lists every selected winner with
+      // their full name and position in a four-column grid, so it opens as
+      // wide as the viewport comfortably allows; the scroll guard keeps a
+      // long slate inside the screen.
+      className: "sm:max-w-6xl max-h-[85vh] overflow-y-auto",
       content: (
         // 113b — the final confirmation lists every selected winner with
         // their picture, name and position; the bottom summary inside the
@@ -1395,6 +1449,7 @@ export default function AdminElectionSetup() {
           profiles={candidateProfiles}
           positions={groupTally(tally)}
           resolutions={resolutions}
+          hasComplaints={hasComplaints}
           tieBreakLabel={decision.tieBreak}
           complaintNote={decision.complaintNote}
           complaintReason={decision.complaintReason}
@@ -1441,6 +1496,107 @@ export default function AdminElectionSetup() {
     if (proclaiming) return;
     setProclamationOpen(false);
   };
+
+  // ── Proclamation certificates ──────────────────────────────────────
+  // Stage 5 mounts an off-screen certificate for every proclaimed winner
+  // (canonical order); these handlers rasterize them into letter-landscape
+  // PDFs with html2canvas-pro + jsPDF — one winner per file, or the whole
+  // set as one multi-page PDF.
+  const certificateTarget = (captureIndex: number): HTMLElement | null =>
+    document.querySelector<HTMLElement>(`[data-proclamation-certificate="${captureIndex}"]`);
+
+  const handleDownloadWinnerCertificate = async (captureIndex: number, winner: ProclaimedWinner) => {
+    const certificate = certificateTarget(captureIndex);
+    if (!certificate || certBusy) return;
+    setCertError(null);
+    setCertBusy(`Generating ${winner.winnerName}'s certificate…`);
+    try {
+      await downloadWinnerCertificatePdf(certificate, {
+        position: winner.position,
+        winnerName: winner.winnerName,
+        votes: winner.votes,
+        picture: winner.picture ?? undefined,
+        gradeLevel: (winner.candidateId && candidateProfiles[winner.candidateId]?.gradeLevel) || undefined,
+        gender: (winner.candidateId && candidateProfiles[winner.candidateId]?.gender) || undefined,
+      });
+      showSuccess(`${winner.winnerName}'s Proclamation Certificate has been downloaded.`);
+    } catch (err) {
+      setCertError(
+        err instanceof Error ? err.message : "Could not generate the Proclamation Certificate PDF.",
+      );
+    } finally {
+      setCertBusy(null);
+    }
+  };
+
+  const handleDownloadAllCertificates = async () => {
+    if (certBusy || sortedProclaimedWinners.length === 0) return;
+    setCertError(null);
+    setCertBusy(`Generating ${sortedProclaimedWinners.length} certificates…`);
+    try {
+      const count = await downloadAllWinnerCertificatesPdf();
+      showSuccess(`${count} Proclamation Certificates have been downloaded as one PDF.`);
+    } catch (err) {
+      setCertError(
+        err instanceof Error ? err.message : "Could not generate the Proclamation Certificates PDF.",
+      );
+    } finally {
+      setCertBusy(null);
+    }
+  };
+
+  /** One proclaimed-winner card in the Stage 5 grid — identity, badges,
+   *  and the per-winner certificate download on the right side. */
+  const renderWinnerCard = ({ winner: w, captureIndex }: { winner: ProclaimedWinner; captureIndex: number }) => (
+    <div key={`${w.position}:${w.candidateId ?? w.winnerName}`} className="bg-white p-3 rounded-lg border border-amber-100 text-sm flex items-center gap-3">
+      {w.picture ? (
+        <img
+          src={w.picture}
+          alt={w.winnerName}
+          className="w-11 h-11 rounded-full object-cover border-2 flex-shrink-0"
+          style={{ borderColor: "#5C0102" }}
+        />
+      ) : (
+        <div
+          className="w-11 h-11 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0"
+          style={{ border: "2px solid #5C0102" }}
+        >
+          <Users size={18} className="text-gray-400" />
+        </div>
+      )}
+      <div className="min-w-0">
+        <div className="text-xs text-gray-500 truncate">{w.position}</div>
+        <div className="font-medium text-gray-900 truncate">{w.winnerName}</div>
+        <div className="text-xs text-gray-400">{w.votes} vote{w.votes !== 1 ? "s" : ""}</div>
+        {w.resolutionMethod === "manual" && (
+          <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-700 flex items-center gap-1">
+            <Gavel size={11} /> Board's choice
+          </div>
+        )}
+        {w.resolutionMethod === "tie_both" && (
+          <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-700 flex items-center gap-1">
+            <Gavel size={11} /> Tie — both proclaimed
+          </div>
+        )}
+        {/* 122 — the affirmation badge; an affirmed 2-way
+            Grade Rep tie (tie_both rows) carries it too. */}
+        {w.remainWinner && w.resolutionMethod !== "manual" && (
+          <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-green-700 flex items-center gap-1">
+            <CheckCircle2 size={11} /> Winner stands
+          </div>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={() => handleDownloadWinnerCertificate(captureIndex, w)}
+        disabled={certBusy !== null}
+        title={`Download ${w.winnerName}'s Proclamation Certificate`}
+        className="ml-auto shrink-0 w-8 h-8 rounded-lg border border-amber-200 bg-white text-[#5C0102] flex items-center justify-center hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        <Download size={14} />
+      </button>
+    </div>
+  );
 
   const submitReset = async () => {
     setResetError(null);
@@ -2541,49 +2697,75 @@ export default function AdminElectionSetup() {
               <h4 className="text-sm font-semibold text-amber-800 mb-3 flex items-center gap-2">
                 <Trophy size={16} /> Proclaimed Winners
               </h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                {/* 117 — a Grade Level Representative position can hold TWO
-                    proclaimed winners, so the key is position + candidate. */}
-                {proclaimedWinners.map((w) => (
-                  <div key={`${w.position}:${w.candidateId ?? w.winnerName}`} className="bg-white p-3 rounded-lg border border-amber-100 text-sm flex items-center gap-3">
-                    {w.picture ? (
-                      <img
-                        src={w.picture}
-                        alt={w.winnerName}
-                        className="w-11 h-11 rounded-full object-cover border-2 flex-shrink-0"
-                        style={{ borderColor: "#5C0102" }}
-                      />
-                    ) : (
-                      <div
-                        className="w-11 h-11 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0"
-                        style={{ border: "2px solid #5C0102" }}
-                      >
-                        <Users size={18} className="text-gray-400" />
-                      </div>
-                    )}
-                    <div className="min-w-0">
-                      <div className="text-xs text-gray-500 truncate">{w.position}</div>
-                      <div className="font-medium text-gray-900 truncate">{w.winnerName}</div>
-                      <div className="text-xs text-gray-400">{w.votes} vote{w.votes !== 1 ? "s" : ""}</div>
-                      {w.resolutionMethod === "manual" && (
-                        <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-700 flex items-center gap-1">
-                          <Gavel size={11} /> Tie — board choice
-                        </div>
-                      )}
-                      {w.resolutionMethod === "tie_both" && (
-                        <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-700 flex items-center gap-1">
-                          <Gavel size={11} /> Tie — both proclaimed
-                        </div>
-                      )}
-                      {w.remainWinner && w.resolutionMethod !== "manual" && (
-                        <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-green-700 flex items-center gap-1">
-                          <CheckCircle2 size={11} /> Remain Winner
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
+
+              {/* The Board's canonical order (FULL_POSITION_ORDER), split
+                  into the elected officers and the Grade Level
+                  Representatives — the same labelled separation as the
+                  final confirmation modal.  117 — a Grade Level
+                  Representative position can hold TWO proclaimed winners,
+                  so the key is position + candidate. */}
+              {proclaimedOfficers.length > 0 && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {proclaimedOfficers.map(renderWinnerCard)}
+                </div>
+              )}
+
+              {proclaimedOfficers.length > 0 && proclaimedGradeReps.length > 0 && (
+                <div className="flex items-center gap-3 my-3" aria-hidden="true">
+                  <div className="h-px flex-1 bg-amber-200" />
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-600">
+                    Grade Level Representatives
+                  </span>
+                  <div className="h-px flex-1 bg-amber-200" />
+                </div>
+              )}
+
+              {proclaimedGradeReps.length > 0 && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {proclaimedGradeReps.map(renderWinnerCard)}
+                </div>
+              )}
+
+              {/* Bottom-right: the whole set as one multi-page PDF. */}
+              <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+                {certError && <span className="text-xs text-red-600 mr-auto">{certError}</span>}
+                <button
+                  type="button"
+                  onClick={handleDownloadAllCertificates}
+                  disabled={certBusy !== null}
+                  title="Download every proclaimed winner's Proclamation Certificate as one PDF."
+                  className="px-3 py-2 rounded-lg text-xs font-semibold text-white flex items-center gap-1.5 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{ backgroundColor: "#5C0102" }}
+                >
+                  {certBusy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                  {certBusy ?? "Download All Certificates"}
+                </button>
               </div>
+            </div>
+          )}
+
+          {/* Off-screen Proclamation Certificates — one per proclaimed
+              winner, mounted in the Board's canonical order and captured
+              by the download handlers by index.  Fixed far off-viewport
+              so they never scroll into view or affect layout. */}
+          {proclaimedWinners.length > 0 && (
+            <div aria-hidden="true" style={{ position: "fixed", left: "-20000px", top: 0 }}>
+              {sortedProclaimedWinners.map((w, i) => (
+                <ProclamationCertificate
+                  key={`${w.position}:${w.candidateId ?? w.winnerName}`}
+                  captureIndex={i}
+                  winner={{
+                    position: w.position,
+                    winnerName: w.winnerName,
+                    votes: w.votes,
+                    picture: w.picture ?? undefined,
+                    gradeLevel: (w.candidateId && candidateProfiles[w.candidateId]?.gradeLevel) || undefined,
+                    gender: (w.candidateId && candidateProfiles[w.candidateId]?.gender) || undefined,
+                  }}
+                  schoolYear={electionPeriod.schoolYear}
+                  dateLabel={proclamationDateLabel(proclamationStamp)}
+                />
+              ))}
             </div>
           )}
 

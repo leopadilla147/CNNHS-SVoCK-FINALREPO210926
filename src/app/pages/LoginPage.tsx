@@ -7,8 +7,6 @@ import {
   EyeOff,
   ArrowLeft,
   AlertCircle,
-  ClipboardList,
-  BookOpen,
   Mail,
   Lock,
   CheckCircle2,
@@ -17,9 +15,10 @@ import {
 import { motion } from "motion/react";
 import { useApp } from "../context/AppContext";
 import { isSupabaseConfigured } from "../lib/supabase";
-import { signInWithSupabase, signInStudentDirect, signInSslgAdviser } from "../lib/supabaseData";
+import { signInWithSupabase, signInStudentDirect } from "../lib/supabaseData";
+import { getUserRoleTitle } from "../components/layout/roleNav";
 
-type LoginMode = "select" | "student" | "commissioner" | "admin" | "sslg_adviser";
+type LoginMode = "select" | "student" | "staff";
 
 interface RoleMeta {
   title: string;
@@ -37,26 +36,12 @@ const ROLE_DETAILS: Record<Exclude<LoginMode, "select">, RoleMeta> = {
     icon: GraduationCap,
     hint: "Use your registered student email and password to vote or view election status.",
   },
-  commissioner: {
-    title: "Commissioner",
-    subtitle: "Review & Validate",
-    badge: "Commissioners",
-    icon: ClipboardList,
-    hint: "For appointed Commissioners (Screening, Electoral Board, Grievance).",
-  },
-  admin: {
+  staff: {
     title: "Admin",
-    subtitle: "System Control",
-    badge: "Chief Commissioner",
+    subtitle: "Commissioners & Adviser",
+    badge: "Staff & Commissioners",
     icon: Shield,
-    hint: "Restricted to the Chief Commissioner only. Full election lifecycle control.",
-  },
-  sslg_adviser: {
-    title: "SSLG Adviser",
-    subtitle: "Student Supervision",
-    badge: "Faculty & Advisory",
-    icon: BookOpen,
-    hint: "Login with your authorized SSLG Adviser credentials for supervision.",
+    hint: "One login for the Chief Commissioner, Commissioners, Co-commissioners, and the SSLG Adviser. Your account automatically opens the right portal.",
   },
 };
 
@@ -112,49 +97,17 @@ export default function LoginPage() {
       return;
     }
 
-    // Admin/Commissioner use Supabase Auth
-    if (mode === "admin" || mode === "commissioner") {
+    // Staff — one login for the Chief Commissioner, Commissioners,
+    // Co-commissioners, and the SSLG Adviser.  login_staff_direct_v2
+    // authenticates any staff account and its row carries the real role,
+    // so there are no client-side portal gates to get wrong.
+    if (mode === "staff") {
       try {
         const user = await signInWithSupabase(email, password);
-        if (mode === "admin" && user.commissionerRole !== "chief") {
-          throw new Error("This account is not the Chief Commissioner. Use Commissioner login instead.");
-        }
-        if (mode === "commissioner" && (user.commissionerRole === "chief" || !user.commissionerRole)) {
-          throw new Error("This account is not a commissioner. Use the correct login type.");
-        }
-        setCurrentUser(user);
-        const roleLabel = mode === "admin" ? "admin" : "admin";
-        addLog({
-          user: user.name,
-          role: roleLabel,
-          action: "Login",
-          details: "Successful login",
-          type: "success",
-        });
-        navigate("/admin/dashboard");
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Invalid email or password.";
-        setError(message);
-        addLog({
-          user: email,
-          role: "admin",
-          action: "Login Failed",
-          details: message,
-          type: "error",
-        });
-      }
-      setLoading(false);
-      return;
-    }
-
-    // SSLG Adviser login
-    if (mode === "sslg_adviser") {
-      try {
-        const user = await signInSslgAdviser(email, password);
         setCurrentUser(user);
         addLog({
           user: user.name,
-          role: "admin",
+          role: getUserRoleTitle(user),
           action: "Login",
           details: "Successful login",
           type: "success",
@@ -185,7 +138,7 @@ export default function LoginPage() {
         <div className="absolute top-0 -left-20 w-96 h-96 rounded-full bg-red-100/40 blur-3xl pointer-events-none" />
         <div className="absolute bottom-0 -right-20 w-96 h-96 rounded-full bg-amber-100/30 blur-3xl pointer-events-none" />
 
-        <div className="w-full max-w-5xl z-10">
+        <div className="w-full max-w-2xl z-10">
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
@@ -206,9 +159,9 @@ export default function LoginPage() {
               </p>
             </div>
 
-            {/* Role Cards Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-              {(["student", "commissioner", "admin", "sslg_adviser"] as const).map((roleKey, idx) => {
+            {/* Role Cards Grid — two portals: students and staff */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              {(["student", "staff"] as const).map((roleKey, idx) => {
                 const role = ROLE_DETAILS[roleKey];
                 const Icon = role.icon;
                 return (

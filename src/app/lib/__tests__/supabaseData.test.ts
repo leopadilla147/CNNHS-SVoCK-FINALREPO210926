@@ -134,6 +134,7 @@ describe("mapStaffLoginRow", () => {
       role: "admin",
       email: "chief@cnnhs.edu",
       commissionerRole: "chief",
+      isCoCommissioner: false,
       mustChangePassword: false,
     } as CurrentUser);
   });
@@ -147,6 +148,7 @@ describe("mapStaffLoginRow", () => {
       role: "admin",
       email: "jane@cnnhs.edu",
       commissionerRole: "screening_validation",
+      isCoCommissioner: false,
       mustChangePassword: false,
     } as CurrentUser);
   });
@@ -160,6 +162,7 @@ describe("mapStaffLoginRow", () => {
       role: "admin",
       email: "co@cnnhs.edu",
       commissionerRole: "electoral_board",
+      isCoCommissioner: true,
       mustChangePassword: false,
     } as CurrentUser);
   });

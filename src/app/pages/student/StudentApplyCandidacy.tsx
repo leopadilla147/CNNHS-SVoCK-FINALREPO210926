@@ -9,12 +9,14 @@ import { useConfirm } from "../../lib/useConfirm";
 import { escapeHtml } from "../../lib/escapeHtml";
 import { MIN_WORDS, countWords as wordCount, wordCountError } from "../../lib/wordCount";
 import {
-  EXECUTIVE_POSITIONS,
   GRADE_LEVELS,
   buildPartyOptions,
   candidatesInLivePeriod,
+  getPositionsForGrade,
+  gradesForPosition,
   isPartyFounder,
   isSeatSelectable,
+  isSeniorHighGrade,
   partyApprovalBlockForSubmit,
   partySeatSummaries,
 } from "../../lib/partyScope";
@@ -494,12 +496,13 @@ export default function StudentApplyCandidacy() {
   }, [form.dateOfBirth]);
 
   // The mode effect runs on mount too, so an Independent start clears the
-  // party field and defaults the position to the first executive seat.
+  // party field and defaults the position to the first office the student's
+  // grade is actually eligible for (SHS: President; JHS: Auditor).
   useEffect(() => {
     if (partyMode === "new") {
       setForm((f) => ({ ...f, position: "President", partyAffiliation: "" }));
     } else if (partyMode === "independent") {
-      setForm((f) => ({ ...f, partyAffiliation: "", position: f.position || EXECUTIVE_POSITIONS[0] }));
+      setForm((f) => ({ ...f, partyAffiliation: "", position: f.position || getPositionsForGrade(f.gradeLevel)[0] || "" }));
     } else {
       setForm((f) => ({
         ...f,
@@ -511,6 +514,26 @@ export default function StudentApplyCandidacy() {
       }));
     }
   }, [partyMode]);
+
+  // The per-position grade gates in getPositionsForGrade govern which offices
+  // a grade may contest — and since a party is founded by running for its
+  // President, creating one is SHS-only.  Grade level is editable in step 1,
+  // so when it changes, drop whatever the new grade can no longer hold: a
+  // "new party" mode or an office outside the grade's gate does not survive.
+  // An existing application being revised keeps its prefilled seat — the
+  // revise wizard cannot change the position anyway, and a legacy row must
+  // not have its form silently wiped.
+  useEffect(() => {
+    if (partyMode === "new" && !isSeniorHighGrade(form.gradeLevel) && !editingExisting) {
+      setPartyMode("independent");
+    }
+    if (editingExisting) return;
+    setForm((f) => {
+      if (!f.position || getPositionsForGrade(f.gradeLevel).includes(f.position)) return f;
+      return { ...f, position: "" };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.gradeLevel]);
 
   // 110: fetch the EAF signatory names once a session exists (same cadence as
   // AppContext's boot load).  A failure is silent — the EAF falls back to its
@@ -605,6 +628,14 @@ export default function StudentApplyCandidacy() {
               if (form.position && form.position.endsWith("Representative") && form.position !== `${form.gradeLevel} Representative`) {
                 errs.position = `${form.gradeLevel} students can only apply for ${form.gradeLevel} Representative.`;
               }
+              // The per-position grade gates (partyScope), as a validation
+              // backstop behind dropdowns that already omit ineligible offices.
+              if (!errs.position && form.position && !getPositionsForGrade(form.gradeLevel).includes(form.position)) {
+                const allowed = gradesForPosition(form.position);
+                errs.position = allowed.length > 0
+                  ? `${form.position} is only open to ${allowed.join(" and ")} students.`
+                  : `${form.position} is not open to ${form.gradeLevel || "this grade"} students.`;
+              }
               if (partyMode === "existing") {
                 // Only a WON seat blocks an applicant.  A seat that merely has
                 // other requests in it is still open, because 055 lets several
@@ -614,7 +645,7 @@ export default function StudentApplyCandidacy() {
                 } else if (selectedParty?.blockedReason === "full") {
                   errs.party = `${selectedParty.name} already has a candidate for every ${form.gradeLevel} position.`;
                 } else if (form.position === "President") {
-                  errs.position = "The President seat is only open to the student who creates a party.";
+                  errs.position = "The President seat is only open to the Grade 11-12 (SHS) student who creates a party.";
                 } else if (form.position && !openPartySeats.some((seat) => seat.position === form.position)) {
                   errs.position = "That position already has an approved candidate in this party.";
                 }
@@ -1196,7 +1227,7 @@ export default function StudentApplyCandidacy() {
             @page { size: letter; margin: 0; }
             html, body { margin: 0; padding: 0; width: 8.5in; min-height: 11in; background: #fff; }
             body { display: flex; flex-direction: column; align-items: center; }
-            [data-eaf-document="true"], [data-eaf-page2="true"] { box-shadow: none !important; border-radius: 0 !important; width: 8.5in !important; min-height: 11in !important; padding: 0.32in !important; overflow: hidden !important; }
+            [data-eaf-document="true"], [data-eaf-page2="true"] { box-shadow: none !important; border-radius: 0 !important; width: 8.5in !important; min-height: 11in !important; padding: 0.32in 0.6in !important; overflow: hidden !important; }
             .print\\:hidden, [class*="print:hidden"] { display: none !important; }
             @media print { html, body { width: 8.5in; min-height: 11in; overflow: visible; } [data-eaf-document="true"] { page-break-after: always; } [data-eaf-page2="true"] { page-break-before: always; } }
           </style>
@@ -2111,8 +2142,13 @@ export default function StudentApplyCandidacy() {
                       >
                         <option value="independent">Independent (No Party)</option>
                         {existingParties.length > 0 && <option value="existing">Existing party</option>}
-                        <option value="new">Create new party</option>
+                        {isSeniorHighGrade(form.gradeLevel) && <option value="new">Create new party</option>}
                       </select>
+                      <p className="text-xs text-gray-400 mt-1">
+                        {isSeniorHighGrade(form.gradeLevel)
+                          ? "Creating a party makes you its President."
+                          : "Party creation is open to Grade 11-12 (SHS) students only — a party is founded by its President."}
+                      </p>
                     </div>
 
                     {partyMode === "existing" && (
@@ -2146,8 +2182,10 @@ export default function StudentApplyCandidacy() {
                             <p className="font-medium">No parties are accepting applicants right now.</p>
                             <p className="mt-0.5 text-amber-800">
                               {partyOptions.length} part{partyOptions.length === 1 ? "y is" : "ies are"} listed above, but
-                              each one is either full or still waiting for its President to be screened in. You can run as an
-                              Independent candidate or create a new party in the meantime.
+                              each one is either full or still waiting for its President to be screened in.{" "}
+                              {isSeniorHighGrade(form.gradeLevel)
+                                ? "You can run as an Independent candidate or create a new party in the meantime."
+                                : "You can still run as an Independent candidate for an office open to your grade."}
                             </p>
                           </div>
                         ) : selectedParty ? (
@@ -2179,7 +2217,7 @@ export default function StudentApplyCandidacy() {
                           className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50 ${errors.party ? "border-red-400" : "border-gray-200"}`}
                         />
                         {errors.party && <p className="text-xs text-red-500 mt-1"><AlertCircle size={12} /> {errors.party}</p>}
-                        <p className="text-xs text-gray-400 mt-1">New party creators are automatically assigned President.</p>
+                        <p className="text-xs text-gray-400 mt-1">Only Grade 11-12 (SHS) students can create a party — its creator is automatically assigned President.</p>
                       </div>
                     )}
 
@@ -2231,12 +2269,11 @@ export default function StudentApplyCandidacy() {
                               disabled={!isSeatSelectable(seat)}
                             >
                               {seat.position}
-                              {seat.state === "filled" ? " — filled" : ""}
                             </option>
                           ))}
                         </select>
                         {errors.position && <p className="text-xs text-red-500 mt-1"><AlertCircle size={12} /> {errors.position}</p>}
-                        <p className="text-xs text-gray-400 mt-1">Independent candidates may run for any open position.</p>
+                        <p className="text-xs text-gray-400 mt-1">Independents do not share a seat — you may run for any position your grade is eligible for, even if another Independent is already in the running.</p>
                       </div>
                     )}
                   </div>

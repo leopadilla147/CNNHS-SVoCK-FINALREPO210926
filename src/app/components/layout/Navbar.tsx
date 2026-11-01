@@ -43,6 +43,7 @@ export function Navbar() {
           {/* Desktop Nav */}
           <div className="hidden md:flex items-center gap-6">
             <Link to="/" className="text-gray-600 hover:text-[#5C0102] transition-colors text-sm">Home</Link>
+            <Link to="/calendar" className="text-gray-600 hover:text-[#5C0102] transition-colors text-sm">Calendar</Link>
             {!currentUser ? (
               <>
                 <Link to="/login" className="text-gray-600 hover:text-[#5C0102] transition-colors text-sm">Login</Link>
@@ -89,6 +90,7 @@ export function Navbar() {
       {mobileOpen && (
         <div className="md:hidden border-t border-gray-200 bg-white px-4 py-4 space-y-2">
           <Link to="/" onClick={() => setMobileOpen(false)} className="block py-2 text-gray-700 text-sm">Home</Link>
+          <Link to="/calendar" onClick={() => setMobileOpen(false)} className="block py-2 text-gray-700 text-sm">Calendar</Link>
           {!currentUser ? (
             <>
               <Link to="/login" onClick={() => setMobileOpen(false)} className="block py-2 text-gray-700 text-sm">Login</Link>

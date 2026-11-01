@@ -223,7 +223,7 @@ export default function ElectoralDashboard() {
   );
 
   // Per-kiosk voter counts (distinct students per kiosk label), in numeric
-  // order ("Kiosk 2" before "Kiosk 10"; "Unknown" last).
+  // order ("Kiosk ID: 2" before "Kiosk ID: 10"; "Unknown" last).
   const kioskCounts = useMemo(() => {
     const votersByKiosk = new Map<string, Set<string>>();
     for (const row of voterRows) {
@@ -248,15 +248,6 @@ export default function ElectoralDashboard() {
 
   // Dropdown options = the same kiosk labels as the turnout cards above.
   const kioskOptions = useMemo(() => kioskCounts.map((k) => k.label), [kioskCounts]);
-
-  // Kiosk turnout cards (between the stat cards and Live Results).
-  const kioskStats: Stat[] = kioskCounts.map((k) => ({
-    label: k.label,
-    value: k.count.toLocaleString(),
-    icon: <Monitor size={20} />,
-    color: "#3B82F6",
-    sub: `${pct(k.count, approvedVoters)}% turnout`,
-  }));
 
   const filteredVoters = useMemo(() => {
     const q = voterSearch.trim().toLowerCase();
@@ -312,13 +303,64 @@ export default function ElectoralDashboard() {
         ))}
       </div>
 
-      {/* Per-kiosk turnout — how many students voted on each kiosk (K1, K2, ...) */}
-      {kioskStats.length > 0 ? (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-          {kioskStats.map((stat, i) => (
-            <StatCard key={stat.label} stat={stat} index={i} />
-          ))}
-        </div>
+      {/* Per-kiosk turnout — one full-width card; the kiosks are laid out
+          two per row below its header in numeric order ("Kiosk ID: 1" first,
+          "Unknown" last). */}
+      {kioskCounts.length > 0 ? (
+        <section className="bg-white rounded-xl shadow-sm border border-gray-100 mb-6">
+          <div className="flex items-center gap-3 p-5 pb-4">
+            <div className="w-11 h-11 rounded-xl flex items-center justify-center text-white flex-shrink-0" style={{ backgroundColor: "#3B82F6" }}>
+              <Monitor size={20} />
+            </div>
+            <div>
+              <div className="text-sm font-medium text-gray-900">Kiosk Turnout</div>
+              <div className="text-xs text-gray-500">Students who voted on each kiosk</div>
+            </div>
+          </div>
+          <div className="px-5 pb-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {kioskCounts.map((k, i) => {
+              const percent = approvedVoters > 0 ? Math.min(100, (k.count / approvedVoters) * 100) : 0;
+              return (
+                <motion.div
+                  key={k.label}
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.06 }}
+                  className="rounded-xl border border-blue-100 bg-gradient-to-br from-blue-50/70 to-white p-5 shadow-sm hover:shadow-md transition-shadow"
+                >
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white flex-shrink-0" style={{ backgroundColor: "#3B82F6" }}>
+                        <Monitor size={20} />
+                      </div>
+                      <div>
+                        <div className="text-sm font-semibold text-gray-900">{k.label}</div>
+                        <div className="text-[11px] text-gray-500">Ballots cast on this kiosk</div>
+                      </div>
+                    </div>
+                    <span className="text-xs font-semibold text-blue-700 bg-blue-100 rounded-full px-2.5 py-1">
+                      {pct(k.count, approvedVoters)}% turnout
+                    </span>
+                  </div>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-3xl font-bold text-gray-900">{k.count.toLocaleString()}</span>
+                    <span className="text-xs text-gray-500">students voted</span>
+                  </div>
+                  {/* Turnout progress — share of approved voters who voted here */}
+                  <div className="mt-3 h-1.5 w-full rounded-full bg-blue-100 overflow-hidden">
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${percent}%` }}
+                      transition={{ duration: 0.6, delay: 0.15 + i * 0.06 }}
+                      className="h-full rounded-full"
+                      style={{ backgroundColor: "#3B82F6" }}
+                    />
+                  </div>
+                </motion.div>
+              );
+            })}
+          </div>
+        </section>
       ) : (
         <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 mb-6 text-sm text-gray-400">
           Kiosk turnout will appear here once students start voting.

@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import { Mail, MapPin, Clock, Facebook } from "lucide-react";
 import { useApp, defaultHomepageSettings, formatOfficeTime } from "../../context/AppContext";
+import { getCalendarHref } from "./roleNav";
 
 export function Footer() {
   // 115: the Contact Us block is Chief-editable content (Homepage Setting).
@@ -38,7 +39,7 @@ export function Footer() {
                 </Link>
               </li>
               <li>
-                <Link to="/" className="block hover:text-white transition-colors">
+                <Link to={getCalendarHref(currentUser)} className="block hover:text-white transition-colors">
                   Election Calendar
                 </Link>
               </li>

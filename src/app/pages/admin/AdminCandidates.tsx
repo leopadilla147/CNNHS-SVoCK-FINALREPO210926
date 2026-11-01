@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router";
 import { Search, CheckCircle, XCircle, AlertCircle, Clock, Eye, FileCheck, ChevronDown, ChevronUp, Users, Shield, FileSignature, Calendar } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useApp, Candidate } from "../../context/AppContext";
+import { positionRank } from "../../lib/partyScope";
 import { reviewCandidacyRpc, insertAuditLog } from "../../lib/supabaseData";
 import { isSupabaseConfigured } from "../../lib/supabase";
 import { useConfirm } from "../../lib/useConfirm";
@@ -22,6 +23,23 @@ const fallbackColor = { bg: "#F9FAFB", border: "#6B7280", badge: "bg-gray-100 te
 const FILTER_VALUES = ["all", "pending", "approved"] as const;
 const readStatusFilter = (param: string | null) =>
   param && FILTER_VALUES.includes(param as (typeof FILTER_VALUES)[number]) ? param : "all";
+
+/**
+ * The review surface keeps the Board's reading order instead of the database's
+ * (candidates arrive newest submission first, which shuffles a party's slate):
+ *   * panels read A→Z, with the Independent field last — it is not a party;
+ *   * inside a panel, the canonical ballot order (President first, then the
+ *     other executives and grade seats — see FULL_POSITION_ORDER), and
+ *     surnames as the tie-breaker for two people in the same office.
+ */
+const byPartyOrder = (left: string, right: string) =>
+  Number(left === "Independent") - Number(right === "Independent") ||
+  left.localeCompare(right);
+
+const byCandidateOrder = (left: Candidate, right: Candidate) =>
+  positionRank(left.position) - positionRank(right.position) ||
+  left.surname.localeCompare(right.surname) ||
+  left.givenName.localeCompare(right.givenName);
 
 /**
  * 112 — the rejection checklist as ONE merged list.  The low/high tier still
@@ -102,10 +120,10 @@ export default function AdminCandidates() {
     c.position !== "President" &&
     c.positionApprovalStatus !== "presidentApproved";
 
-  // Derive unique parties from all candidates
+  // Derive unique parties from all candidates, in the review reading order.
   const allParties = Array.from(
     new Set(candidates.map((c) => c.partyAffiliation || "Independent"))
-  );
+  ).sort(byPartyOrder);
 
   const handleApprove = async (candidate: Candidate) => {
     const ok = await approveConfirm.confirm();
@@ -341,19 +359,21 @@ export default function AdminCandidates() {
 
   const docsComplete = (docs: Candidate["documents"]) => Object.values(docs).every(Boolean);
 
-  // Filter candidates for inside a party panel
+  // Filter candidates for inside a party panel, in canonical ballot order.
   const getPartyMembers = (party: string) => {
-    return candidates.filter((c) => {
-      const matchParty = (c.partyAffiliation || "Independent") === party;
-      const matchSearch = search === "" ||
-        `${c.givenName} ${c.surname} ${c.position}`.toLowerCase().includes(search.toLowerCase());
-      const matchStatus = statusFilter === "all" || c.status === statusFilter;
-      // A screening commissioner only sees what is ready to be screened.
-      const matchGate = isChief || !awaitingPartyPresident(c);
-      // Rejected candidacies are no longer part of this review surface.
-      const notRejected = c.status !== "rejected";
-      return matchParty && matchSearch && matchStatus && matchGate && notRejected;
-    });
+    return candidates
+      .filter((c) => {
+        const matchParty = (c.partyAffiliation || "Independent") === party;
+        const matchSearch = search === "" ||
+          `${c.givenName} ${c.surname} ${c.position}`.toLowerCase().includes(search.toLowerCase());
+        const matchStatus = statusFilter === "all" || c.status === statusFilter;
+        // A screening commissioner only sees what is ready to be screened.
+        const matchGate = isChief || !awaitingPartyPresident(c);
+        // Rejected candidacies are no longer part of this review surface.
+        const notRejected = c.status !== "rejected";
+        return matchParty && matchSearch && matchStatus && matchGate && notRejected;
+      })
+      .sort(byCandidateOrder);
   };
 
   // Party summary stats

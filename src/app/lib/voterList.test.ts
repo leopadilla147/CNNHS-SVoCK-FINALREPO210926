@@ -72,7 +72,7 @@ describe("buildVoterRows", () => {
     const rows = buildVoterRows([student("s1", "Cruz", "Ana")], [
       vote("s1", { transaction_id: "TXN-K1-260906-0001" }),
     ]);
-    expect(rows[0].kioskLabel).toBe("Kiosk 1");
+    expect(rows[0].kioskLabel).toBe("Kiosk ID: 1");
   });
 
   it("collapses the per-position rows of one ballot into a single vote", () => {
@@ -82,7 +82,7 @@ describe("buildVoterRows", () => {
       vote("s1", { transaction_id: "TXN-K2-260906-0001", voted_at: "2026-09-06T08:00:02Z" }),
     ]);
     expect(rows[0].voted).toBe(true);
-    expect(rows[0].kioskLabel).toBe("Kiosk 2");
+    expect(rows[0].kioskLabel).toBe("Kiosk ID: 2");
     expect(rows[0].transactionId).toBe("TXN-K2-260906-0001");
     expect(rows[0].votedAt).toBe("2026-09-06T08:00:00Z");
   });
@@ -98,9 +98,9 @@ describe("buildVoterRows", () => {
         vote("s1", { kiosk_id: "kiosk-a", transaction_id: "TXN-260906-0003", voted_at: "2026-09-06T08:00:00Z" }),
       ],
     );
-    expect(rows.find((r) => r.student.id === "s3")?.kioskLabel).toBe("Kiosk 5");
-    expect(rows.find((r) => r.student.id === "s2")?.kioskLabel).toBe("Kiosk 6");
-    expect(rows.find((r) => r.student.id === "s1")?.kioskLabel).toBe("Kiosk 7");
+    expect(rows.find((r) => r.student.id === "s3")?.kioskLabel).toBe("Kiosk ID: 5");
+    expect(rows.find((r) => r.student.id === "s2")?.kioskLabel).toBe("Kiosk ID: 6");
+    expect(rows.find((r) => r.student.id === "s1")?.kioskLabel).toBe("Kiosk ID: 7");
   });
 
   it("marks a vote with no kiosk tag and no kiosk id as Unknown", () => {

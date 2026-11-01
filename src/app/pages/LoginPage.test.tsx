@@ -5,14 +5,14 @@
 // env-fail-fast). The supabase client modules are mocked so the
 // smoke never hits the network (T-04-04).
 //
-// Query strategy: LoginPage opens in role-select mode, rendering four
+// Query strategy: LoginPage opens in role-select mode, rendering two
 // role cards whose accessible names combine a role title and subtitle
-// (e.g. "Student Voters & Candidates"). Clicking a card opens the login
-// form for that role (email/password placeholders + a "Login" button).
-// The form labels ("Email Address", "Password") are sibling labels
-// WITHOUT htmlFor/id association, so getByLabelText cannot associate
-// them - the smoke uses placeholder + role queries against the real
-// markup.
+// (e.g. "Student Voters & Candidates", "Admin Commissioners & Adviser").
+// Clicking a card opens the login form for that role (email/password
+// placeholders + a "Login" button). The form labels ("Email Address",
+// "Password") are sibling labels WITHOUT htmlFor/id association, so
+// getByLabelText cannot associate them - the smoke uses placeholder +
+// role queries against the real markup.
 // =============================================================
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -25,11 +25,13 @@ const {
   mockAddLog,
   mockNavigate,
   mockSignInStudentDirect,
+  mockSignInWithSupabase,
 } = vi.hoisted(() => ({
   mockSetCurrentUser: vi.fn(),
   mockAddLog: vi.fn(),
   mockNavigate: vi.fn(),
   mockSignInStudentDirect: vi.fn(),
+  mockSignInWithSupabase: vi.fn(),
 }));
 
 vi.mock("react-router", async (importOriginal) => {
@@ -47,9 +49,8 @@ vi.mock("../lib/supabase", () => ({
 }));
 
 vi.mock("../lib/supabaseData", () => ({
-  signInWithSupabase: vi.fn(),
+  signInWithSupabase: mockSignInWithSupabase,
   signInStudentDirect: mockSignInStudentDirect,
-  signInSslgAdviser: vi.fn(),
 }));
 
 function renderPage() {
@@ -70,9 +71,7 @@ describe("LoginPage (smoke)", () => {
 
     // Role-select portal cards come from the real component
     expect(screen.getByRole("button", { name: /Student Voters & Candidates/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Commissioner Review & Validate/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Admin System Control/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /SSLG Adviser Student Supervision/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Admin Commissioners & Adviser/i })).toBeTruthy();
 
     // Open the student portal: email + password inputs and submit button
     fireEvent.click(screen.getByRole("button", { name: /Student Voters & Candidates/i }));
@@ -111,6 +110,78 @@ describe("LoginPage (smoke)", () => {
     expect(mockNavigate).toHaveBeenCalledWith("/student/dashboard");
 
     // Let the trailing state update (setLoading(false)) settle
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  });
+
+  it("logs the Chief Commissioner in through the single Admin portal", async () => {
+    const chiefUser = {
+      id: "a1",
+      name: "Chief One",
+      email: "chief@cnnhs.edu",
+      role: "admin",
+      commissionerRole: "chief",
+      mustChangePassword: false,
+    };
+    mockSignInWithSupabase.mockResolvedValue(chiefUser);
+
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: /Admin Commissioners & Adviser/i }));
+
+    fireEvent.change(screen.getByPlaceholderText("Enter your email"), {
+      target: { value: chiefUser.email },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Enter your password"), {
+      target: { value: "chief123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Login" }));
+
+    await waitFor(
+      () => expect(mockSignInWithSupabase).toHaveBeenCalledWith(chiefUser.email, "chief123"),
+      { timeout: 2000 },
+    );
+
+    expect(mockSetCurrentUser).toHaveBeenCalledWith(chiefUser);
+    // The audit log carries the resolved role title, not the portal name.
+    expect(mockAddLog).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "Chief Commissioner", action: "Login" }),
+    );
+    expect(mockNavigate).toHaveBeenCalledWith("/admin/dashboard");
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  });
+
+  it("admits the SSLG Adviser through the same Admin portal", async () => {
+    const adviserUser = {
+      id: "a2",
+      name: "Adviser One",
+      email: "adviser@cnnhs.edu",
+      role: "sslg_adviser",
+      mustChangePassword: false,
+    };
+    mockSignInWithSupabase.mockResolvedValue(adviserUser);
+
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: /Admin Commissioners & Adviser/i }));
+
+    fireEvent.change(screen.getByPlaceholderText("Enter your email"), {
+      target: { value: adviserUser.email },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Enter your password"), {
+      target: { value: "adviser123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Login" }));
+
+    await waitFor(
+      () => expect(mockSignInWithSupabase).toHaveBeenCalledWith(adviserUser.email, "adviser123"),
+      { timeout: 2000 },
+    );
+
+    expect(mockSetCurrentUser).toHaveBeenCalledWith(adviserUser);
+    expect(mockAddLog).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "SSLG Adviser", action: "Login" }),
+    );
+    expect(mockNavigate).toHaveBeenCalledWith("/admin/dashboard");
+
     await new Promise((resolve) => setTimeout(resolve, 500));
   });
 });

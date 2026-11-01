@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -55,6 +55,9 @@ export interface CandidateProfile {
   /** The candidate's submitted profile photo URL, when they have one. */
   picture?: string;
   gradeLevel?: string;
+  /** The candidate's stored gender ("Male" / "Female") — picks the
+   *  "Mr." / "Ms." honorific on the proclamation certificate. */
+  gender?: string;
 }
 
 /** 117 — Grade Level Representative positions elect two winners; every
@@ -142,17 +145,41 @@ export function groupTally(tally: ProclamationTallyRow[]): PositionTally[] {
 
 /**
  * A per-position draft: the board's chosen winner(s) of a tie (117 — up to
- * two for a Grade Level Representative tie) and/or the "Remain Winner"
- * affirmation of the default winner when a complaint is on record.  085b —
+ * two for a Grade Level Representative tie) and/or the "Keep Current
+ * Winner" affirmation of the default winner(s) when a complaint is on
+ * record.  085b —
  * the resolution METHOD is one shared decision for the whole election
  * (recorded below the complaint note), so a tie is resolved once its
  * winner(s) are picked.
  */
 type DraftResolution = { method?: "manual"; candidateIds?: string[]; remainWinner?: boolean };
 
-/** The board has named exactly the required number of winners. */
-function isResolved(resolution: DraftResolution | undefined, picksNeeded: number): boolean {
-  return picksNeeded > 0 && (resolution?.candidateIds?.length ?? 0) === picksNeeded;
+/**
+ * 123 — the seats the board must fill by hand for this position.  With a
+ * complaint on record and NO "Keep Current Winner" affirmation, that is
+ * EVERY seat of the position — the board chooses the winner(s) itself from
+ * any of its candidates; otherwise just the tied seat(s) (0 when the
+ * default outcome stands).
+ */
+function requiredPicks(
+  p: PositionTally,
+  hasComplaints: boolean,
+  resolution: DraftResolution | undefined,
+): number {
+  if (hasComplaints && !resolution?.remainWinner && (p.tied.length === 1 || p.bothWin)) {
+    return p.seats;
+  }
+  return p.picksNeeded;
+}
+
+/** The board has filled every seat it must fill by hand. */
+function isResolved(
+  p: PositionTally,
+  hasComplaints: boolean,
+  resolution: DraftResolution | undefined,
+): boolean {
+  const required = requiredPicks(p, hasComplaints, resolution);
+  return required === 0 || (resolution?.candidateIds?.length ?? 0) === required;
 }
 
 function tallyVoteLabel(votes: number): string {
@@ -182,8 +209,9 @@ interface ProclamationDialogProps {
   /** Subjects of the complaints still filed against this election (081). */
   complaintSubjects: string[];
   /** 117 — TRUE when ANY complaint is on record for this election (filed
-   *  or resolved): every default (highest-vote) winner must then be
-   *  affirmed with "Remain Winner" before the board may proclaim. */
+   *  or resolved): every position whose winners are the default outcome
+   *  must then be either affirmed with "Keep Current Winner" or have all
+   *  of its seats chosen by the board before it may proclaim (123). */
   hasComplaints: boolean;
   /** 097 — the election's SUBSTANTIATED grievances (already resolved), each
    *  with its read-only findings shown beside the subject. */
@@ -205,7 +233,14 @@ interface ProclamationDialogProps {
  * positions elect TWO winners: a unique 1-2 finish or a 2-way top tie
  * proclaims both automatically, a 3+-way tie needs two picks, and a tie for
  * the remaining seat needs one.  When a complaint is on record, every
- * default (highest-vote) winner must be affirmed with "Remain Winner".
+ * position whose winners are the default outcome — including both winners
+ * of a 2-way Grade Rep tie (122) — is the board's to settle: either affirm
+ * "Keep Current Winner", or choose every seat of the position itself from
+ * any of its candidates (123).  124 — inside this review nothing is final:
+ * a chosen winner can be withdrawn (click it again) or replaced (click
+ * another candidate, oldest pick out first), and affirming "Keep Current
+ * Winner" overrides the board's picks until it is deactivated again.  The
+ * choices become final only when the proclamation is confirmed.
  * 085b — ONE resolution method for the whole election is recorded below the
  * complaint note and applies to every resolved tie, instead of being
  * re-entered inside each per-candidate confirm.  When a complaint is still
@@ -227,7 +262,12 @@ export function ProclamationDialog({
 }: ProclamationDialogProps) {
   const positions = useMemo(() => groupTally(tally), [tally]);
   const [resolutions, setResolutions] = useState<Record<string, DraftResolution>>({});
-  const [pendingPick, setPendingPick] = useState<{ position: string; candidate: ProclamationTallyRow } | null>(null);
+  const [pendingPick, setPendingPick] = useState<{
+    position: string;
+    candidate: ProclamationTallyRow;
+    /** 124 — the oldest pick this choice replaces, when the seats are full. */
+    replaces?: ProclamationTallyRow | null;
+  } | null>(null);
   // 081 — the complaint note required when a complaint is on record.  085b —
   // ONE tie-break method for the whole election, recorded below the complaint
   // note instead of inside every per-candidate confirm.
@@ -253,13 +293,15 @@ export function ProclamationDialog({
   if (!open) return null;
 
   const tiePositions = positions.filter((p) => p.picksNeeded > 0);
-  const unresolvedTies = tiePositions.filter((p) => !isResolved(resolutions[p.position], p.picksNeeded));
-  // 117 — with a complaint on record, every position whose top candidate is
-  // the DEFAULT winner (strictly the highest vote — a 2-way Grade Rep tie
-  // has no single default winner) must be affirmed with "Remain Winner".
-  const remainNeeded = hasComplaints
-    ? positions.filter((p) => p.tied.length === 1 && p.autoWinners.length > 0 && !resolutions[p.position]?.remainWinner)
-    : [];
+  // 123 — a position is settled once the board either affirmed its default
+  // winner(s) or manually named every seat itself; with no complaint only
+  // ties need resolving.
+  const unresolved = positions.filter((p) => !isResolved(p, hasComplaints, resolutions[p.position]));
+  // 123 — an unresolved complaint-gated position (default winners neither
+  // affirmed nor replaced) drives the affirm-or-choose message.
+  const needsAffirmOrChoose = unresolved.some(
+    (p) => hasComplaints && (p.tied.length === 1 || p.bothWin) && !resolutions[p.position]?.remainWinner,
+  );
   const complaintsPending = complaintSubjects.length > 0;
   const decisionReady = !complaintsPending || complaintNote.trim() !== "";
   // 097/114 — a substantiated grievance requires the Board's one-time
@@ -291,39 +333,67 @@ export function ProclamationDialog({
     : tieMethod === "draw_lots" ? "Draw Lots"
     : tieOther.trim();
   const canProclaim =
-    !loading && !confirming && positions.length > 0 && unresolvedTies.length === 0 && remainNeeded.length === 0 && decisionReady && reasonReady && tieMethodReady;
+    !loading && !confirming && positions.length > 0 && unresolved.length === 0 && decisionReady && reasonReady && tieMethodReady;
 
   const setResolution = (position: string, resolution: DraftResolution) => {
     setResolutions((prev) => ({ ...prev, [position]: resolution }));
   };
 
   const openPick = (position: string, candidate: ProclamationTallyRow) => {
-    setPendingPick({ position, candidate });
+    // 124 — a full position still accepts a click: it REPLACES the oldest
+    // pick, and the confirm says so.
+    const target = positions.find((x) => x.position === position);
+    const current = resolutions[position];
+    const ids = current?.candidateIds ?? [];
+    const required = target ? requiredPicks(target, hasComplaints, current) : 0;
+    const replaces =
+      required > 0 && ids.length >= required
+        ? target?.candidates.find((c) => c.candidateId === ids[0]) ?? null
+        : null;
+    setPendingPick({ position, candidate, replaces });
   };
 
   const confirmPick = () => {
     if (!pendingPick) return;
+    const target = positions.find((x) => x.position === pendingPick.position);
     setResolutions((prev) => {
       const current = prev[pendingPick.position] ?? {};
       const ids = current.candidateIds ?? [];
-      if (ids.includes(pendingPick.candidate.candidateId)) return prev;
+      const required = target ? requiredPicks(target, hasComplaints, current) : 0;
+      // 124 — when the seats are already filled, the new pick replaces the
+      // oldest one instead of being refused.
+      const nextIds =
+        required > 0 && ids.length >= required
+          ? [...ids.slice(ids.length - required + 1), pendingPick.candidate.candidateId]
+          : [...ids, pendingPick.candidate.candidateId];
       return {
         ...prev,
-        [pendingPick.position]: {
-          ...current,
-          method: "manual",
-          candidateIds: [...ids, pendingPick.candidate.candidateId],
-        },
+        [pendingPick.position]: { ...current, method: "manual", candidateIds: nextIds },
       };
     });
     setPendingPick(null);
   };
 
-  // 117 — the "Remain Winner" affirmation of the default winner.
+  // 124 — withdraw a pick: a choice is never final inside the review modal.
+  const unpick = (position: string, candidateId: string) => {
+    setResolutions((prev) => {
+      const current = prev[position];
+      if (!current?.candidateIds?.includes(candidateId)) return prev;
+      const ids = current.candidateIds.filter((id) => id !== candidateId);
+      const next: DraftResolution = { ...current, candidateIds: ids };
+      if (ids.length === 0) delete next.method;
+      return { ...prev, [position]: next };
+    });
+  };
+
+  // 117/122 — the "Keep Current Winner" affirmation of the default winners.
+  // 124 — affirming OVERRIDES the board's picks: the default winner(s)
+  // stand and every manual pick for the position is dropped.  Deactivating
+  // it re-opens the choice with a clean slate.
   const toggleRemainWinner = (position: string) => {
     setResolutions((prev) => {
       const current = prev[position] ?? {};
-      return { ...prev, [position]: { ...current, remainWinner: !current.remainWinner } };
+      return { ...prev, [position]: { remainWinner: !current.remainWinner } };
     });
   };
 
@@ -332,13 +402,16 @@ export function ProclamationDialog({
     for (const p of positions) {
       const resolution = resolutions[p.position];
       const entry: TieResolution = {};
-      if (p.picksNeeded > 0 && isResolved(resolution, p.picksNeeded) && resolution?.method === "manual") {
+      // 123 — the board's picks: the tied seat(s), or EVERY seat when the
+      // board chose instead of affirming (complaint on record).
+      const required = requiredPicks(p, hasComplaints, resolution);
+      if (required > 0 && resolution?.method === "manual" && (resolution.candidateIds?.length ?? 0) === required) {
         entry.method = "manual";
         entry.candidateIds = resolution.candidateIds;
         // 085b — the one shared decision, written onto every resolved tie.
         entry.tieBreak = sharedTieBreak;
       }
-      if (hasComplaints && resolution?.remainWinner && p.tied.length === 1 && p.autoWinners.length > 0) {
+      if (hasComplaints && resolution?.remainWinner && (p.tied.length === 1 || p.bothWin)) {
         entry.remainWinner = true;
       }
       if (entry.method || entry.remainWinner) {
@@ -554,7 +627,7 @@ export function ProclamationDialog({
                 </div>
               )}
 
-              {positions.map((p) => {
+              {positions.map((p, index) => {
                 const resolution = resolutions[p.position];
                 const picksSoFar = resolution?.candidateIds?.length ?? 0;
                 // 117 — the pick targets are the tied group the board must
@@ -562,29 +635,88 @@ export function ProclamationDialog({
                 // are tied than there are seats, or the next-count
                 // candidates when a unique leader leaves one seat to a tie.
                 const pickVotes = p.pickGroup[0]?.votes ?? null;
-                const remainAffirmed = !!resolution?.remainWinner && p.autoWinners.length > 0;
+                // 117/122 — with a complaint on record the DEFAULT winners
+                // (a unique highest-vote winner, or both winners of a 2-way
+                // Grade Rep tie) keep their seats only once the board
+                // affirms it: "Keep Current Winner".  Tie-resolved seats
+                // need no affirmation — the board's pick there already IS
+                // the decision.  One affirmation covers the position's
+                // winner(s), one or two alike.
+                const remainApplies = hasComplaints && (p.tied.length === 1 || p.bothWin);
+                const remainAffirmed = remainApplies && !!resolution?.remainWinner;
+                const remainTitle = remainAffirmed
+                  ? "Affirmed — the record shows the Board weighed the complaint and the winner(s) stand."
+                  : p.bothWin
+                    ? "A complaint is on record. Affirm that both tied winners keep their seats, or choose the 2 winners yourself below."
+                    : p.autoWinners.length > 1
+                      ? "A complaint is on record. Affirm that both highest-vote winners keep their seats, or choose the 2 winners yourself below."
+                      : "A complaint is on record. Affirm that the highest-vote winner keeps the seat, or choose the winner yourself below.";
+                // 123 — choice mode: a complaint is on record and the board
+                // has NOT affirmed, so every seat of the position is the
+                // board's to fill — ANY candidate below is pickable.
+                const required = requiredPicks(p, hasComplaints, resolution);
+                const choiceMode = remainApplies && !remainAffirmed;
+                // The slate splits into the elected officers and the Grade
+                // Level Representatives — a labelled divider marks the break
+                // before the first two-winner position.
+                const showGradeRepDivider =
+                  p.seats > 1 && !positions.slice(0, index).some((x) => x.seats > 1);
                 return (
-                  <section key={p.position} className="rounded-2xl border border-gray-200 overflow-hidden">
-                    <div className="flex items-center justify-between gap-2 px-4 py-3 bg-gray-50 border-b border-gray-100">
+                  <Fragment key={p.position}>
+                    {showGradeRepDivider && (
+                      <div className="flex items-center gap-3 pt-2" aria-hidden="true">
+                        <div className="h-px flex-1 bg-gray-200" />
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                          Grade Level Representatives
+                        </span>
+                        <div className="h-px flex-1 bg-gray-200" />
+                      </div>
+                    )}
+                    <section className="rounded-2xl border border-gray-200 overflow-hidden">
+                    <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 bg-gray-50 border-b border-gray-100">
                       <h4 className="text-sm font-semibold text-gray-900">
                         {p.position}
                         {p.seats > 1 && (
                           <span className="ml-2 text-[11px] font-normal text-gray-500">2 winners</span>
                         )}
                       </h4>
-                      {p.picksNeeded > 0 ? (
-                        <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
-                          {p.pickGroup.length}-way tie — pick {p.picksNeeded}
-                        </span>
-                      ) : p.bothWin ? (
-                        <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
-                          2-way tie — both win
-                        </span>
-                      ) : (
-                        <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-green-100 text-green-700 border border-green-200">
-                          {p.autoWinners.length > 1 ? "Winners" : "Winner"}
-                        </span>
-                      )}
+                      {/* 117/122 — the affirmation lives on the header's
+                          right side, beside the position's status: the board
+                          either keeps the standing winner(s) or, for a tie,
+                          picks new one(s) from the highlighted candidates
+                          below.  One toggle covers both winners of a Grade
+                          Level Representative position. */}
+                      <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0">
+                        {remainApplies && (
+                          <button
+                            type="button"
+                            onClick={() => toggleRemainWinner(p.position)}
+                            disabled={confirming || loading}
+                            title={remainTitle}
+                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider border transition-colors disabled:opacity-50 ${
+                              remainAffirmed
+                                ? "bg-green-600 border-green-600 text-white hover:bg-green-700"
+                                : "bg-white border-gray-300 text-gray-700 hover:border-[#5C0102]/40 hover:text-gray-900"
+                            }`}
+                          >
+                            {remainAffirmed ? <CheckCircle2 size={12} /> : <ShieldAlert size={12} />}
+                            {remainAffirmed ? "Current Winner Stands" : "Keep Current Winner"}
+                          </button>
+                        )}
+                        {p.picksNeeded > 0 ? (
+                          <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+                            {p.pickGroup.length}-way tie — pick {choiceMode ? required : p.picksNeeded}
+                          </span>
+                        ) : p.bothWin ? (
+                          <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+                            {choiceMode ? `2-way tie — pick ${required}` : "2-way tie — both win"}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-green-100 text-green-700 border border-green-200">
+                            {p.autoWinners.length > 1 ? "Winners" : "Winner"}
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     <div className="p-2 space-y-1.5">
@@ -596,22 +728,30 @@ export function ProclamationDialog({
                         // 081 — the tally rows ARE the choice: for a tied
                         // position every candidate in the pick group is a
                         // pick target, so no separate tie list is rendered
-                        // below.  The board can only pick once the Complaint
-                        // Resolution and Justification (097/114) and the
-                        // shared tie method are both recorded, and only
-                        // until the required number of picks is reached.
-                        const selectable = isPickTarget && !picksLocked && picksSoFar < p.picksNeeded;
+                        // below.  123 — in choice mode (complaint on
+                        // record, no affirmation) EVERY candidate of the
+                        // position is a pick target instead.  The board can
+                        // only pick once the Complaint Resolution and
+                        // Justification (097/114) and the shared tie method
+                        // are both recorded.  124 — a pick is never final
+                        // inside the modal: a picked row withdraws on
+                        // click, and a full position still accepts another
+                        // candidate as a replacement for the oldest pick.
+                        const inPickPool = choiceMode || isPickTarget;
+                        const selectable = manualPick || (inPickPool && !picksLocked);
                         // Greyed out while the Complaint Resolution and
                         // Justification (097/114) or the shared tie method is
                         // still missing — the choice exists but cannot be
                         // made yet.
-                        const pickLockedRow = isPickTarget && !selectable && !manualPick;
+                        const pickLockedRow = inPickPool && !selectable;
                         // The trophy marks ONLY a winner: a default winner
                         // (117 — includes both winners of a 2-way Grade Rep
                         // tie), or the tied candidate(s) the board chose.
-                        // The whole winner row wears the proclamation colour.
-                        const showTrophy = isAutoWinner || manualPick;
-                        const isLeader = isAutoWinner || isPickTarget;
+                        // 123 — in choice mode the board's picks alone wear
+                        // it: an unaffirmed default winner has not kept the
+                        // seat yet.
+                        const showTrophy = choiceMode ? manualPick : isAutoWinner || manualPick;
+                        const isLeader = !choiceMode && (isAutoWinner || isPickTarget);
                         const profile = profiles[c.candidateId];
                         const rowClass = `relative overflow-hidden rounded-xl border px-3 py-2 flex items-center gap-3 w-full text-left ${
                           showTrophy
@@ -619,9 +759,9 @@ export function ProclamationDialog({
                             : pickLockedRow
                               ? "bg-gray-100 border-gray-200 opacity-60 cursor-not-allowed"
                               : isLeader
-                                ? `bg-amber-50/40 border-amber-200${selectable ? " hover:border-[#5C0102]/40 cursor-pointer" : ""}`
+                                ? "bg-amber-50/40 border-amber-200"
                                 : "bg-white border-transparent"
-                        }`;
+                        }${selectable ? " hover:border-[#5C0102]/40 cursor-pointer" : ""}`;
                         const row = (
                           <>
                             <div
@@ -687,8 +827,12 @@ export function ProclamationDialog({
                           <button
                             key={c.candidateId}
                             type="button"
-                            onClick={() => openPick(p.position, c)}
-                            title="Choose this candidate as the winner."
+                            onClick={() => (manualPick ? unpick(p.position, c.candidateId) : openPick(p.position, c))}
+                            title={
+                              manualPick
+                                ? "Click again to withdraw this choice."
+                                : "Choose this candidate as the winner."
+                            }
                             className={rowClass}
                           >
                             {row}
@@ -699,11 +843,7 @@ export function ProclamationDialog({
                             className={rowClass}
                             title={
                               pickLockedRow
-                                ? picksSoFar >= p.picksNeeded
-                                  ? p.picksNeeded === 1
-                                    ? "The winner of this position has been chosen already."
-                                    : "Both winners of this position have been chosen already."
-                                  : `Record ${lockedBecause} above before choosing a winner.`
+                                ? `Record ${lockedBecause} above before choosing a winner.`
                                 : undefined
                             }
                           >
@@ -713,52 +853,16 @@ export function ProclamationDialog({
                       })}
                     </div>
 
-                    {/* 117 — with a complaint on record, the default
-                        (highest-vote) winner keeps the seat only once the
-                        board affirms it: "Remain Winner".  Tie-resolved
-                        seats need no affirmation — the board's pick there
-                        already IS the decision, and a 2-way Grade Rep tie
-                        elects both by rule. */}
-                    {hasComplaints && p.tied.length === 1 && p.autoWinners.length > 0 && (
-                      <div className="border-t border-gray-100 bg-gray-50/80 p-3 space-y-2">
-                        <div className="text-[11px] font-bold uppercase tracking-wider text-gray-700 flex items-center gap-1.5">
-                          <ShieldAlert size={13} /> Complaint on record
-                        </div>
-                        <div className="flex items-start gap-2 text-xs text-gray-700">
-                          <div className="w-4 h-4 mt-0.5 flex items-center justify-center">
-                            <Gavel size={13} />
-                          </div>
-                          <span>
-                            <span className="font-medium text-gray-900 flex items-center gap-1">
-                              {p.autoWinners.length > 1
-                                ? "Both highest-vote winners keep their seats."
-                                : "The highest-vote winner keeps the seat."}
-                            </span>
-                            <span className="block text-[11px] text-gray-500">
-                              Confirm &ldquo;Remain Winner&rdquo; so the record shows the Board weighed the complaint and the winner stands.
-                            </span>
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => toggleRemainWinner(p.position)}
-                          disabled={confirming || loading}
-                          className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold border transition-colors disabled:opacity-50 ${
-                            remainAffirmed
-                              ? "bg-green-600 border-green-600 text-white hover:bg-green-700"
-                              : "bg-white border-gray-300 text-gray-700 hover:border-[#5C0102]/40 hover:text-gray-900"
-                          }`}
-                        >
-                          {remainAffirmed ? <CheckCircle2 size={14} /> : <Gavel size={14} />}
-                          {remainAffirmed ? "Remain Winner — affirmed" : "Remain Winner"}
-                        </button>
-                      </div>
-                    )}
-
-                    {p.picksNeeded > 0 && (
+                    {/* 081 — the tie footer; 123 — in choice mode (complaint
+                        on record, no affirmation) it renders for non-tie
+                        positions too, offering the board's own choice. */}
+                    {(p.picksNeeded > 0 || choiceMode) && (
                       <div className="border-t border-amber-100 bg-amber-50/60 p-3 space-y-2">
                         <div className="text-[11px] font-bold uppercase tracking-wider text-amber-800 flex items-center gap-1.5">
-                          <AlertTriangle size={13} /> Tie — the Electoral Board chooses
+                          <AlertTriangle size={13} />
+                          {choiceMode && p.picksNeeded === 0
+                            ? "Complaint on record — the Electoral Board chooses"
+                            : "Tie — the Electoral Board chooses"}
                         </div>
                         <div className="flex items-start gap-2 text-xs text-gray-700">
                           <div className="w-4 h-4 mt-0.5 flex items-center justify-center">
@@ -766,30 +870,43 @@ export function ProclamationDialog({
                           </div>
                           <span>
                             <span className="font-medium text-gray-900 flex items-center gap-1">
-                              {p.picksNeeded === 1
-                                ? "Pick a highlighted candidate above"
-                                : "Pick 2 highlighted candidates above"}
+                              {choiceMode
+                                ? required === 1
+                                  ? "Pick any candidate above — or affirm the current winner instead"
+                                  : `Pick any ${required} candidates above — or affirm the current winners instead`
+                                : p.picksNeeded === 1
+                                  ? "Pick a highlighted candidate above"
+                                  : "Pick 2 highlighted candidates above"}
                             </span>
-                            <span className="block text-[11px] text-gray-500">
-                              The one resolution method recorded above covers every tie in this election.
-                            </span>
+                            {p.picksNeeded > 0 && (
+                              <span className="block text-[11px] text-gray-500">
+                                The one resolution method recorded above covers every tie in this election.
+                              </span>
+                            )}
                           </span>
                         </div>
 
-                        {!isResolved(resolution, p.picksNeeded) && (
+                        {!isResolved(p, hasComplaints, resolution) && (
                           <div className="text-[11px] text-amber-700">
                             {picksLocked
                               ? `Record ${lockedBecause} above before choosing a winner.`
                               : picksSoFar > 0
-                                ? `${p.picksNeeded - picksSoFar} more pick${p.picksNeeded - picksSoFar === 1 ? "" : "s"} to go.`
-                                : p.picksNeeded === 1
+                                ? `${required - picksSoFar} more pick${required - picksSoFar === 1 ? "" : "s"} to go.`
+                                : required === 1
                                   ? "Select the candidate to proclaim as the winner."
                                   : "Select both candidates to proclaim as winners."}
                           </div>
                         )}
+                        {/* 124 — choices are provisional until the final
+                            confirmation; a click on a chosen row withdraws
+                            it, a click on another row replaces it. */}
+                        <div className="text-[11px] text-gray-500">
+                          Choices can be replaced or withdrawn until the winners are proclaimed.
+                        </div>
                       </div>
                     )}
                   </section>
+                  </Fragment>
                 );
               })}
             </div>
@@ -801,6 +918,7 @@ export function ProclamationDialog({
             <ProclamationSummary
               positions={positions}
               resolutions={resolutions}
+              hasComplaints={hasComplaints}
               tieBreakLabel={sharedTieBreak}
               complaintNote={complaintNote}
               complaintReason={complaintReason}
@@ -823,11 +941,11 @@ export function ProclamationDialog({
             onClick={handleConfirm}
             disabled={!canProclaim}
             title={
-              unresolvedTies.length > 0
-                ? "Proclaim a winner for every tied position first."
-                : remainNeeded.length > 0
-                  ? 'Confirm "Remain Winner" for every position with a complaint first.'
-                  : !tieMethodReady
+              unresolved.length > 0
+                ? needsAffirmOrChoose
+                  ? 'Affirm "Keep Current Winner" or choose the winner of every position with a complaint first.'
+                  : "Proclaim a winner for every tied position first."
+                : !tieMethodReady
                     ? "Record how the tie was resolved first."
                     : !reasonReady
                       ? "Record the Complaint Resolution and Justification first."
@@ -850,7 +968,9 @@ export function ProclamationDialog({
             <AlertDialogTitle>Proclaim this candidate?</AlertDialogTitle>
             <AlertDialogDescription>
               {pendingPick
-                ? `The Electoral Board will proclaim ${pendingPick.candidate.candidateName} as ${pendingPick.position}. This choice is final once winners are proclaimed. The shared tie resolution method is recorded in the main dialog.`
+                ? pendingPick.replaces
+                  ? `The Electoral Board will proclaim ${pendingPick.candidate.candidateName} instead of ${pendingPick.replaces.candidateName} as ${pendingPick.position}. The choice can still be replaced or withdrawn until the winners are proclaimed.${tiePositions.length > 0 ? " The shared tie resolution method is recorded in the main dialog." : ""}`
+                  : `The Electoral Board will proclaim ${pendingPick.candidate.candidateName} as ${pendingPick.position}. The choice can still be replaced or withdrawn until the winners are proclaimed.${tiePositions.length > 0 ? " The shared tie resolution method is recorded in the main dialog." : ""}`
                 : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>

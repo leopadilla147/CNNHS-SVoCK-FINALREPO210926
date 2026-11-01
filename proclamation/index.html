@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Proclamation Certificate | CNNHS Student Elections</title>
+    <!-- Google Fonts for High-Quality Certificate Typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800;900&family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,600;1,700&family=Montserrat:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@0,600;0,700;0,800;0,900;1,600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- ── Top Header Navigation Bar ─────────────────────────────────── -->
+        <header class="app-header">
+            <div class="brand-section">
+                <img src="logo.webp" alt="CNNHS Logo" class="brand-logo" onerror="this.style.display='none'">
+                <div class="brand-text">
+                    <h1 class="app-title">Proclamation Certificate</h1>
+                    <p class="app-subtitle">Official Student Election Certificate &middot; CNNHS</p>
+                </div>
+            </div>
+
+            <div class="header-actions">
+                <div class="preview-controls">
+                    <button type="button" id="zoomOutBtn" class="tool-btn" title="Zoom Out">&minus;</button>
+                    <span id="zoomLevelDisplay" class="zoom-value">100%</span>
+                    <button type="button" id="zoomInBtn" class="tool-btn" title="Zoom In">&plus;</button>
+                    <button type="button" id="fitScreenBtn" class="tool-btn btn-fit" title="Fit to Screen">Fit</button>
+                </div>
+
+                <button type="button" id="printBtn" class="btn-secondary" title="Direct Print">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>
+                    <span>Print</span>
+                </button>
+
+                <button type="button" id="downloadPdfBtn" class="btn-download-pdf">
+                    <svg class="btn-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="7 10 12 15 17 10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    <span>Download Proclamation PDF</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- ── Main Area: Live Certificate Viewport ───────────────────────── -->
+        <main class="preview-viewport">
+            <!-- Certificate Canvas Container -->
+            <div class="canvas-scroll-wrapper" id="canvasWrapper">
+                <!-- PRINTABLE CERTIFICATE ROOT (11 x 8.5 inches Letter Landscape) -->
+                <div id="proclamationCertificate" class="proclamation-certificate">
+                    <!-- Ornate Certificate Multi-layer Borders -->
+                    <div class="cert-outer-border"></div>
+                    <div class="cert-mid-border"></div>
+                    <div class="cert-inner-border"></div>
+                    
+                    <!-- Decorative Corner Filigrees -->
+                    <div class="corner-filigree corner-tl"></div>
+                    <div class="corner-filigree corner-tr"></div>
+                    <div class="corner-filigree corner-bl"></div>
+                    <div class="corner-filigree corner-br"></div>
+
+                    <!-- Watermark Background Emblem -->
+                    <div class="cert-watermark">
+                        <img src="logo.webp" alt="Background Seal" class="watermark-img" onerror="this.style.display='none'">
+                    </div>
+
+                    <!-- Certificate Interior Content -->
+                    <div class="cert-body">
+                        <!-- Header Section -->
+                        <header class="cert-header">
+                            <div class="cert-logo-slot left-logo-slot">
+                                <img src="logo.webp" alt="CNNHS Logo" class="cert-school-logo" onerror="this.style.display='none'">
+                            </div>
+
+                            <div class="cert-header-text">
+                                <p class="rep-title">Republic of the Philippines</p>
+                                <p class="deped-title">Department of Education</p>
+                                <p class="region-title">REGION V (BICOL) &middot; SCHOOLS DIVISION OF CAMARINES NORTE</p>
+                                <h2 class="school-name">CAMARINES NORTE NATIONAL HIGH SCHOOL</h2>
+                                <p class="school-address">Daet, Camarines Norte</p>
+                                <p class="election-office">SUPREME SECONDARY LEARNER GOVERNMENT (SSLG) COMMISSION ON ELECTIONS</p>
+                            </div>
+
+                            <!-- Right Logo: logo.png replacing placeholder badge -->
+                            <div class="cert-logo-slot right-seal-slot">
+                                <img src="logo.png" alt="Official Logo" class="cert-school-logo cert-right-logo" onerror="this.style.display='none'">
+                            </div>
+                        </header>
+
+                        <!-- Certificate Title Ribbon -->
+                        <div class="cert-title-container">
+                            <div class="title-ribbon-line"></div>
+                            <h1 class="cert-main-title">PROCLAMATION OF WINNERS</h1>
+                            <div class="title-ribbon-line"></div>
+                            <p class="cert-sub-heading">STUDENT BODY GENERAL ELECTIONS &bull; S.Y. <span id="dispSchoolYear">[S.Y]</span></p>
+                        </div>
+
+                        <!-- Main Grid: Photo, Name, Message & Vote Showcase -->
+                        <div class="cert-main-content">
+                            <!-- Left Column: Photo & Vote Badge -->
+                            <div class="cert-left-column">
+                                <!-- ELEMENT A: Winner Profile Picture Frame -->
+                                <div class="cert-profile-card">
+                                    <div class="profile-frame-outer">
+                                        <div class="profile-frame-gold">
+                                            <div class="profile-image-wrapper">
+                                                <img id="dispProfilePhoto" src="" alt="Elected Candidate Photo" class="profile-img">
+                                                <!-- Default Avatar Silhouette -->
+                                                <div id="defaultAvatarWrap" class="default-avatar-wrap">
+                                                    <svg class="avatar-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                                                        <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"></path>
+                                                    </svg>
+                                                    <span class="avatar-tag">OFFICIAL PORTRAIT</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="winner-official-badge">DULY ELECTED</div>
+                                </div>
+
+                                <!-- ELEMENT C: Number of Votes Visually Prominent Badge -->
+                                <div class="cert-vote-card">
+                                    <div class="vote-ribbon-tag">OFFICIAL VOTE TALLY</div>
+                                    <div class="vote-number-wrap">
+                                        <span class="vote-icon">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                                        </span>
+                                        <span id="dispVotes" class="vote-number">[0]</span>
+                                    </div>
+                                    <div class="vote-label">TOTAL VOTES RECEIVED</div>
+                                    <div class="vote-verified-note">CERTIFIED ACCURATE &bull; CANVUS VERIFIED</div>
+                                </div>
+                            </div>
+
+                            <!-- Right Column: Name, Position, & Required Proclamation Text -->
+                            <div class="cert-right-column">
+                                <!-- ELEMENT B: Winner's Full Name & Position Display -->
+                                <div class="winner-identity-block">
+                                    <span class="identity-lead-label">THIS CERTIFIES THAT</span>
+                                    <h2 id="dispFullName" class="winner-display-name">[FULL NAME]</h2>
+                                    <div class="winner-name-underline">
+                                        <span class="underline-diamond">&diams;</span>
+                                    </div>
+                                    <div class="elected-position-badge">
+                                        <span class="position-prefix">DULY ELECTED AS</span>
+                                        <span id="dispPosition" class="position-title">[POSITION]</span>
+                                    </div>
+                                </div>
+
+                                <!-- Required Exact Proclamation Message (verbatim) -->
+                                <div class="cert-official-message">
+                                    <p class="msg-para para-highlight">
+                                        Congratulations on being officially elected in the position of <strong id="msgDispPosition">[POSITION]</strong>, <strong id="msgDispName">[FULL NAME]</strong>, of <strong>Grade <span id="msgDispGrade">[0]</span></strong>!
+                                    </p>
+                                    <p class="msg-para">
+                                        The entire student body of the Camarines Norte National High School welcomes you as one of its official student leaders who will serve with passion, commitment, and principles for the betterment of the school community.
+                                    </p>
+                                    <p class="msg-para">
+                                        We entirely entrust this duty and responsibility given by the will of the student voters to you.
+                                    </p>
+                                    <p class="msg-para para-godspeed">
+                                        Again, congratulations and Godspeed in your new journey ahead!
+                                    </p>
+                                </div>
+
+                                <!-- Leadership Quotation -->
+                                <div class="cert-quote-box">
+                                    <blockquote class="leadership-quote">
+                                        &ldquo;A leader is one who knows the way, goes the way, and shows the way.&rdquo;
+                                    </blockquote>
+                                    <cite class="quote-author">&mdash; John C. Maxwell</cite>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Footer: Proclamation Date & Official Signature Placeholders -->
+                        <footer class="cert-footer">
+                            <div class="proclamation-date-line">
+                                Given this <span id="dispDate">[CURRENT DATE]</span> at Camarines Norte National High School, Daet, Camarines Norte.
+                            </div>
+
+                            <div class="signatures-grid">
+                                <div class="sig-block">
+                                    <div class="sig-line"></div>
+                                    <div class="sig-title">Electoral Board Chairperson</div>
+                                    <div class="sig-office">SSLG Commission on Elections</div>
+                                </div>
+                                <div class="sig-block">
+                                    <div class="sig-line"></div>
+                                    <div class="sig-title">COMEA Teacher-Adviser</div>
+                                    <div class="sig-office">Youth Formation Coordinator</div>
+                                </div>
+                                <div class="sig-block">
+                                    <div class="sig-line"></div>
+                                    <div class="sig-title">COMEA Student Chairperson</div>
+                                    <div class="sig-office">Student Body Organization</div>
+                                </div>
+                                <div class="sig-block">
+                                    <div class="sig-line"></div>
+                                    <div class="sig-title">School Principal</div>
+                                    <div class="sig-office">Camarines Norte National High School</div>
+                                </div>
+                            </div>
+                        </footer>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- PDF Generation Progress Modal -->
+    <div id="pdfLoadingModal" class="loading-overlay" style="display: none;">
+        <div class="loading-card">
+            <div class="spinner-ring"></div>
+            <h3 class="loading-title">Generating Proclamation Certificate PDF</h3>
+            <p class="loading-desc">Rendering high-resolution vector layout, fonts, and graphics...</p>
+        </div>
+    </div>
+
+    <!-- Load Local or CDN html2pdf bundle for 100% offline and online reliability -->
+    <script src="html2pdf.bundle.min.js"></script>
+    <script>
+        // Fallback to CDN if local bundle fails to load
+        if (typeof html2pdf === 'undefined') {
+            const cdnScript = document.createElement('script');
+            cdnScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+            document.head.appendChild(cdnScript);
+        }
+    </script>
+    <script src="script.js"></script>
+</body>
+</html>

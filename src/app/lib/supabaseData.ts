@@ -93,6 +93,10 @@ export function mapStaffLoginRow(row: StaffLoginRow, fallbackEmail: string): Cur
       role: "admin",
       email: row.email || fallbackEmail,
       commissionerRole: toCommissionerRole(row.commissioner_role) || "chief",
+      // The raw role_type survives the admin collapse so the sidebar can
+      // title a co-commissioner after their primary ("Co-commissioner of
+      // Electoral Board") instead of with the primary's own title.
+      isCoCommissioner: row.role_type === "co_commissioner",
       mustChangePassword: false,
     };
   }
@@ -1433,35 +1437,6 @@ export async function reviewCandidacyRpc(
   return data;
 }
 
-export async function signInSslgAdviser(email: string, password: string): Promise<CurrentUser> {
-  const client = requireSupabase();
-
-  // 035 consolidated EVERY staff identity onto public.adminprofiles and
-  // dropped the legacy login_sslg_adviser_direct_v2 surface (035:459).
-  // login_staff_direct_v2 is now the single staff login; it returns
-  // role_type 'sslg_adviser' for advisers, so this entrypoint delegates to
-  // it and rejects any non-adviser account (the UI gate stays intact).
-  const { data, error } = await client.rpc("login_staff_direct_v2", {
-    p_email: email,
-    p_password: password,
-  });
-
-  if (error) throw new Error(error.message);
-  if (!data || data.length === 0) throw new Error("Invalid email or password.");
-  const row = data[0];
-
-  if (row.role_type !== "sslg_adviser") {
-    throw new Error("This account is not an SSLG Adviser. Use the correct login type.");
-  }
-
-  const user = mapStaffLoginRow(row, email);
-
-  // The 035 staff login mints the session token once per success.
-  if (row.token) saveSessionToken(row.token);
-
-  return user;
-}
-
 /**
  * 030 (D-14) bootstrap/profile refresh: re-read the acting user's profile
  * (incl. must_change_password) from the server.  The session spine derives
@@ -2605,6 +2580,10 @@ export interface ProclaimedWinner {
   picture?: string | null;
   /** Winner's candidate row id — present on rows read back from the ledger. */
   candidateId?: string | null;
+  /** The moment this winner's proclamation was recorded (the ledger's
+   *  own stamp) — the certificate date line prefers it over the period's
+   *  stamp, so the certificate never falls back to the download date. */
+  proclaimedAt?: string;
 }
 
 /**
@@ -2677,7 +2656,7 @@ export async function getProclaimedWinners(
     const { data, error } = await supabase
       .from("proclamations")
       .select(
-        "winning_position, candidate_id, votes, resolution_method, remain_winner, " +
+        "winning_position, candidate_id, votes, resolution_method, remain_winner, proclaimed_at, " +
         "candidates(surname, given_name, picture_url)"
       )
       .eq("election_period_id", electionPeriodId)
@@ -2693,6 +2672,7 @@ export async function getProclaimedWinners(
         remainWinner: row.remain_winner === true,
         candidateId: row.candidate_id || null,
         picture: cand?.picture_url || null,
+        proclaimedAt: row.proclaimed_at || undefined,
       };
     });
   } catch {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useSearchParams } from "react-router";
-import { Search, CheckCircle, XCircle, Clock, Eye, AlertTriangle, Upload, Loader2, Download, Ban, ShieldAlert, X } from "lucide-react";
+import { Search, CheckCircle, XCircle, Clock, Eye, AlertTriangle, Upload, Loader2, Download, Ban, ShieldAlert, X, MinusCircle } from "lucide-react";
 import { motion } from "motion/react";
 import { useApp, Student, StudentMasterlistEntry } from "../../context/AppContext";
 import { reviewStudentRpc, importStudentMasterlistDocx, findExistingLrns, verifyAdviserPasswordRpc, disableStudentAccountsRpc } from "../../lib/supabaseData";
@@ -20,6 +20,45 @@ const STATUS_RANK: Record<string, number> = { pending: 0, approved: 1, rejected:
 /** Downloadable blank copy of the official CNNHS masterlist format
  *  (Based Documents/CNNHS-MASTER-LIST-FORMAT.docx, served from /public). */
 const MASTERLIST_TEMPLATE_URL = "/templates/CNNHS-MASTER-LIST-FORMAT.docx";
+
+/** Rows shown per page in the enrollment table (awaiting + registered combined). */
+const ENROLLMENT_PAGE_SIZE = 50;
+
+/**
+ * Compact page list for the enrollment pagination: every page when there are
+ * only a few, otherwise the ends and the pages around the current one with
+ * ellipsis gaps, e.g. [1, "…", 4, 5, 6, "…", 20].
+ */
+function enrollmentPageList(current: number, total: number): (number | "…")[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = new Set<number>([1, total, current - 1, current, current + 1]);
+  const sorted = [...pages].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+  const out: (number | "…")[] = [];
+  let prev = 0;
+  for (const p of sorted) {
+    if (p - prev > 1) out.push("…");
+    out.push(p);
+    prev = p;
+  }
+  return out;
+}
+
+/**
+ * One combined line for the two overlapping upload outcomes: newly
+ * inserted rows and the students now awaiting registration are usually
+ * the same rows reported twice, so they share a single banner box.
+ * (The caller only renders it when at least one count is non-zero.)
+ */
+function uploadInsertMessage(inserted: number, awaiting: number): string {
+  const rows = `${inserted} masterlist row${inserted === 1 ? "" : "s"}`;
+  const students = `${awaiting} student${awaiting === 1 ? "" : "s"}`;
+  if (inserted > 0 && awaiting > 0) {
+    if (inserted === awaiting) return `${rows} inserted — all listed as awaiting student registration.`;
+    return `${rows} inserted; ${students} listed as awaiting student registration.`;
+  }
+  if (inserted > 0) return `${rows} inserted.`;
+  return `${students} listed as awaiting student registration.`;
+}
 
 export default function AdminStudents() {
   const {
@@ -237,6 +276,31 @@ export default function AdminStudents() {
   // MASTER-02 / D-11: pending/unverified first (pending → approved → rejected)
   const sortedStudents = [...filtered].sort((a, b) => (STATUS_RANK[a.status] ?? 3) - (STATUS_RANK[b.status] ?? 3));
   const showAwaiting = filter === "all" || filter === "awaiting";
+
+  // ---- Pagination: 50 rows per page across both row groups ----
+  const [enrollmentPage, setEnrollmentPage] = useState(1);
+
+  // Search or status filter changed — always land back on the first page.
+  useEffect(() => {
+    setEnrollmentPage(1);
+  }, [search, filter]);
+
+  const awaitingRows = showAwaiting ? filteredAwaiting : [];
+  const totalEnrollmentRows = awaitingRows.length + sortedStudents.length;
+  const totalEnrollmentPages = Math.max(1, Math.ceil(totalEnrollmentRows / ENROLLMENT_PAGE_SIZE));
+  // Guard against a stale page index after the list shrinks.
+  const safeEnrollmentPage = Math.min(enrollmentPage, totalEnrollmentPages);
+  const pageStart = (safeEnrollmentPage - 1) * ENROLLMENT_PAGE_SIZE;
+  const pageEnd = pageStart + ENROLLMENT_PAGE_SIZE;
+  // The page window cuts across the two groups: awaiting masterlist rows
+  // occupy the first slots, registered-student rows follow.
+  const pageAwaiting = awaitingRows.slice(pageStart, pageEnd);
+  const pageStudents = sortedStudents.slice(
+    Math.max(0, pageStart - awaitingRows.length),
+    Math.max(0, pageEnd - awaitingRows.length),
+  );
+  const startRow = totalEnrollmentRows === 0 ? 0 : pageStart + 1;
+  const endRow = Math.min(pageEnd, totalEnrollmentRows);
 
   const handleMasterlistUpload = async (file: File | null) => {
     if (!file) return;
@@ -567,16 +631,10 @@ export default function AdminStudents() {
           <div className="mt-3 space-y-2">
             {(uploadBanner.inserted > 0 || uploadBanner.autoApproved > 0 || uploadBanner.awaiting > 0 || uploadBanner.invalidRows > 0 || uploadBanner.duplicateRows > 0 || (uploadBanner.failures?.length ?? 0) > 0) ? (
               <>
-                {uploadBanner.inserted > 0 && (
-                  <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-sm text-green-700 flex items-start gap-2">
-                    <CheckCircle size={15} className="flex-shrink-0 mt-0.5" />
-                    <span>{uploadBanner.inserted} masterlist row{uploadBanner.inserted === 1 ? "" : "s"} inserted.</span>
-                  </div>
-                )}
-                {uploadBanner.awaiting > 0 && (
+                {(uploadBanner.inserted > 0 || uploadBanner.awaiting > 0) && (
                   <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm text-blue-700 flex items-start gap-2">
                     <Clock size={15} className="flex-shrink-0 mt-0.5" />
-                    <span>{uploadBanner.awaiting} student{uploadBanner.awaiting === 1 ? "" : "s"} listed as awaiting student registration.</span>
+                    <span>{uploadInsertMessage(uploadBanner.inserted, uploadBanner.awaiting)}</span>
                   </div>
                 )}
                 {uploadBanner.autoApproved > 0 && (
@@ -586,8 +644,8 @@ export default function AdminStudents() {
                   </div>
                 )}
                 {uploadBanner.duplicateRows > 0 && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm text-blue-700 flex items-start gap-2">
-                    <Clock size={15} className="flex-shrink-0 mt-0.5" />
+                  <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm text-gray-600 flex items-start gap-2">
+                    <MinusCircle size={15} className="flex-shrink-0 mt-0.5" />
                     <div>
                       <div>
                         {uploadBanner.duplicateRows} row{uploadBanner.duplicateRows === 1 ? "" : "s"} skipped — their LRN{uploadBanner.duplicateRows === 1 ? "" : "s"} already exist{uploadBanner.duplicateRows === 1 ? "s" : ""} in the system, so {uploadBanner.duplicateRows === 1 ? "it was" : "they were"} not re-uploaded:
@@ -972,7 +1030,7 @@ export default function AdminStudents() {
             <tbody className="divide-y divide-gray-50">
               {/* MASTER-01 display flow: masterlist rows with no registered
                   account yet — read-only, awaiting student registration. */}
-              {showAwaiting && filteredAwaiting.map((entry) => (
+              {pageAwaiting.map((entry) => (
                 <tr key={`awaiting-${entry.lrn}`} className="hover:bg-blue-50/40 transition-colors">
                   <td className="py-3 px-4">
                     <div className="flex items-center gap-2">
@@ -999,7 +1057,7 @@ export default function AdminStudents() {
                   <td className="py-3 px-4 text-gray-300 text-xs">—</td>
                 </tr>
               ))}
-              {sortedStudents.map((student) => (
+              {pageStudents.map((student) => (
                 <tr key={student.id} className="hover:bg-gray-50 transition-colors">
                   <td className="py-3 px-4">
                     <div className="flex items-center gap-2">
@@ -1069,11 +1127,53 @@ export default function AdminStudents() {
                   </td>
                 </tr>
               ))}
-              {sortedStudents.length === 0 && (!showAwaiting || filteredAwaiting.length === 0) && (
+              {totalEnrollmentRows === 0 && (
                 <tr><td colSpan={9} className="py-10 text-center text-gray-400 text-sm">No students found.</td></tr>
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Pagination — 50 rows per page */}
+        <div className="px-5 py-3 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="text-xs text-gray-400">
+            Showing {startRow.toLocaleString()}–{endRow.toLocaleString()} of{" "}
+            {totalEnrollmentRows.toLocaleString()} records
+          </div>
+          {totalEnrollmentPages > 1 && (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setEnrollmentPage(Math.max(1, safeEnrollmentPage - 1))}
+                disabled={safeEnrollmentPage === 1}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Previous
+              </button>
+              {enrollmentPageList(safeEnrollmentPage, totalEnrollmentPages).map((p, i) =>
+                p === "…" ? (
+                  <span key={`gap-${i}`} className="px-1 text-xs text-gray-400">
+                    …
+                  </span>
+                ) : (
+                  <button
+                    key={p}
+                    onClick={() => setEnrollmentPage(p)}
+                    className={`w-8 h-8 rounded-lg text-xs font-medium transition-all ${p === safeEnrollmentPage ? "text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                    style={p === safeEnrollmentPage ? { backgroundColor: "#5C0102" } : {}}
+                  >
+                    {p}
+                  </button>
+                ),
+              )}
+              <button
+                onClick={() => setEnrollmentPage(Math.min(totalEnrollmentPages, safeEnrollmentPage + 1))}
+                disabled={safeEnrollmentPage === totalEnrollmentPages}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

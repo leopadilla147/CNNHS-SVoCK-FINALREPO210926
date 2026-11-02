@@ -10,6 +10,10 @@ interface FindingsDisclosureProps {
   decisionLabel?: string;
   /** The Grievance Commissioner's recorded findings note. */
   findings?: string | null;
+  /** 127 — the sanctions imposed, as human labels (e.g. "Verbal Warning"). */
+  sanctions?: string[];
+  /** 127 — names of the candidates a Disqualification sanction removes. */
+  disqualifiedNames?: string[];
 }
 
 /**
@@ -18,7 +22,7 @@ interface FindingsDisclosureProps {
  * text at the bottom of the row — never evidence files or pictures (those
  * live on the Complaints page) — and clicking again hides them.  Read-only.
  */
-export function FindingsDisclosure({ id, subject, decisionLabel, findings }: FindingsDisclosureProps) {
+export function FindingsDisclosure({ id, subject, decisionLabel, findings, sanctions, disqualifiedNames }: FindingsDisclosureProps) {
   const [open, setOpen] = useState(false);
   const text = (findings ?? "").trim();
   return (
@@ -44,6 +48,19 @@ export function FindingsDisclosure({ id, subject, decisionLabel, findings }: Fin
           <p className="mt-0.5 text-xs text-gray-700 whitespace-pre-wrap">
             {text || "No findings recorded."}
           </p>
+          {((sanctions && sanctions.length > 0) || (disqualifiedNames && disqualifiedNames.length > 0)) && (
+            <div className="mt-2 pt-2 border-t border-red-100">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Sanction(s) imposed</div>
+              {sanctions && sanctions.length > 0 && (
+                <p className="mt-0.5 text-xs text-gray-700">{sanctions.join(", ")}</p>
+              )}
+              {disqualifiedNames && disqualifiedNames.length > 0 && (
+                <p className="mt-0.5 text-xs text-gray-700">
+                  Candidate(s) to be disqualified: {disqualifiedNames.join(", ")}
+                </p>
+              )}
+            </div>
+          )}
         </div>
       )}
     </li>

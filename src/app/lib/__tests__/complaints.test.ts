@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toComplaintDto, buildSubmitPayload, statusLabel, statusMeta, sortFiledFirst, complaintWindowOpen, complaintsForElection, COMPLAINT_SUBJECTS, COMPLAINT_SUBJECT_OTHERS, resolveComplaintSubject, validateComplaintForm, formatSubmittedAt, validateEvidenceFiles, toEvidenceArray, isImageEvidence, complaintDecisionLabel, complaintDecisionDefinition, substantiatedComplaints, COMPLAINT_AGAINST_OPTIONS, COMPLAINT_AGAINST_OTHERS, resolveComplaintAgainst, EVIDENCE_ACCEPT, EVIDENCE_MAX_FILES } from "../complaints";
+import { toComplaintDto, buildSubmitPayload, statusLabel, statusMeta, sortFiledFirst, complaintWindowOpen, complaintsForElection, COMPLAINT_SUBJECTS, COMPLAINT_SUBJECT_OTHERS, resolveComplaintSubject, validateComplaintForm, todayDateStr, formatSubmittedAt, validateEvidenceFiles, toEvidenceArray, isImageEvidence, complaintDecisionLabel, complaintDecisionDefinition, substantiatedComplaints, COMPLAINT_AGAINST_OPTIONS, COMPLAINT_AGAINST_OTHERS, resolveComplaintAgainst, EVIDENCE_ACCEPT, EVIDENCE_MAX_FILES, COMPLAINT_SANCTION_VALUES, COMPLAINT_SANCTION_LABELS, complaintSanctionLabel, complaintSanctionsSummary, hasDisqualificationSanction, disqualifiedCandidatesSummary, toSanctionArray, toDisqualifiedCandidates } from "../complaints";
 import type { Complaint } from "../../context/AppContext";
 
 describe("buildSubmitPayload", () => {
@@ -45,6 +45,9 @@ describe("toComplaintDto", () => {
       status: "filed",
       submittedAt: "2026-09-18",
       submittedAtExact: "2026-09-18T01:00:00+08:00",
+      decision: undefined,
+      sanctions: [],
+      disqualifiedCandidates: [],
       evidence: [],
       findingsEvidence: [],
       rejectionReason: "Rejected: insufficient evidence",
@@ -239,6 +242,13 @@ describe("validateComplaintForm", () => {
     expect(validateComplaintForm({ ...valid, incidentDate: "2020-01-05" }).incidentDate).toBeUndefined();
   });
 
+  it("allows today but rejects a future incident date", () => {
+    expect(validateComplaintForm({ ...valid, incidentDate: todayDateStr() }).incidentDate).toBeUndefined();
+    expect(validateComplaintForm({ ...valid, incidentDate: `${new Date().getFullYear() + 1}-01-01` }).incidentDate).toBe(
+      "The date of the incident cannot be in the future."
+    );
+  });
+
   it("requires the certification checkbox", () => {
     expect(validateComplaintForm({ ...valid, certified: false }).certified).toBe("Please certify that the information is true and correct before filing.");
   });
@@ -347,5 +357,70 @@ describe("evidence helpers", () => {
     ]);
     expect(toEvidenceArray(null)).toEqual([]);
     expect(toEvidenceArray("nope")).toEqual([]);
+  });
+});
+
+describe("complaint sanctions (127)", () => {
+  it("offers the three sanctions with their human labels", () => {
+    expect(COMPLAINT_SANCTION_VALUES).toEqual(["verbal_warning", "reprimand", "disqualification"]);
+    expect(COMPLAINT_SANCTION_LABELS.verbal_warning).toBe("Verbal Warning");
+    expect(COMPLAINT_SANCTION_LABELS.reprimand).toBe("Reprimand Through Writing");
+    expect(COMPLAINT_SANCTION_LABELS.disqualification).toBe("Disqualification");
+    expect(complaintSanctionLabel("reprimand")).toBe("Reprimand Through Writing");
+  });
+
+  it("summarizes the imposed sanctions", () => {
+    expect(complaintSanctionsSummary(["verbal_warning"])).toBe("Verbal Warning");
+    expect(complaintSanctionsSummary(["verbal_warning", "disqualification"])).toBe(
+      "Verbal Warning, Disqualification"
+    );
+    expect(complaintSanctionsSummary([])).toBe("");
+    expect(complaintSanctionsSummary(undefined)).toBe("");
+  });
+
+  it("detects a Disqualification sanction", () => {
+    expect(hasDisqualificationSanction(["verbal_warning", "disqualification"])).toBe(true);
+    expect(hasDisqualificationSanction(["reprimand"])).toBe(false);
+    expect(hasDisqualificationSanction(undefined)).toBe(false);
+  });
+
+  it("normalizes a raw sanctions column, dropping unknown values", () => {
+    expect(toSanctionArray(["verbal_warning", "reprimand"])).toEqual(["verbal_warning", "reprimand"]);
+    expect(toSanctionArray(["bribery", 42, null])).toEqual([]);
+    expect(toSanctionArray(null)).toEqual([]);
+    expect(toSanctionArray("verbal_warning")).toEqual([]);
+  });
+
+  it("pairs the disqualified candidate ids with their denormalized names", () => {
+    expect(toDisqualifiedCandidates(["id-1", "id-2"], ["Juan Dela Cruz", "Maria Santos"])).toEqual([
+      { id: "id-1", name: "Juan Dela Cruz" },
+      { id: "id-2", name: "Maria Santos" },
+    ]);
+    // Names without ids still render; ids without names do not.
+    expect(toDisqualifiedCandidates([], ["Juan Dela Cruz"])).toEqual([{ id: "", name: "Juan Dela Cruz" }]);
+    expect(toDisqualifiedCandidates(["id-1"], [])).toEqual([]);
+    expect(toDisqualifiedCandidates(null, null)).toEqual([]);
+    expect(disqualifiedCandidatesSummary([{ id: "id-1", name: "Juan Dela Cruz" }])).toBe("Juan Dela Cruz");
+    expect(disqualifiedCandidatesSummary([{ id: "id-1", name: "" }])).toBe("");
+  });
+
+  it("maps the sanctions columns into the client shape", () => {
+    const dto = toComplaintDto({
+      id: "c1",
+      status: "accepted",
+      submitted_at: "2026-09-18T01:00:00+08:00",
+      decision: "substantiated",
+      sanctions: ["verbal_warning", "disqualification"],
+      disqualified_candidate_ids: ["cand-1"],
+      disqualified_candidate_names: ["Juan Dela Cruz"],
+    });
+    expect(dto.sanctions).toEqual(["verbal_warning", "disqualification"]);
+    expect(dto.disqualifiedCandidates).toEqual([{ id: "cand-1", name: "Juan Dela Cruz" }]);
+  });
+
+  it("leaves sanctions empty for complaints resolved without them", () => {
+    const dto = toComplaintDto({ id: "c2", status: "accepted", submitted_at: "2026-09-18T01:00:00+08:00" });
+    expect(dto.sanctions).toEqual([]);
+    expect(dto.disqualifiedCandidates).toEqual([]);
   });
 });

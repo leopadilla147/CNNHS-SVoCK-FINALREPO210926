@@ -246,6 +246,17 @@ export interface ComplaintEvidence {
 /** 097: the Grievance Commissioner's classification of a resolution. */
 export type ComplaintDecision = "substantiated" | "unsubstantiated" | "dismissed";
 
+/** 127: a sanction the Grievance Commissioner may impose on a substantiated
+ *  grievance.  "disqualification" additionally names the candidate(s) it
+ *  removes from the election. */
+export type ComplaintSanction = "verbal_warning" | "reprimand" | "disqualification";
+
+/** 127: a candidate named by a Disqualification sanction. */
+export interface DisqualifiedCandidate {
+  id: string;
+  name: string;
+}
+
 export interface Complaint {
   id: string;
   studentName: string;
@@ -257,6 +268,12 @@ export interface Complaint {
   submittedAt: string;
   /** 097: how the complaint was decided (null while filed / unclassified). */
   decision?: ComplaintDecision;
+  /** 127: the sanctions imposed on a Substantiated Grievance (empty/absent
+   *  for every other classification). */
+  sanctions?: ComplaintSanction[];
+  /** 127: candidates disqualified by a Disqualification sanction.  Names are
+   *  denormalized so the public record can name them without a join. */
+  disqualifiedCandidates?: DisqualifiedCandidate[];
   /** 096: the student's supporting evidence attachments. */
   evidence?: ComplaintEvidence[];
   /** 096: the Grievance Commissioner's findings evidence attachments. */

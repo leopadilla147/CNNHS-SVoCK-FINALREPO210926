@@ -6,7 +6,7 @@ import type { Complaint, ComplaintEvidence } from "../../context/AppContext";
 import { insertComplaint, uploadComplaintEvidence } from "../../lib/supabaseData";
 import { EvidenceFileThumb, EvidenceAttachment } from "../../components/EvidencePreview";
 import { saveGrievanceFormDocx } from "../../lib/docxGrievanceForm";
-import { statusMeta, sortFiledFirst, complaintWindowOpen, complaintsForElection, COMPLAINT_SUBJECTS, COMPLAINT_SUBJECT_OTHERS, resolveComplaintSubject, COMPLAINT_AGAINST_OPTIONS, COMPLAINT_AGAINST_OTHERS, resolveComplaintAgainst, COMPLAINT_CERTIFICATION, validateComplaintForm, formatSubmittedAt, validateEvidenceFiles, EVIDENCE_ACCEPT, EVIDENCE_MAX_FILES, EVIDENCE_TYPES_LABEL } from "../../lib/complaints";
+import { statusMeta, sortFiledFirst, complaintWindowOpen, complaintsForElection, COMPLAINT_SUBJECTS, COMPLAINT_SUBJECT_OTHERS, resolveComplaintSubject, COMPLAINT_AGAINST_OPTIONS, COMPLAINT_AGAINST_OTHERS, resolveComplaintAgainst, COMPLAINT_CERTIFICATION, validateComplaintForm, todayDateStr, formatSubmittedAt, validateEvidenceFiles, EVIDENCE_ACCEPT, EVIDENCE_MAX_FILES, EVIDENCE_TYPES_LABEL, complaintSanctionsSummary, disqualifiedCandidatesSummary } from "../../lib/complaints";
 import type { ComplaintFormErrors } from "../../lib/complaints";
 
 /** Human-readable evidence size for the attachment chips. */
@@ -267,6 +267,7 @@ export default function StudentComplaints() {
             <input
               id="complaint-incident-date"
               type="date"
+              max={todayDateStr()}
               value={incidentDate}
               onChange={(e) => { setIncidentDate(e.target.value); clearFieldError("incidentDate"); }}
               aria-invalid={Boolean(fieldErrors.incidentDate)}
@@ -426,6 +427,17 @@ export default function StudentComplaints() {
                             </li>
                           ))}
                         </ul>
+                      </div>
+                    )}
+                    {complaint.sanctions && complaint.sanctions.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-green-100">
+                        <div className="text-xs font-medium text-green-800 mb-0.5">Sanction(s) imposed</div>
+                        <p className="text-xs text-green-900">{complaintSanctionsSummary(complaint.sanctions)}</p>
+                        {complaint.disqualifiedCandidates && complaint.disqualifiedCandidates.length > 0 && (
+                          <p className="text-xs text-green-900 mt-0.5">
+                            Candidate to be disqualified: {disqualifiedCandidatesSummary(complaint.disqualifiedCandidates)}
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>

@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
-import { AlertCircle, CheckCircle, XCircle, Clock, Search, MessageSquare, Shield, Paperclip, Upload, X, ChevronDown, Download } from "lucide-react";
+import { AlertCircle, CheckCircle, XCircle, Clock, Search, MessageSquare, Shield, Paperclip, Upload, X, ChevronDown, Download, Gavel } from "lucide-react";
 import { motion } from "motion/react";
 import { useApp, Complaint } from "../../context/AppContext";
-import type { ComplaintEvidence } from "../../context/AppContext";
+import type { ComplaintEvidence, ComplaintSanction, DisqualifiedCandidate } from "../../context/AppContext";
 import { useConfirm } from "../../lib/useConfirm";
-import { decideComplaintRpc, uploadComplaintEvidence } from "../../lib/supabaseData";
+import { positionRank } from "../../lib/partyScope";
+import { decideComplaintRpc, uploadComplaintEvidence, verifyGrievancePasswordRpc } from "../../lib/supabaseData";
 import { saveGrievanceResponseFormDocx } from "../../lib/docxGrievanceResponseForm";
-import { statusMeta, sortFiledFirst, complaintsForElection, validateEvidenceFiles, EVIDENCE_ACCEPT, EVIDENCE_MAX_FILES, EVIDENCE_TYPES_LABEL, COMPLAINT_DECISION_VALUES, COMPLAINT_DECISION_LABELS, complaintDecisionDefinition, formatSubmittedAt } from "../../lib/complaints";
+import { statusMeta, sortFiledFirst, complaintsForElection, validateEvidenceFiles, EVIDENCE_ACCEPT, EVIDENCE_MAX_FILES, EVIDENCE_TYPES_LABEL, COMPLAINT_DECISION_VALUES, COMPLAINT_DECISION_LABELS, complaintDecisionDefinition, formatSubmittedAt, COMPLAINT_SANCTION_VALUES, COMPLAINT_SANCTION_LABELS, complaintSanctionsSummary, disqualifiedCandidatesSummary } from "../../lib/complaints";
 import { EvidenceFileThumb, EvidenceAttachment } from "../../components/EvidencePreview";
 
 const formatBytes = (bytes: number) =>
@@ -17,6 +18,21 @@ const TONE_CLASSES: Record<string, string> = {
   amber: "bg-amber-100 text-amber-700",
   green: "bg-green-100 text-green-700",
   red: "bg-red-100 text-red-700",
+};
+
+/**
+ * 128 — one row of the Disqualification confirmation gate: the full candidate
+ * details (photo, name, position, party) captured from the picker when the
+ * gate opens, in the picker's canonical order.  The gate's `candidates` field
+ * stays the lean { id, name } list the resolve RPC needs; this is the display
+ * snapshot shown to the Commissioner before the password check.
+ */
+interface DisqualifiedCandidateProfile {
+  id: string;
+  name: string;
+  position: string;
+  party: string;
+  picture?: string;
 };
 
 // 086/087/090/091 model: the stored 'accepted' literal displays as "Resolved",
@@ -36,7 +52,7 @@ const readFilterParam = (param: string | null) =>
   param && FILTER_VALUES.includes(param as (typeof FILTER_VALUES)[number]) ? param : "all";
 
 export default function AdminComplaints() {
-  const { complaints, setComplaints, addLog, currentUser, electionPeriod } = useApp();
+  const { complaints, setComplaints, candidates, setCandidates, addLog, currentUser, electionPeriod } = useApp();
   const isChief = currentUser?.commissionerRole === "chief";
   // Only the Grievance Commissioner serves the respondent — the "Communication
   // for Respondent" download belongs to this role alone (not the Chief).
@@ -58,6 +74,29 @@ export default function AdminComplaints() {
   // 097: the required decision classification for the open Findings.
   const [findingsDecision, setFindingsDecision] = useState<Complaint["decision"] | "">("");
   const [decisionNeeded, setDecisionNeeded] = useState<string | null>(null);
+  // 128: the ONE sanction imposed when the decision is a Substantiated
+  // Grievance, the candidate ids a Disqualification removes, and the search
+  // that narrows the disqualification picker.
+  const [findingsSanction, setFindingsSanction] = useState<ComplaintSanction | "">("");
+  const [findingsDisqualified, setFindingsDisqualified] = useState<string[]>([]);
+  const [candidateSearch, setCandidateSearch] = useState("");
+  const [sanctionsNeeded, setSanctionsNeeded] = useState<string | null>(null);
+  const [disqualifiedNeeded, setDisqualifiedNeeded] = useState<string | null>(null);
+  // 128: the password gate BEFORE the "Mark as Resolved?" confirmation — a
+  // Disqualification resolve re-verifies the Commissioner's own password and
+  // shows exactly who is about to be disqualified.
+  const [pendingDisqualification, setPendingDisqualification] = useState<{
+    complaint: Complaint;
+    findings: string;
+    decision: Complaint["decision"];
+    sanctions: ComplaintSanction[];
+    candidates: DisqualifiedCandidate[];
+    /** 128: the photo/name/position/party rows the gate displays. */
+    profiles: DisqualifiedCandidateProfile[];
+  } | null>(null);
+  const [gatePassword, setGatePassword] = useState("");
+  const [gateError, setGateError] = useState("");
+  const [gateChecking, setGateChecking] = useState(false);
   const resolveConfirm = useConfirm({ title: "Mark as Resolved?", description: "Mark this complaint as resolved? The Findings are saved and the student is notified — they can download the response letter from My Complaints.", confirmText: "Resolved" });
 
   // Deep links (dashboard stat cards) arrive with ?filter=...; the chip is
@@ -88,6 +127,11 @@ export default function AdminComplaints() {
     setFindingsNeeded(null);
     setFindingsDecision("");
     setDecisionNeeded(null);
+    setFindingsSanction("");
+    setFindingsDisqualified([]);
+    setCandidateSearch("");
+    setSanctionsNeeded(null);
+    setDisqualifiedNeeded(null);
     setFindingsEvidenceFiles([]);
     setFindingsEvidenceError("");
   };
@@ -101,10 +145,43 @@ export default function AdminComplaints() {
       setFindingsNeeded(null);
       setFindingsDecision("");
       setDecisionNeeded(null);
+      setFindingsSanction("");
+      setFindingsDisqualified([]);
+      setCandidateSearch("");
+      setSanctionsNeeded(null);
+      setDisqualifiedNeeded(null);
       setFindingsEvidenceFiles([]);
       setFindingsEvidenceError("");
     }
   };
+
+  // 127: the candidates a Disqualification sanction can remove — the approved
+  // candidates of the current election (the same list complaints are scoped
+  // to).  A candidate already disqualified/rejected is not offered.  The
+  // picker reads in the Board's canonical order (President first, then the
+  // other executives and grade seats — see FULL_POSITION_ORDER), surnames
+  // breaking ties inside one office — the same order the candidate review
+  // page uses.
+  const byDisqualificationOrder = (left: (typeof candidates)[number], right: (typeof candidates)[number]) =>
+    positionRank(left.position) - positionRank(right.position) ||
+    left.surname.localeCompare(right.surname) ||
+    left.givenName.localeCompare(right.givenName);
+  const disqualifiedCandidateOptions = candidates
+    .filter((candidate) => candidate.status === "approved")
+    .sort(byDisqualificationOrder);
+
+  // 127: friendly "Given Surname" label for the disqualification picker.
+  const candidateLabel = (candidate: (typeof candidates)[number]) =>
+    [candidate.givenName, candidate.middleName, candidate.surname, candidate.extensionName]
+      .filter(Boolean)
+      .join(" ");
+
+  // 128: the disqualification picker's search narrows by name or position.
+  const searchableDisqualifiedCandidates = disqualifiedCandidateOptions.filter((candidate) =>
+    `${candidateLabel(candidate)} ${candidate.position}`
+      .toLowerCase()
+      .includes(candidateSearch.trim().toLowerCase())
+  );
 
   // 096: append findings-evidence picks after validating the cap/type/size.
   const handleFindingsEvidenceSelect = (picked: File[]) => {
@@ -154,15 +231,44 @@ export default function AdminComplaints() {
     // 097: the classification is chosen in the panel (it is not persisted
     // until resolve), so a closed panel means "not chosen yet".
     const effectiveDecision = panelOpen ? findingsDecision : "";
-    if (!effectiveFindings || !effectiveDecision) {
-      // 090/097: both are mandatory — surface the requirement on the input
+    // 128: exactly ONE sanction rides on a Substantiated Grievance; a
+    // Disqualification additionally needs at least one candidate.
+    const substantiated = effectiveDecision === "substantiated";
+    const effectiveSanction = panelOpen && substantiated ? findingsSanction : "";
+    const effectiveSanctions: ComplaintSanction[] = effectiveSanction ? [effectiveSanction] : [];
+    const needsDisqualified = effectiveSanction === "disqualification";
+    const missingSanctions = substantiated && !effectiveSanction;
+    const missingDisqualified = needsDisqualified && findingsDisqualified.length === 0;
+    if (!effectiveFindings || !effectiveDecision || missingSanctions || missingDisqualified) {
+      // 090/097/127: all mandatory — surface the requirement on the input
       // (auto-open the panel) instead of a dead button.
       setShowFindings(complaint.id);
       setFindingsDraft(complaint.findings ?? "");
       setFindingsNeeded(effectiveFindings ? null : complaint.id);
       setDecisionNeeded(effectiveDecision ? null : complaint.id);
+      setSanctionsNeeded(missingSanctions ? complaint.id : null);
+      setDisqualifiedNeeded(missingDisqualified ? complaint.id : null);
       return;
     }
+    // 127: the candidates a Disqualification removes, with the names the
+    // grievance record shows.  The RPC re-derives the names server-side.
+    const disqualifiedCandidates: DisqualifiedCandidate[] = needsDisqualified
+      ? disqualifiedCandidateOptions
+          .filter((candidate) => findingsDisqualified.includes(candidate.id))
+          .map((candidate) => ({ id: candidate.id, name: candidateLabel(candidate) }))
+      : [];
+    // 128: the same picks with their photo, position and party — the rows the
+    // confirmation gate shows (same order as the RPC list above).
+    const disqualificationProfiles: DisqualifiedCandidateProfile[] = disqualifiedCandidates.map((candidate) => {
+      const full = disqualifiedCandidateOptions.find((option) => option.id === candidate.id);
+      return {
+        id: candidate.id,
+        name: candidate.name,
+        position: full?.position ?? "",
+        party: full?.partyAffiliation || "Independent",
+        picture: full?.picture,
+      };
+    });
     // 096: findings evidence is optional, but if any was picked it must pass.
     if (findingsEvidenceFiles.length > 0) {
       const problem = validateEvidenceFiles(findingsEvidenceFiles);
@@ -171,6 +277,36 @@ export default function AdminComplaints() {
         return;
       }
     }
+    // 128: a Disqualification resolve is password-gated — the candidates who
+    // will be disqualified plus the Commissioner's OWN password come BEFORE
+    // the "Mark as Resolved?" confirmation.  Other sanctions confirm as before.
+    if (needsDisqualified) {
+      setPendingDisqualification({
+        complaint,
+        findings: effectiveFindings,
+        decision: effectiveDecision as Complaint["decision"],
+        sanctions: effectiveSanctions,
+        candidates: disqualifiedCandidates,
+        profiles: disqualificationProfiles,
+      });
+      setGatePassword("");
+      setGateError("");
+      return;
+    }
+    await runResolve(complaint, effectiveFindings, effectiveDecision as Complaint["decision"], effectiveSanctions, []);
+  };
+
+  // 128: the actual resolve — confirm, upload evidence, decide atomically.
+  // The password (when a Disqualification was gated) rides along so the RPC
+  // can re-verify it server-side before writing.
+  const runResolve = async (
+    complaint: Complaint,
+    effectiveFindings: string,
+    effectiveDecision: Complaint["decision"],
+    effectiveSanctions: ComplaintSanction[],
+    disqualifiedCandidates: DisqualifiedCandidate[],
+    password?: string
+  ) => {
     const ok = await resolveConfirm.confirm();
     if (!ok) return;
     setProcessing(complaint.id);
@@ -183,13 +319,40 @@ export default function AdminComplaints() {
       }
       // 092: the response letter is no longer auto-downloaded here — it
       // belongs to the student, who downloads it from My Complaints.
-      await decideComplaintRpc(complaint.id, "accepted", undefined, effectiveFindings, findingsEvidence, effectiveDecision);
+      await decideComplaintRpc(
+        complaint.id,
+        "accepted",
+        undefined,
+        effectiveFindings,
+        findingsEvidence,
+        effectiveDecision,
+        effectiveSanctions,
+        disqualifiedCandidates,
+        password
+      );
       const updated = complaints.map((c) =>
         c.id === complaint.id
-          ? { ...c, status: "accepted" as const, findings: effectiveFindings, findingsEvidence, decision: effectiveDecision, resolvedAt: new Date().toISOString().split("T")[0] }
+          ? { ...c, status: "accepted" as const, findings: effectiveFindings, findingsEvidence, decision: effectiveDecision, sanctions: effectiveSanctions, disqualifiedCandidates, resolvedAt: new Date().toISOString().split("T")[0] }
           : c
       );
       setComplaints(updated);
+      // 127: mirror the server-side disqualification so the candidate list
+      // does not still show them as approved.
+      if (disqualifiedCandidates.length > 0) {
+        const disqualifiedIds = new Set(disqualifiedCandidates.map((candidate) => candidate.id));
+        setCandidates(
+          candidates.map((candidate) =>
+            disqualifiedIds.has(candidate.id)
+              ? {
+                  ...candidate,
+                  status: "rejected" as const,
+                  rejectionReason: "Disqualified through a substantiated grievance",
+                  rejectionTier: "high" as const,
+                }
+              : candidate
+          )
+        );
+      }
     } catch (err) {
       addLog({
         user: currentUser?.name || "Commissioner",
@@ -202,6 +365,56 @@ export default function AdminComplaints() {
     setProcessing(null);
     closeFindings();
   };
+
+  // 128: verify the Commissioner's own password, then hand over to the
+  // "Mark as Resolved?" confirmation with the disqualification in tow.
+  const handleDisqualificationContinue = async () => {
+    if (!pendingDisqualification || gateChecking) return;
+    if (!gatePassword.trim()) {
+      setGateError("Enter the Grievance Commissioner password to continue.");
+      return;
+    }
+    setGateChecking(true);
+    setGateError("");
+    try {
+      await verifyGrievancePasswordRpc(gatePassword);
+    } catch (err) {
+      // Stay on the gate so the password can be corrected and retried.
+      setGateError(err instanceof Error ? err.message : "The Grievance Commissioner password was not accepted.");
+      setGateChecking(false);
+      return;
+    }
+    setGateChecking(false);
+    const pending = pendingDisqualification;
+    setPendingDisqualification(null);
+    setGatePassword("");
+    await runResolve(
+      pending.complaint,
+      pending.findings,
+      pending.decision,
+      pending.sanctions,
+      pending.candidates,
+      gatePassword
+    );
+  };
+
+  const closeDisqualificationGate = () => {
+    if (gateChecking) return;
+    setPendingDisqualification(null);
+    setGatePassword("");
+    setGateError("");
+  };
+
+  // 128: Escape closes the disqualification gate (the backdrop click does too).
+  useEffect(() => {
+    if (!pendingDisqualification) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeDisqualificationGate();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingDisqualification]);
 
   const getStatusBadge = (status: Complaint["status"]) => {
     const meta = statusMeta(status);
@@ -351,6 +564,17 @@ export default function AdminComplaints() {
                     )}
                   </div>
                 )}
+                {complaint.status !== "filed" && complaint.sanctions && complaint.sanctions.length > 0 && (
+                  <div className="mt-3 p-3 rounded-lg bg-red-50 border border-red-100">
+                    <div className="text-xs font-medium text-red-800 mb-0.5">Sanction(s) imposed</div>
+                    <p className="text-xs text-red-700">{complaintSanctionsSummary(complaint.sanctions)}</p>
+                    {complaint.disqualifiedCandidates && complaint.disqualifiedCandidates.length > 0 && (
+                      <p className="text-xs text-red-700 mt-0.5">
+                        Candidate(s) to be disqualified: {disqualifiedCandidatesSummary(complaint.disqualifiedCandidates)}
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
               {complaint.status === "filed" && (
                 <div className="flex items-center gap-1 text-xs font-medium text-gray-400 flex-shrink-0 select-none">
@@ -425,6 +649,118 @@ export default function AdminComplaints() {
                   }`}
                   rows={3}
                 />
+                {findingsDecision === "substantiated" && (
+                  <div className="mb-3 p-3 rounded-lg border border-red-200 bg-red-50">
+                    <div className="flex items-center gap-1.5 text-xs font-medium text-red-800 mb-2">
+                      <Gavel size={12} /> Sanction — pick one (required for a Substantiated Grievance)
+                    </div>
+                    <div className="flex flex-wrap gap-x-4 gap-y-2">
+                      {COMPLAINT_SANCTION_VALUES.map((value) => (
+                        <label key={value} className="inline-flex items-center gap-1.5 text-xs text-gray-800">
+                          <input
+                            type="radio"
+                            name={`sanction-${complaint.id}`}
+                            checked={findingsSanction === value}
+                            onChange={() => {
+                              setSanctionsNeeded(null);
+                              setFindingsSanction(value);
+                              // Leaving Disqualification clears its candidate picks.
+                              if (value !== "disqualification") {
+                                setFindingsDisqualified([]);
+                                setDisqualifiedNeeded(null);
+                              }
+                            }}
+                            className="accent-[#5C0102]"
+                          />
+                          {COMPLAINT_SANCTION_LABELS[value]}
+                        </label>
+                      ))}
+                    </div>
+                    {sanctionsNeeded === complaint.id && (
+                      <div className="flex items-center gap-1.5 text-xs text-red-600 mt-2">
+                        <AlertCircle size={12} /> Select the sanction imposed for this Substantiated Grievance.
+                      </div>
+                    )}
+                    {findingsSanction === "disqualification" && (
+                      <div className="mt-3 pt-3 border-t border-red-200">
+                        <div className="text-xs font-medium text-gray-700 mb-1.5">Candidates to be disqualified</div>
+                        {disqualifiedCandidateOptions.length === 0 ? (
+                          <p className="text-xs text-gray-500">No approved candidates are on file for this election.</p>
+                        ) : (
+                          <>
+                            {/* 128: the search narrows the picker; every checked
+                                candidate collects in the "will be disqualified"
+                                list below it. */}
+                            <input
+                              type="text"
+                              placeholder="Search candidates..."
+                              aria-label="Search candidates to disqualify"
+                              value={candidateSearch}
+                              onChange={(e) => setCandidateSearch(e.target.value)}
+                              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-xs bg-white mb-2 focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102]"
+                            />
+                            <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
+                              {searchableDisqualifiedCandidates.length === 0 ? (
+                                <p className="text-xs text-gray-400">No candidates match "{candidateSearch.trim()}".</p>
+                              ) : (
+                                searchableDisqualifiedCandidates.map((candidate) => (
+                                  <label key={candidate.id} className="flex items-center gap-2 text-xs text-gray-800">
+                                    <input
+                                      type="checkbox"
+                                      checked={findingsDisqualified.includes(candidate.id)}
+                                      onChange={(e) => {
+                                        setDisqualifiedNeeded(null);
+                                        const checked = e.target.checked;
+                                        setFindingsDisqualified((previous) =>
+                                          checked ? [...previous, candidate.id] : previous.filter((id) => id !== candidate.id)
+                                        );
+                                      }}
+                                      className="accent-[#5C0102]"
+                                    />
+                                    <span>{candidateLabel(candidate)} — {candidate.position} · {candidate.partyAffiliation || "Independent"}</span>
+                                  </label>
+                                ))
+                              )}
+                            </div>
+                            {findingsDisqualified.length > 0 && (
+                              <div className="mt-2">
+                                <div className="text-xs font-medium text-gray-600 mb-1">
+                                  Will be disqualified ({findingsDisqualified.length})
+                                </div>
+                                <ul className="space-y-1">
+                                  {disqualifiedCandidateOptions
+                                    .filter((candidate) => findingsDisqualified.includes(candidate.id))
+                                    .map((candidate) => (
+                                      <li key={candidate.id} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-white border border-red-100 text-xs">
+                                        <span className="text-gray-800 flex-1">
+                                          {candidateLabel(candidate)} — {candidate.position} · {candidate.partyAffiliation || "Independent"}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setFindingsDisqualified((previous) => previous.filter((id) => id !== candidate.id))
+                                          }
+                                          aria-label={`Remove ${candidateLabel(candidate)} from the disqualification`}
+                                          className="text-gray-400 hover:text-red-600 shrink-0"
+                                        >
+                                          <X size={13} />
+                                        </button>
+                                      </li>
+                                    ))}
+                                </ul>
+                              </div>
+                            )}
+                          </>
+                        )}
+                        {disqualifiedNeeded === complaint.id && (
+                          <div className="flex items-center gap-1.5 text-xs text-red-600 mt-2">
+                            <AlertCircle size={12} /> Select at least one candidate to be disqualified.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1">
                     <Paperclip size={12} /> Supporting evidence (optional)
@@ -500,6 +836,129 @@ export default function AdminComplaints() {
         )}
       </div>
       {resolveConfirm.dialog}
+
+      {/* 128 — the Disqualification password gate, shown BEFORE the
+          "Mark as Resolved?" confirmation: exactly who will be disqualified,
+          and the Commissioner's OWN password (verified by
+          verify_grievance_password_rpc; the resolve RPC re-verifies it). */}
+      {pendingDisqualification && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          role="presentation"
+          className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/50"
+          onClick={closeDisqualificationGate}
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.15 }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm disqualification"
+            className="bg-white rounded-2xl shadow-xl max-w-lg w-full overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-5 text-white flex items-start gap-3" style={{ backgroundColor: "#5C0102" }}>
+              <Gavel size={18} className="shrink-0 mt-0.5" />
+              <div>
+                <h3 className="text-white">Confirm Disqualification</h3>
+                <p className="text-white/80 text-xs mt-0.5">
+                  A password is required before this grievance can be resolved.
+                </p>
+              </div>
+            </div>
+            <div className="p-5 space-y-4 text-sm">
+              <div>
+                <div className="text-xs font-medium text-gray-600 mb-1.5 uppercase tracking-wide">
+                  Candidate(s) who will be disqualified ({pendingDisqualification.profiles.length})
+                </div>
+                <ul className="space-y-1.5">
+                  {pendingDisqualification.profiles.map((candidate) => (
+                    <li
+                      key={candidate.id}
+                      className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-red-50 border border-red-100 text-xs"
+                    >
+                      {candidate.picture ? (
+                        <img
+                          src={candidate.picture}
+                          alt=""
+                          className="w-9 h-9 rounded-full object-cover border border-red-100 bg-white flex-shrink-0"
+                        />
+                      ) : (
+                        <div className="w-9 h-9 rounded-full bg-white border border-red-100 flex items-center justify-center text-xs font-bold text-red-700 flex-shrink-0">
+                          {candidate.name.charAt(0)}
+                        </div>
+                      )}
+                      <span className="flex-1 min-w-0">
+                        <span className="block font-medium text-gray-900">{candidate.name}</span>
+                        <span className="block text-[11px] text-gray-600">
+                          {candidate.position} · {candidate.party}
+                        </span>
+                      </span>
+                      <span className="text-red-600 font-medium flex items-center gap-1 flex-shrink-0">
+                        <AlertCircle size={12} /> Disqualified
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-xs text-gray-500 mt-2">
+                  They will be removed from this election and can no longer receive votes.
+                </p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1" htmlFor="disqualification-gate-password">
+                  Grievance Commissioner password
+                </label>
+                <input
+                  id="disqualification-gate-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={gatePassword}
+                  onChange={(e) => {
+                    setGatePassword(e.target.value);
+                    setGateError("");
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleDisqualificationContinue();
+                    }
+                  }}
+                  disabled={gateChecking}
+                  className={`w-full px-3 py-2 border rounded-lg text-sm bg-gray-50 focus:outline-none ${
+                    gateError ? "border-red-400 focus:ring-2 focus:ring-red-100" : "border-gray-200"
+                  }`}
+                />
+                {gateError && (
+                  <p role="alert" className="mt-1.5 flex items-center gap-1.5 text-xs text-red-600">
+                    <AlertCircle size={12} /> {gateError}
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={closeDisqualificationGate}
+                  disabled={gateChecking}
+                  className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-200 transition-colors disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDisqualificationContinue}
+                  disabled={gateChecking}
+                  className="px-4 py-2 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-60"
+                  style={{ backgroundColor: "#5C0102" }}
+                >
+                  {gateChecking ? "Checking..." : "Continue"}
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
     </div>
   );
 }

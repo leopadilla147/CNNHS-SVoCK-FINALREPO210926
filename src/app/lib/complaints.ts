@@ -1,4 +1,10 @@
-import type { Complaint, ComplaintEvidence, ElectionStage } from "../context/AppContext";
+import type {
+  Complaint,
+  ComplaintEvidence,
+  ComplaintSanction,
+  DisqualifiedCandidate,
+  ElectionStage,
+} from "../context/AppContext";
 
 /**
  * Pure complaint helpers (Phase 4, Plan 04-02 - GRIEV-05 / D-01).
@@ -64,6 +70,29 @@ export function toEvidenceArray(value: any): ComplaintEvidence[] {
   return value
     .filter((item) => item && typeof item.url === "string")
     .map((item) => ({ url: item.url, name: typeof item.name === "string" ? item.name : "Evidence" }));
+}
+
+/** 127: normalize a raw sanctions text[] into the known sanction values. */
+export function toSanctionArray(value: any): ComplaintSanction[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is ComplaintSanction =>
+    (COMPLAINT_SANCTION_VALUES as readonly string[]).includes(item)
+  );
+}
+
+/** 127: pair the disqualified candidate ids with their denormalized names. */
+export function toDisqualifiedCandidates(
+  ids: any,
+  names: any
+): DisqualifiedCandidate[] {
+  if (!Array.isArray(names)) return [];
+  const idList = Array.isArray(ids) ? ids : [];
+  return names
+    .map((name, index) => ({
+      id: typeof idList[index] === "string" ? idList[index] : "",
+      name: typeof name === "string" ? name : "",
+    }))
+    .filter((candidate) => candidate.name !== "");
 }
 
 /**
@@ -134,11 +163,23 @@ export const COMPLAINT_CERTIFICATION =
   "I hereby certify that the information stated herein is true and correct to the best of my knowledge.";
 
 /**
+ * Today as a YYYY-MM-DD string (local time) — the latest selectable Date of
+ * Incident.  An incident cannot be reported before it happens, so the filing
+ * form only offers the current date or past dates (the input's `max` and the
+ * validator below share this value).
+ */
+export function todayDateStr(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/**
  * Required-field validation for the filing form: Complaint Against, Nature of
  * Complaint, Narrative Report, Date of Incident, and the certification are all
- * mandatory.  Past incident dates are allowed — the incident being reported may
- * well have already happened.  Returns one message per invalid field (empty
- * object = valid).
+ * mandatory.  The incident date may be today or in the past — the incident
+ * being reported may well have already happened — but never in the future.
+ * Returns one message per invalid field (empty object = valid).
  */
 export function validateComplaintForm(input: ComplaintFormInput): ComplaintFormErrors {
   const errors: ComplaintFormErrors = {};
@@ -153,7 +194,11 @@ export function validateComplaintForm(input: ComplaintFormInput): ComplaintFormE
       : "Please select the nature of your complaint.";
   }
   if (!input.description.trim()) errors.description = "Please provide a narrative report.";
-  if (!input.incidentDate) errors.incidentDate = "Please select the date of the incident.";
+  if (!input.incidentDate) {
+    errors.incidentDate = "Please select the date of the incident.";
+  } else if (input.incidentDate > todayDateStr()) {
+    errors.incidentDate = "The date of the incident cannot be in the future.";
+  }
   if (!input.certified) errors.certified = "Please certify that the information is true and correct before filing.";
   return errors;
 }
@@ -185,6 +230,11 @@ export function toComplaintDto(row: any): Complaint {
     submittedAt: row.submitted_at?.slice(0, 10) || "",
     submittedAtExact: row.submitted_at || undefined,
     decision: row.decision || undefined,
+    sanctions: toSanctionArray(row.sanctions),
+    disqualifiedCandidates: toDisqualifiedCandidates(
+      row.disqualified_candidate_ids,
+      row.disqualified_candidate_names
+    ),
     evidence: toEvidenceArray(row.evidence_urls),
     findingsEvidence: toEvidenceArray(row.findings_evidence_urls),
     rejectionReason: row.resolution_note || undefined,
@@ -248,6 +298,45 @@ export function complaintDecisionLabel(decision?: Complaint["decision"]): string
 /** The election's complaints classified as a Substantiated Grievance. */
 export function substantiatedComplaints(rows: Complaint[]): Complaint[] {
   return rows.filter((c) => c.decision === "substantiated");
+}
+
+/**
+ * 127: the sanctions a Grievance Commissioner may impose — only ever on a
+ * Substantiated Grievance.  "Verbal Warning" is the lightest, so a
+ * substantiated decision is never left without at least one sanction.
+ */
+export const COMPLAINT_SANCTION_VALUES = [
+  "verbal_warning",
+  "reprimand",
+  "disqualification",
+] as const;
+
+export const COMPLAINT_SANCTION_LABELS: Record<ComplaintSanction, string> = {
+  verbal_warning: "Verbal Warning",
+  reprimand: "Reprimand Through Writing",
+  disqualification: "Disqualification",
+};
+
+/** Human label for one sanction. */
+export function complaintSanctionLabel(sanction: ComplaintSanction): string {
+  return COMPLAINT_SANCTION_LABELS[sanction];
+}
+
+/** "Verbal Warning, Reprimand Through Writing" — "" when no sanction is set. */
+export function complaintSanctionsSummary(sanctions?: ComplaintSanction[] | null): string {
+  return (sanctions ?? []).map(complaintSanctionLabel).join(", ");
+}
+
+/** True when the sanction list carries a Disqualification. */
+export function hasDisqualificationSanction(sanctions?: ComplaintSanction[] | null): boolean {
+  return (sanctions ?? []).includes("disqualification");
+}
+
+/** "Juan Dela Cruz, Maria Santos" — "" when nobody is to be disqualified. */
+export function disqualifiedCandidatesSummary(
+  candidates?: DisqualifiedCandidate[] | null
+): string {
+  return (candidates ?? []).map((candidate) => candidate.name).filter(Boolean).join(", ");
 }
 
 /** D-01 status → human label + tone used by the history list pills. */

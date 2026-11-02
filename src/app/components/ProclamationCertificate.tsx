@@ -19,7 +19,7 @@
  */
 import { format } from "date-fns";
 import cnnhsSealUrl from "../assets/proclamation-cnnhs-seal.webp";
-import comeaSealUrl from "../assets/proclamation-comea-seal.png";
+import sslgSealUrl from "../assets/proclamation-sslg-seal.png";
 import "./proclamation-certificate.css";
 
 /** A proclaimed winner row joined with the candidate's grade level —
@@ -32,9 +32,6 @@ export interface CertificateWinner {
   picture?: string;
   /** e.g. "Grade 12" — spoken in the proclamation message. */
   gradeLevel?: string;
-  /** The candidate's stored gender ("Male" / "Female") — picks the
-   *  "Mr." / "Ms." honorific printed before the name. */
-  gender?: string | null;
 }
 
 interface ProclamationCertificateProps {
@@ -59,15 +56,9 @@ function ordinalDay(n: number): string {
   }
 }
 
-/** "Mr." / "Ms." honorific from a candidate's stored gender ("Male" /
- *  "Female").  Falls back to the generic "Ms./Mr" when the gender is
- *  unknown, so the certificate never prints a wrong title. */
-export function winnerHonorific(gender?: string | null): string {
-  const value = (gender ?? "").trim().toLowerCase();
-  if (value === "female" || value === "f") return "Ms.";
-  if (value === "male" || value === "m") return "Mr.";
-  return "Ms./Mr";
-}
+/** Fixed honorific spoken in the proclamation message — never gender-derived,
+ *  so the certificate never prints a wrong title. */
+const WINNER_HONORIFIC = "Ms./Mr.";
 
 /** "15th day of February 2026" — the Board's proclamation date, or
  *  today when the stamp is missing (offline mode). */
@@ -82,8 +73,6 @@ export function ProclamationCertificate({ winner, schoolYear, dateLabel, capture
   // grade on record simply ends the sentence after their name.
   const gradeNumber = winner.gradeLevel?.replace(/^Grade\s+/i, "");
   const votes = winner.votes;
-  // "Mr." / "Ms." (or the generic "Ms./Mr" when the gender is unknown).
-  const honorific = winnerHonorific(winner.gender);
   return (
     <div
       className="proclamation-certificate"
@@ -125,9 +114,11 @@ export function ProclamationCertificate({ winner, schoolYear, dateLabel, capture
             </p>
           </div>
 
-          {/* Right seal: the COMEA commission */}
+          {/* Right seal: the Supreme Secondary Learner Government.  The asset is
+              168px for this 84px slot (@2x) — the exact resolution the rasterizer
+              captures at scale 2, so it is drawn 1:1 and stays crisp. */}
           <div className="cert-logo-slot">
-            <img src={comeaSealUrl} alt="COMEA Official Seal" className="cert-school-logo" />
+            <img src={sslgSealUrl} alt="SSLG Official Seal" className="cert-school-logo" />
           </div>
         </header>
 
@@ -207,7 +198,7 @@ export function ProclamationCertificate({ winner, schoolYear, dateLabel, capture
             <div className="winner-identity-block">
               <span className="identity-lead-label">THIS CERTIFIES THAT</span>
               <h2 className="winner-display-name">
-                {honorific} {winner.winnerName}
+                {winner.winnerName}
               </h2>
               <div className="winner-name-underline">
                 <span className="underline-diamond">&diams;</span>
@@ -223,9 +214,8 @@ export function ProclamationCertificate({ winner, schoolYear, dateLabel, capture
               <p className="msg-para para-highlight">
                 Congratulations on being officially elected in the position of{" "}
                 <strong>{winner.position}</strong>,{" "}
-                <strong>
-                  {honorific} {winner.winnerName}
-                </strong>
+                {WINNER_HONORIFIC}
+                <strong> {winner.winnerName} </strong>
                 {gradeNumber ? (
                   <>
                     , of <strong>Grade {gradeNumber}</strong>!
@@ -334,6 +324,11 @@ async function rasterizeIntoPdf(elements: HTMLElement[], fileName: string): Prom
       useCORS: true,
       backgroundColor: "#ffffff",
       logging: false,
+      // Images (the seals, the winner portrait) go through drawImage, which
+      // defaults to the canvas' "low" smoothing — that is what left the fine
+      // gold linework of the seals mushy.  Text is drawn as vectors either way.
+      imageSmoothing: true,
+      imageSmoothingQuality: "high",
     });
     if (i > 0) pdf.addPage("letter", "landscape");
     pdf.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", 0, 0, 11, 8.5);

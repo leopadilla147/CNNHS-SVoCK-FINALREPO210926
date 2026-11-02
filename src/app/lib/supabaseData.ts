@@ -5,6 +5,8 @@ import type {
   CommissionerRole,
   Complaint,
   ComplaintEvidence,
+  ComplaintSanction,
+  DisqualifiedCandidate,
   CurrentUser,
   ElectionPeriod,
   HomepageSettings,
@@ -20,7 +22,7 @@ import type {
 import { isSupabaseConfigured, supabase } from "./supabase";
 import { clearSessionToken, saveSessionToken } from "./session";
 import { canonicalAuditRole } from "./auditRoles";
-import { toEvidenceArray } from "./complaints";
+import { toEvidenceArray, toSanctionArray, toDisqualifiedCandidates } from "./complaints";
 import {
   splitFullName,
   toIsoBirthdate,
@@ -870,7 +872,14 @@ export async function decideComplaintRpc(
   reason?: string,
   findings?: string,
   findingsEvidence?: ComplaintEvidence[],
-  decision?: Complaint["decision"]
+  decision?: Complaint["decision"],
+  // 127: sanctions (Substantiated Grievance only) and, when a Disqualification
+  // is imposed, the candidates it removes.  Names are derived server-side.
+  sanctions?: ComplaintSanction[],
+  disqualifiedCandidates?: DisqualifiedCandidate[],
+  // 128: the acting Commissioner's OWN password — REQUIRED for a
+  // Disqualification resolve, re-verified server-side by the RPC.
+  password?: string
 ): Promise<void> {
   const db = requireSupabase();
   const { error } = await db.rpc("decide_complaint_rpc", {
@@ -880,8 +889,28 @@ export async function decideComplaintRpc(
     p_findings: findings || null,
     p_findings_evidence: findingsEvidence ?? [],
     p_decision: decision || null,
+    p_sanctions: sanctions ?? [],
+    p_disqualified_candidate_ids: (disqualifiedCandidates ?? []).map((c) => c.id).filter(Boolean),
+    p_disqualified_candidate_names: (disqualifiedCandidates ?? []).map((c) => c.name).filter(Boolean),
+    p_password: password || null,
   });
   if (error) throw new Error(error.message);
+}
+
+/**
+ * 128 — the password gate in front of a Disqualification resolve.  The RPC
+ * verifies the SESSION Commissioner's own adminprofiles password (bcrypt via
+ * crypt(), the 107 disable-panel pattern) and the resolve RPC re-verifies the
+ * same password server-side before writing.
+ */
+export async function verifyGrievancePasswordRpc(p_password: string): Promise<boolean> {
+  const client = requireSupabase();
+  const { data, error } = await client.rpc("verify_grievance_password_rpc", { p_password });
+  if (error) {
+    const msg = [error.message, error.details, error.hint].filter(Boolean).join(" | ");
+    throw new Error(msg);
+  }
+  return Boolean(data);
 }
 
 export async function insertAuditLog(entry: Omit<LogEntry, "id" | "timestamp">, actorId?: string) {
@@ -1084,6 +1113,11 @@ function mapComplaint(row: any): Complaint {
     submittedAt: toDate(row.submitted_at),
     submittedAtExact: row.submitted_at || undefined,
     decision: row.decision || undefined,
+    sanctions: toSanctionArray(row.sanctions),
+    disqualifiedCandidates: toDisqualifiedCandidates(
+      row.disqualified_candidate_ids,
+      row.disqualified_candidate_names
+    ),
     evidence: toEvidenceArray(row.evidence_urls),
     findingsEvidence: toEvidenceArray(row.findings_evidence_urls),
     rejectionReason: row.resolution_note || undefined,
@@ -2222,6 +2256,11 @@ export interface ElectionComplaintRecord {
   /** 086 — the Grievance Commissioner's findings note. */
   findings?: string | null;
   resolvedAt?: string | null;
+  /** 127 — the sanctions imposed on a Substantiated Grievance. */
+  sanctions?: ComplaintSanction[] | null;
+  /** 127 — candidates removed by a Disqualification sanction (names only —
+   *  the public record is sanitized, so the ids are left blank). */
+  disqualifiedCandidates?: DisqualifiedCandidate[] | null;
 }
 
 /**
@@ -2245,6 +2284,8 @@ export async function getElectionComplaintRecordRpc(
       decision: row.decision ?? null,
       findings: row.findings ?? null,
       resolvedAt: row.resolved_at ?? null,
+      sanctions: toSanctionArray(row.sanctions),
+      disqualifiedCandidates: toDisqualifiedCandidates([], row.disqualified_candidate_names),
     }));
   } catch {
     return [];
@@ -2580,6 +2621,9 @@ export interface ProclaimedWinner {
   picture?: string | null;
   /** Winner's candidate row id — present on rows read back from the ledger. */
   candidateId?: string | null;
+  /** The party the winner ran under (null for an Independent) — shown on
+   *  the Stage 5 winners grid beside the name. */
+  partyName?: string | null;
   /** The moment this winner's proclamation was recorded (the ledger's
    *  own stamp) — the certificate date line prefers it over the period's
    *  stamp, so the certificate never falls back to the download date. */
@@ -2644,9 +2688,10 @@ export async function proclaimWinnersRpc(
  * page holds them in component state, so a page reload would blank the
  * Stage 5 grid even though the rows persist forever.  This rehydrates them,
  * joining the candidate row for the display name (same order as the RPC:
- * given name then surname, positions ascending) and the public photo URL.
- * Soft-fails to an empty list so an un-migrated database can never break
- * the page — the fallback text covers the gap.
+ * given name then surname), the public photo URL and the party name through
+ * the candidate's `parties` FK.  Soft-fails to an empty list so an
+ * un-migrated database can never break the page — the fallback text covers
+ * the gap.
  */
 export async function getProclaimedWinners(
   electionPeriodId: string
@@ -2657,7 +2702,7 @@ export async function getProclaimedWinners(
       .from("proclamations")
       .select(
         "winning_position, candidate_id, votes, resolution_method, remain_winner, proclaimed_at, " +
-        "candidates(surname, given_name, picture_url)"
+        "candidates(surname, given_name, picture_url, parties(name))"
       )
       .eq("election_period_id", electionPeriodId)
       .order("winning_position");
@@ -2672,6 +2717,7 @@ export async function getProclaimedWinners(
         remainWinner: row.remain_winner === true,
         candidateId: row.candidate_id || null,
         picture: cand?.picture_url || null,
+        partyName: cand?.parties?.name ?? null,
         proclaimedAt: row.proclaimed_at || undefined,
       };
     });

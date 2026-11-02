@@ -6,6 +6,14 @@ export interface SubstantiatedGrievance {
   id: string;
   subject: string;
   findings?: string | null;
+  /** 127 — the sanctions imposed, as display labels. */
+  sanctions?: string[];
+  /** 127 — names of the candidates a Disqualification sanction removes. */
+  disqualifiedNames?: string[];
+  /** 127 — the disqualified candidates with their ids, so the proclamation
+   *  review can pin each removed candidate to this grievance in the tally
+   *  list. */
+  disqualifiedCandidates?: { id: string; name: string }[];
 }
 
 /** 114 — a resolved complaint classified Unsubstantiated or Dismissed.
@@ -165,6 +173,12 @@ export function ProclamationSummary({
               <div className="mt-0.5 text-sm font-semibold text-gray-900 leading-snug break-words">
                 {candidate.candidateName}
               </div>
+              {/* The party the winner ran under — the same line the review
+                  dialog's tally rows show, so the Board signs off on the
+                  party slate too. */}
+              <div className="text-[11px] text-gray-500 truncate">
+                {candidate.partyName || "Independent"}
+              </div>
               {tag && (
                 <div className="mt-1.5">
                   <span
@@ -263,7 +277,16 @@ export function ProclamationSummary({
             <span className="font-medium text-gray-500">
               Substantiated grievance{substantiated.length === 1 ? "" : "s"} on record:{" "}
             </span>
-            {substantiated.map((g) => g.subject).join(", ")}
+            {substantiated
+              .map((g) => {
+                const sanctions = g.sanctions && g.sanctions.length > 0 ? ` — Sanctions: ${g.sanctions.join(", ")}` : "";
+                const disqualified =
+                  g.disqualifiedNames && g.disqualifiedNames.length > 0
+                    ? ` (to be disqualified: ${g.disqualifiedNames.join(", ")})`
+                    : "";
+                return `${g.subject}${sanctions}${disqualified}`;
+              })
+              .join(", ")}
           </div>
         )}
         {otherResolved.length > 0 && (

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { useApp, Complaint } from "../../context/AppContext";
-import { statusMeta, complaintDecisionLabel } from "../../lib/complaints";
+import { statusMeta, complaintDecisionLabel, complaintSanctionsSummary, disqualifiedCandidatesSummary } from "../../lib/complaints";
 import { listElectionPeriodLabels } from "../../lib/supabaseData";
 import { FolderArchive, MessageSquare, Search, Eye, XCircle, Clock, CheckCircle, Paperclip } from "lucide-react";
 import { EvidenceAttachment } from "../../components/EvidencePreview";
@@ -266,6 +266,18 @@ export default function AdminComplaintsArchive() {
                           </li>
                         ))}
                       </ul>
+                    )}
+                  </div>
+                )}
+
+                {preview.sanctions && preview.sanctions.length > 0 && (
+                  <div className="bg-red-50 border border-red-100 rounded-lg p-3">
+                    <div className="text-xs font-medium text-red-700 mb-1 uppercase tracking-wide">Sanction(s) imposed</div>
+                    <p className="text-red-800 text-sm">{complaintSanctionsSummary(preview.sanctions)}</p>
+                    {preview.disqualifiedCandidates && preview.disqualifiedCandidates.length > 0 && (
+                      <p className="text-red-800 text-xs mt-1">
+                        Candidate(s) to be disqualified: {disqualifiedCandidatesSummary(preview.disqualifiedCandidates)}
+                      </p>
                     )}
                   </div>
                 )}

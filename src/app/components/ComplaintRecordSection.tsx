@@ -1,6 +1,6 @@
 import { CheckCircle2, ShieldAlert } from "lucide-react";
 import type { ElectionComplaintRecord } from "../lib/supabaseData";
-import { complaintDecisionLabel } from "../lib/complaints";
+import { complaintDecisionLabel, complaintSanctionLabel } from "../lib/complaints";
 import { FindingsDisclosure } from "./FindingsDisclosure";
 
 interface ComplaintRecordSectionProps {
@@ -53,22 +53,32 @@ export function ComplaintRecordSection({
             {substantiated.length})
           </div>
           <ul className="mt-2 space-y-1.5">
-            {substantiated.map((e) =>
-              showFindings ? (
+            {substantiated.map((e) => {
+              const sanctionLabels = (e.sanctions ?? []).map(complaintSanctionLabel);
+              const disqualifiedNames = (e.disqualifiedCandidates ?? []).map((c) => c.name);
+              return showFindings ? (
                 <FindingsDisclosure
                   key={e.id}
                   id={`record-findings-${e.id}`}
                   subject={e.subject}
                   decisionLabel="Substantiated Grievance"
                   findings={e.findings}
+                  sanctions={sanctionLabels}
+                  disqualifiedNames={disqualifiedNames}
                 />
               ) : (
                 <li key={e.id} className="text-xs flex items-center gap-1.5 flex-wrap">
                   <span className="font-semibold">{e.subject}</span>
                   <span className="opacity-70">· Substantiated Grievance</span>
+                  {sanctionLabels.length > 0 && (
+                    <span className="opacity-70">· Sanction(s): {sanctionLabels.join(", ")}</span>
+                  )}
+                  {disqualifiedNames.length > 0 && (
+                    <span className="opacity-70">· To be disqualified: {disqualifiedNames.join(", ")}</span>
+                  )}
                 </li>
-              ),
-            )}
+              );
+            })}
           </ul>
         </div>
       )}

@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  Ban,
   CheckCircle2,
   Gavel,
   Loader2,
@@ -55,9 +56,27 @@ export interface CandidateProfile {
   /** The candidate's submitted profile photo URL, when they have one. */
   picture?: string;
   gradeLevel?: string;
-  /** The candidate's stored gender ("Male" / "Female") — picks the
-   *  "Mr." / "Ms." honorific on the proclamation certificate. */
-  gender?: string;
+  /** The party the candidate ran under (undefined for an Independent). */
+  party?: string;
+}
+
+/** 127 — a candidate a substantiated grievance's Disqualification sanction
+ *  removed (candidates.status = 'rejected', rejection_tier = 'high').
+ *  Listed in the review beside the running candidates — read-only, never
+ *  pickable — each carrying the complaint that disqualified it. */
+export interface DisqualifiedCandidateRow {
+  candidateId: string;
+  candidateName: string;
+  partyName: string | null;
+  position: string;
+  /** The Nature of Complaint that disqualified the candidate. */
+  subject: string;
+  /** The Grievance Commissioner's findings behind the disqualification. */
+  findings?: string | null;
+  /** The sanctions that complaint imposed, as display labels. */
+  sanctions?: string[];
+  /** The complaint's id — dedupes its disclosure within a position. */
+  grievanceId: string;
 }
 
 /** 117 — Grade Level Representative positions elect two winners; every
@@ -216,6 +235,10 @@ interface ProclamationDialogProps {
   /** 097 — the election's SUBSTANTIATED grievances (already resolved), each
    *  with its read-only findings shown beside the subject. */
   substantiatedGrievances: SubstantiatedGrievance[];
+  /** 127 — the candidates the substantiated grievances' Disqualification
+   *  sanctions removed: listed beside the running candidates, read-only and
+   *  never pickable, each with the complaint that disqualified it. */
+  disqualifiedCandidates?: DisqualifiedCandidateRow[];
   /** 114 — the election's Unsubstantiated / Dismissed resolutions.  Every
    *  Findings decision now owes the Board's one-time explanation. */
   otherResolved: OtherResolvedComplaint[];
@@ -256,11 +279,24 @@ export function ProclamationDialog({
   complaintSubjects,
   hasComplaints,
   substantiatedGrievances,
+  disqualifiedCandidates = [],
   otherResolved,
   onCancel,
   onConfirm,
 }: ProclamationDialogProps) {
   const positions = useMemo(() => groupTally(tally), [tally]);
+  // 127 — the disqualified candidates grouped by position.  The tally RPC
+  // only returns approved candidates, so the removed ones travel in their
+  // own prop and are pinned under their position's running candidates.
+  const disqualifiedByPosition = useMemo(() => {
+    const map = new Map<string, DisqualifiedCandidateRow[]>();
+    for (const d of disqualifiedCandidates) {
+      const list = map.get(d.position);
+      if (list) list.push(d);
+      else map.set(d.position, [d]);
+    }
+    return map;
+  }, [disqualifiedCandidates]);
   const [resolutions, setResolutions] = useState<Record<string, DraftResolution>>({});
   const [pendingPick, setPendingPick] = useState<{
     position: string;
@@ -293,6 +329,13 @@ export function ProclamationDialog({
   if (!open) return null;
 
   const tiePositions = positions.filter((p) => p.picksNeeded > 0);
+  // 127 — positions whose EVERY candidate was disqualified have no tally
+  // section at all (the RPC returns no approved rows for them); their
+  // removed candidates still get their own section so the review shows
+  // why nothing can be proclaimed there.
+  const orphanDisqualified = [...disqualifiedByPosition.entries()].filter(
+    ([position]) => !positions.some((p) => p.position === position),
+  );
   // 123 — a position is settled once the board either affirmed its default
   // winner(s) or manually named every seat itself; with no complaint only
   // ties need resolving.
@@ -425,6 +468,86 @@ export function ProclamationDialog({
     });
   };
 
+  // 127 — one position's disqualified block: the removed candidates as
+  // read-only rows (no pick, no vote count) plus the Complaint that took
+  // them out — click its subject to reveal the Grievance Commissioner's
+  // findings.  Never rendered as a button: a disqualified candidate is
+  // not in the running and cannot be proclaimed.
+  const renderDisqualified = (positionKey: string, rows: DisqualifiedCandidateRow[]) => {
+    // One disclosure per complaint, however many candidates it removed here.
+    const grievances = rows.filter(
+      (d, i) => rows.findIndex((x) => x.grievanceId === d.grievanceId) === i,
+    );
+    const idSlug = positionKey.replace(/[^a-zA-Z0-9]+/g, "-");
+    return (
+      <div className="border-t border-red-100 bg-red-50/40 p-2 space-y-1.5">
+        <div className="px-1 text-[10px] font-bold uppercase tracking-wider text-red-700 flex items-center gap-1.5">
+          <Ban size={12} /> Disqualified — excluded from the tally
+        </div>
+        {rows.map((d) => {
+          const profile = profiles[d.candidateId];
+          return (
+            <div
+              key={d.candidateId}
+              className="rounded-xl border border-red-200 bg-white px-3 py-2 flex items-center gap-3 opacity-75 cursor-not-allowed"
+              title="Disqualified through a substantiated grievance — not in the running."
+            >
+              {profile?.picture ? (
+                <img
+                  src={profile.picture}
+                  alt={d.candidateName}
+                  className="w-9 h-9 rounded-full object-cover border-2 border-red-200 flex-shrink-0"
+                />
+              ) : (
+                <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0 border-2 border-red-200">
+                  <Users size={15} className="text-gray-400" />
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                <div className="text-sm truncate text-gray-500">{d.candidateName}</div>
+                <div className="text-[11px] truncate text-gray-400">
+                  {d.partyName || "Independent"}
+                  {profile?.gradeLevel ? ` · ${profile.gradeLevel}` : ""}
+                </div>
+              </div>
+              <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
+                Disqualified
+              </span>
+            </div>
+          );
+        })}
+        <ul className="px-1 space-y-1.5">
+          {grievances.map((g) => (
+            <FindingsDisclosure
+              key={g.grievanceId}
+              id={`proclaim-disq-findings-${g.grievanceId}-${idSlug}`}
+              subject={g.subject}
+              decisionLabel="Substantiated Grievance"
+              findings={g.findings}
+              sanctions={g.sanctions}
+            />
+          ))}
+        </ul>
+      </div>
+    );
+  };
+
+  // 127 — a full section for a position with no running candidates left:
+  // only its disqualified block, under a red status badge.
+  const renderDisqualifiedSection = (position: string, rows: DisqualifiedCandidateRow[]) => (
+    <section key={position} className="rounded-2xl border border-gray-200 overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 bg-gray-50 border-b border-gray-100">
+        <h4 className="text-sm font-semibold text-gray-900">{position}</h4>
+        <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
+          All candidates disqualified
+        </span>
+      </div>
+      <div className="p-2">
+        {renderDisqualified(position, rows)}
+      </div>
+    </section>
+  );
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40" onClick={() => !confirming && onCancel()} />
@@ -467,8 +590,15 @@ export function ProclamationDialog({
               <Loader2 size={16} className="animate-spin" /> Loading the vote tally…
             </div>
           ) : positions.length === 0 ? (
-            <div className="py-12 text-center text-sm text-gray-500">
-              There are no approved candidates to proclaim for this election.
+            <div className="space-y-4">
+              <div className="py-12 text-center text-sm text-gray-500">
+                There are no approved candidates to proclaim for this election.
+              </div>
+              {/* 127 — even with nothing left to proclaim, the review still
+                  names who was removed and why. */}
+              {orphanDisqualified.map(([position, rows]) =>
+                renderDisqualifiedSection(position, rows),
+              )}
             </div>
           ) : (
             <div className="space-y-4">
@@ -526,6 +656,8 @@ export function ProclamationDialog({
                               id={`proclaim-findings-${g.id}`}
                               subject={g.subject}
                               findings={g.findings}
+                              sanctions={g.sanctions}
+                              disqualifiedNames={g.disqualifiedNames}
                             />
                           ))}
                         </ul>
@@ -630,6 +762,9 @@ export function ProclamationDialog({
               {positions.map((p, index) => {
                 const resolution = resolutions[p.position];
                 const picksSoFar = resolution?.candidateIds?.length ?? 0;
+                // 127 — the candidates a substantiated grievance removed
+                // from this position; rendered read-only below the tally.
+                const disqualifiedHere = disqualifiedByPosition.get(p.position);
                 // 117 — the pick targets are the tied group the board must
                 // resolve: the top-count candidates themselves when more
                 // are tied than there are seats, or the next-count
@@ -853,6 +988,12 @@ export function ProclamationDialog({
                       })}
                     </div>
 
+                    {/* 127 — the candidates the Grievance Commissioner
+                        disqualified from this position: read-only rows,
+                        each with the Complaint (click to reveal its
+                        Findings) that removed them. */}
+                    {disqualifiedHere && renderDisqualified(p.position, disqualifiedHere)}
+
                     {/* 081 — the tie footer; 123 — in choice mode (complaint
                         on record, no affirmation) it renders for non-tie
                         positions too, offering the board's own choice. */}
@@ -909,6 +1050,14 @@ export function ProclamationDialog({
                   </Fragment>
                 );
               })}
+
+              {/* 127 — a position whose every candidate was disqualified has
+                  no tally at all: its removed candidates still get their
+                  section so the review shows why nothing can be proclaimed
+                  there. */}
+              {orphanDisqualified.map(([position, rows]) =>
+                renderDisqualifiedSection(position, rows),
+              )}
             </div>
           )}
 

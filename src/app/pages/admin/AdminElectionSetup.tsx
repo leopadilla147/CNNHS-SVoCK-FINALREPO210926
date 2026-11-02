@@ -36,10 +36,10 @@ import { isSupabaseConfigured } from "../../lib/supabase";
 import { FULL_POSITION_ORDER, positionRank, isGradeRepresentativePosition } from "../../lib/partyScope";
 import { resolveStage } from "../../lib/electionStage";
 import type { Stage } from "../../lib/electionStage";
-import { complaintsForElection, substantiatedComplaints, complaintDecisionLabel } from "../../lib/complaints";
+import { complaintsForElection, substantiatedComplaints, complaintDecisionLabel, complaintSanctionLabel } from "../../lib/complaints";
 import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
 import { ProclamationDialog, groupTally } from "../../components/ProclamationDialog";
-import type { ProclamationDecision, CandidateProfile } from "../../components/ProclamationDialog";
+import type { ProclamationDecision, CandidateProfile, DisqualifiedCandidateRow } from "../../components/ProclamationDialog";
 import { FindingsDisclosure } from "../../components/FindingsDisclosure";
 import { ProclamationSummary } from "../../components/ProclamationSummary";
 import type { SubstantiatedGrievance, OtherResolvedComplaint } from "../../components/ProclamationSummary";
@@ -491,7 +491,14 @@ export default function AdminElectionSetup() {
   // read-only Findings.
   const resolvedComplaints = electionComplaints.filter((c) => c.status === "accepted");
   const substantiatedGrievances: SubstantiatedGrievance[] = substantiatedComplaints(electionComplaints)
-    .map((c) => ({ id: c.id, subject: c.subject, findings: c.findings ?? null }));
+    .map((c) => ({
+      id: c.id,
+      subject: c.subject,
+      findings: c.findings ?? null,
+      sanctions: (c.sanctions ?? []).map(complaintSanctionLabel),
+      disqualifiedCandidates: c.disqualifiedCandidates ?? [],
+      disqualifiedNames: (c.disqualifiedCandidates ?? []).map((candidate) => candidate.name),
+    }));
   // Substantiated grievances have their own red section below — this list
   // only notes the classifications that do not block proclamation.
   const otherResolvedComplaints = resolvedComplaints.filter((c) => c.decision !== "substantiated");
@@ -505,15 +512,43 @@ export default function AdminElectionSetup() {
     .map((c) => ({ id: c.id, subject: c.subject, decisionLabel: complaintDecisionLabel(c.decision), findings: c.findings ?? null }));
 
   // The proclamation tally carries only names — join each candidate's
-  // profile details (photo, grade level) by id so the review dialog shows
-  // the full candidate row, matching the Official Results page.
+  // profile details (photo, grade level, party) by id so the review dialog
+  // shows the full candidate row, matching the Official Results page.
   const candidateProfiles = useMemo(() => {
     const map: Record<string, CandidateProfile> = {};
     for (const c of candidates) {
-      map[c.id] = { picture: c.picture, gradeLevel: c.gradeLevel, gender: c.gender };
+      map[c.id] = { picture: c.picture, gradeLevel: c.gradeLevel, party: c.partyAffiliation };
     }
     return map;
   }, [candidates]);
+
+  // 127 — the candidates a substantiated grievance's Disqualification
+  // sanction removed (candidates.status = 'rejected', rejection_tier
+  // 'high'): joined with the grievance that removed them, so the
+  // proclamation review can list each one under its position beside the
+  // running candidates — greyed out, un-clickable, with the Complaint
+  // (and its Findings) that disqualified it.
+  const disqualifiedProclamationRows: DisqualifiedCandidateRow[] = useMemo(() => {
+    const rows: DisqualifiedCandidateRow[] = [];
+    for (const g of substantiatedGrievances) {
+      for (const d of g.disqualifiedCandidates ?? []) {
+        if (rows.some((r) => r.candidateId === d.id)) continue;
+        const c = candidates.find((x) => x.id === d.id);
+        if (!c) continue; // the grievance banner still names them
+        rows.push({
+          candidateId: d.id,
+          candidateName: `${c.givenName} ${c.surname}`.trim(),
+          partyName: c.partyAffiliation ?? null,
+          position: c.position,
+          subject: g.subject,
+          findings: g.findings ?? null,
+          sanctions: g.sanctions,
+          grievanceId: g.id,
+        });
+      }
+    }
+    return rows;
+  }, [candidates, substantiatedGrievances]);
 
   // Stage 5 — the proclaimed winners in the Board's canonical order
   // (FULL_POSITION_ORDER, the same reading order the proclamation dialog
@@ -1023,7 +1058,10 @@ export default function AdminElectionSetup() {
       showFieldError("fingerprint_registration", missingFp.message, missingFp.fields);
       return;
     }
-    if (fpEnd < fpStart) {
+    // The closing date must be strictly after the opening date — the picker
+    // only offers the day after the chosen start onwards, and this catches
+    // dates typed straight into the field.
+    if (fpEnd <= fpStart) {
       showFieldError("fingerprint_registration", "The Fingerprint Registration end date must be after the start date.", ["fpEnd"]);
       return;
     }
@@ -1472,7 +1510,14 @@ export default function AdminElectionSetup() {
         decisionReason: decision.complaintReason || undefined,
       });
       await refreshPeriod();
-      setProclaimedWinners(winners);
+      // The RPC's rows carry no party — join it from the tally already in
+      // state (the same `given surname` name source), so the Stage 5 grid
+      // shows each winner's party right away; the rehydration effect keeps
+      // it filled after a reload.
+      const partyByWinnerName = new Map(tally.map((r) => [r.candidateName, r.partyName]));
+      setProclaimedWinners(
+        winners.map((w) => ({ ...w, partyName: partyByWinnerName.get(w.winnerName) ?? null })),
+      );
       setProclamationOpen(false);
       addLog({
         user: logUser, role: "Admin",
@@ -1517,7 +1562,6 @@ export default function AdminElectionSetup() {
         votes: winner.votes,
         picture: winner.picture ?? undefined,
         gradeLevel: (winner.candidateId && candidateProfiles[winner.candidateId]?.gradeLevel) || undefined,
-        gender: (winner.candidateId && candidateProfiles[winner.candidateId]?.gender) || undefined,
       });
       showSuccess(`${winner.winnerName}'s Proclamation Certificate has been downloaded.`);
     } catch (err) {
@@ -1567,6 +1611,11 @@ export default function AdminElectionSetup() {
       <div className="min-w-0">
         <div className="text-xs text-gray-500 truncate">{w.position}</div>
         <div className="font-medium text-gray-900 truncate">{w.winnerName}</div>
+        <div className="text-xs text-gray-500 truncate">
+          {w.partyName
+            || (w.candidateId ? candidateProfiles[w.candidateId]?.party : undefined)
+            || "Independent"}
+        </div>
         <div className="text-xs text-gray-400">{w.votes} vote{w.votes !== 1 ? "s" : ""}</div>
         {w.resolutionMethod === "manual" && (
           <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-700 flex items-center gap-1">
@@ -1673,6 +1722,9 @@ export default function AdminElectionSetup() {
   // 113 — the Campaign window may not open and close on the same day: the
   // end picker opens the day after whichever start is chosen.
   const campaignEndMin = campaignStart ? addDaysStr(campaignStart, 1) : undefined;
+  // 060 — same rule for the Fingerprint Registration window: the closing date
+  // picker cannot go back to the opening day or earlier.
+  const fpEndMin = fpStart ? addDaysStr(fpStart, 1) : undefined;
   // The Campaign window is committed by "Start Campaign"; once saved, the
   // button becomes "Update Campaign Window".
   const hasCampaignWindow = !!(electionPeriod.campaignStartDate && electionPeriod.campaignEndDate);
@@ -2230,7 +2282,7 @@ export default function AdminElectionSetup() {
                   <input
                     id="fp-end"
                     type="date"
-                    min={tomorrowDateStr()}
+                    min={fpEndMin ?? tomorrowDateStr()}
                     value={fpEnd}
                     disabled={fpWindowLocked}
                     onChange={(e) => { setFpEnd(e.target.value); clearFieldError("fpEnd"); }}
@@ -2640,6 +2692,8 @@ export default function AdminElectionSetup() {
                     subject={g.subject}
                     decisionLabel="Substantiated Grievance"
                     findings={g.findings}
+                    sanctions={g.sanctions}
+                    disqualifiedNames={g.disqualifiedNames}
                   />
                 ))}
               </ul>
@@ -2760,7 +2814,6 @@ export default function AdminElectionSetup() {
                     votes: w.votes,
                     picture: w.picture ?? undefined,
                     gradeLevel: (w.candidateId && candidateProfiles[w.candidateId]?.gradeLevel) || undefined,
-                    gender: (w.candidateId && candidateProfiles[w.candidateId]?.gender) || undefined,
                   }}
                   schoolYear={electionPeriod.schoolYear}
                   dateLabel={proclamationDateLabel(proclamationStamp)}
@@ -2850,6 +2903,7 @@ export default function AdminElectionSetup() {
         complaintSubjects={filedComplaintSubjects}
         hasComplaints={hasComplaints}
         substantiatedGrievances={substantiatedGrievances}
+        disqualifiedCandidates={disqualifiedProclamationRows}
         otherResolved={otherResolvedDecisions}
         onCancel={closeProclamation}
         onConfirm={commitProclaim}

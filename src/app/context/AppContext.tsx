@@ -488,7 +488,7 @@ export const shippedAboutContent = {
 
 /** The values the footer shipped with before settings became editable. */
 export const defaultHomepageSettings: HomepageSettings = {
-  contactEmail: "voting@cnnhs.edu.ph",
+  contactEmail: "cnnhsonline@gmail.com",
   location: "Camarines Norte National High School, Daet, Camarines Norte, Philippines",
   officeHoursStart: "08:00",
   officeHoursEnd: "17:00",

@@ -18,9 +18,9 @@ const SCHOOL_MAPS_LINK = `https://www.google.com/maps/search/?api=1&query=${enco
 )}`;
 
 /**
- * The public About CNNHS page (top header + footer).  A brief school
+ * The public About CNNHS page (top header + footer). A brief school
  * profile followed by the DepEd Vision, Mission, and Core Values — nothing
- * else.  119: the wording is editable Homepage Setting content — the Chief
+ * else. The wording is editable Homepage Setting content — the Chief
  * Commissioner saves it under Homepage Setting; an empty field or an empty
  * Core Values list falls back to the school's shipped statement.
  */
@@ -46,11 +46,11 @@ export default function AboutCNNHSPage() {
   return (
     <div className="min-h-[70vh] bg-gray-50">
 
-      {/* ── Hero Banner (High Visual Impact) ───────────────────────── */}
+      {/* ── Hero Banner (High Visual Impact & 3D Layered Lighting) ─── */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
-        className="relative overflow-hidden text-white shadow-2xl"
+        className="relative overflow-hidden text-white shadow-[0_20px_45px_-10px_rgba(92,1,2,0.4),inset_0_1px_0_rgba(255,255,255,0.25),inset_0_-2px_0_rgba(0,0,0,0.25)]"
         style={{
           background: "linear-gradient(135deg, #4A0102 0%, #5C0102 35%, #8B0103 70%, #6B0203 100%)",
         }}
@@ -71,13 +71,13 @@ export default function AboutCNNHSPage() {
 
         <div className="relative max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-24">
           <div className="flex flex-col sm:flex-row items-center sm:items-start gap-7 sm:gap-9">
-            {/* School Crest Badge with double ring glow */}
+            {/* School Crest Badge with 3D Medallion Lighting */}
             <div className="relative group">
               <div
-                className="absolute -inset-1 rounded-3xl blur-md opacity-30 group-hover:opacity-50 transition duration-300"
-                style={{ background: "linear-gradient(135deg, #ffffff, #8B0103)" }}
+                className="absolute -inset-1.5 rounded-3xl blur-lg opacity-35 group-hover:opacity-60 transition duration-300 pointer-events-none"
+                style={{ background: "linear-gradient(135deg, #ffffff 0%, #8B0103 100%)" }}
               />
-              <div className="relative w-22 h-22 sm:w-28 sm:h-28 rounded-3xl bg-white/12 backdrop-blur-md border border-white/25 flex items-center justify-center flex-shrink-0 shadow-2xl p-3">
+              <div className="relative w-22 h-22 sm:w-28 sm:h-28 rounded-3xl bg-white/15 backdrop-blur-md border border-white/30 flex items-center justify-center flex-shrink-0 shadow-[0_8px_24px_rgba(0,0,0,0.25),inset_0_1px_0_rgba(255,255,255,0.4)] p-3 transition-transform duration-300 group-hover:scale-105">
                 <img
                   src={cnnhsLogo}
                   alt=""
@@ -87,26 +87,26 @@ export default function AboutCNNHSPage() {
             </div>
 
             <div className="text-center sm:text-left flex-1">
-              <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-white/12 backdrop-blur-md border border-white/20 text-xs font-semibold tracking-wider uppercase mb-4 text-white/95 shadow-xs">
+              <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-white/12 backdrop-blur-md border border-white/20 text-xs font-bold tracking-wider uppercase mb-4 text-white/95 shadow-[0_2px_6px_rgba(0,0,0,0.15),inset_0_1px_0_rgba(255,255,255,0.25)] border-b-[2px] border-b-black/20">
                 <Building2 size={13} />
                 Official School Profile
               </div>
-              <h1 className="text-3xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight">
+              <h1 className="text-3xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight drop-shadow-sm">
                 About CNNHS
               </h1>
-              <p className="text-white/80 mt-3.5 text-base sm:text-lg max-w-2xl leading-relaxed font-normal">
+              <p className="text-white/85 mt-3.5 text-base sm:text-lg max-w-2xl leading-relaxed font-normal">
                 A brief look at the school and the values that guide it.
               </p>
 
-              {/* Quick institutional info pill tags */}
-              <div className="mt-5 flex flex-wrap items-center justify-center sm:justify-start gap-2.5 text-xs text-white/75 font-medium">
-                <span className="px-3 py-1 rounded-full bg-white/10 backdrop-blur-sm border border-white/15">
+              {/* Quick institutional info 3D pill tags */}
+              <div className="mt-5 flex flex-wrap items-center justify-center sm:justify-start gap-2.5 text-xs text-white font-medium">
+                <span className="px-3.5 py-1.5 rounded-full bg-white/10 backdrop-blur-sm border border-white/20 shadow-[0_2px_6px_rgba(0,0,0,0.1),inset_0_1px_0_rgba(255,255,255,0.2)] border-b-[2px] border-b-black/20">
                   DepEd Region V
                 </span>
-                <span className="px-3 py-1 rounded-full bg-white/10 backdrop-blur-sm border border-white/15">
+                <span className="px-3.5 py-1.5 rounded-full bg-white/10 backdrop-blur-sm border border-white/20 shadow-[0_2px_6px_rgba(0,0,0,0.1),inset_0_1px_0_rgba(255,255,255,0.2)] border-b-[2px] border-b-black/20">
                   Division of Camarines Norte
                 </span>
-                <span className="px-3 py-1 rounded-full bg-white/10 backdrop-blur-sm border border-white/15">
+                <span className="px-3.5 py-1.5 rounded-full bg-white/10 backdrop-blur-sm border border-white/20 shadow-[0_2px_6px_rgba(0,0,0,0.1),inset_0_1px_0_rgba(255,255,255,0.2)] border-b-[2px] border-b-black/20">
                   Daet, Philippines
                 </span>
               </div>
@@ -124,7 +124,7 @@ export default function AboutCNNHSPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.1 }}
         >
-          <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 sm:p-10 relative overflow-hidden">
+          <div className="bg-white rounded-3xl border border-gray-200/80 shadow-[0_12px_36px_-6px_rgba(0,0,0,0.06),0_4px_16px_-4px_rgba(0,0,0,0.03),inset_0_1px_0_rgba(255,255,255,1)] border-b-[3.5px] border-b-gray-300 p-6 sm:p-10 relative overflow-hidden">
             {/* Top decorative gradient line */}
             <div
               className="absolute top-0 left-0 right-0 h-1.5"
@@ -135,14 +135,14 @@ export default function AboutCNNHSPage() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 pb-6 border-b border-gray-100">
               <div className="flex items-start gap-4">
                 <div
-                  className="w-13 h-13 sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center flex-shrink-0 border border-gray-100 shadow-sm"
-                  style={{ backgroundColor: "rgba(92, 1, 2, 0.06)", color: "#5C0102" }}
+                  className="w-13 h-13 sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center flex-shrink-0 border border-rose-100 shadow-[0_4px_10px_rgba(92,1,2,0.08),inset_0_1px_0_rgba(255,255,255,0.9)] border-b-[2.5px] border-b-rose-200"
+                  style={{ backgroundColor: "rgba(92, 1, 2, 0.05)", color: "#5C0102" }}
                 >
                   <Building2 size={24} />
                 </div>
                 <div>
                   <div
-                    className="text-xs font-semibold uppercase tracking-wider mb-1"
+                    className="text-xs font-bold uppercase tracking-wider mb-1"
                     style={{ color: "#5C0102" }}
                   >
                     Public Secondary Institution
@@ -157,16 +157,15 @@ export default function AboutCNNHSPage() {
               </div>
             </div>
 
-            {/* ── Official School Location Box ──────────────────────── */}
+            {/* ── Official School Location Box (3D Inset Panel) ──────── */}
             <div
-              className="rounded-2xl p-5 sm:p-6 mb-8 border border-gray-100 shadow-xs"
-              style={{ backgroundColor: "rgba(92, 1, 2, 0.02)" }}
+              className="rounded-2xl p-5 sm:p-7 mb-8 border border-gray-200/80 bg-gradient-to-b from-white to-gray-50/70 shadow-[0_4px_14px_rgba(0,0,0,0.04),inset_0_1px_0_rgba(255,255,255,1)] border-b-[3px] border-b-gray-300/80"
             >
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div className="flex items-start gap-3.5 min-w-0">
+                <div className="flex items-start gap-4 min-w-0">
                   <div
-                    className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 text-white shadow-sm mt-0.5"
-                    style={{ backgroundColor: "#5C0102" }}
+                    className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 text-white shadow-[0_4px_12px_rgba(92,1,2,0.3),inset_0_1px_0_rgba(255,255,255,0.3)] border border-white/20 mt-0.5"
+                    style={{ background: "linear-gradient(135deg, #5C0102 0%, #8B0103 100%)" }}
                   >
                     <MapPin size={20} />
                   </div>
@@ -177,33 +176,33 @@ export default function AboutCNNHSPage() {
                     >
                       Official School Location
                     </span>
-                    <p className="text-gray-900 font-semibold text-sm sm:text-base leading-snug">
+                    <p className="text-gray-900 font-bold text-sm sm:text-base leading-snug">
                       {SCHOOL_OFFICIAL_LOCATION}
                     </p>
-                    <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                      <span className="px-2.5 py-0.5 rounded-md bg-white border border-gray-200 font-medium">
+                    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-gray-600">
+                      <span className="px-3 py-1 rounded-lg bg-white border border-gray-200 shadow-[0_1px_3px_rgba(0,0,0,0.04),inset_0_1px_0_rgba(255,255,255,0.9)] border-b-[2px] border-b-gray-300 font-bold">
                         Brgy. Camambugan
                       </span>
-                      <span className="px-2.5 py-0.5 rounded-md bg-white border border-gray-200 font-medium">
+                      <span className="px-3 py-1 rounded-lg bg-white border border-gray-200 shadow-[0_1px_3px_rgba(0,0,0,0.04),inset_0_1px_0_rgba(255,255,255,0.9)] border-b-[2px] border-b-gray-300 font-bold">
                         Daet, Camarines Norte
                       </span>
-                      <span className="px-2.5 py-0.5 rounded-md bg-white border border-gray-200 font-medium">
+                      <span className="px-3 py-1 rounded-lg bg-white border border-gray-200 shadow-[0_1px_3px_rgba(0,0,0,0.04),inset_0_1px_0_rgba(255,255,255,0.9)] border-b-[2px] border-b-gray-300 font-bold">
                         Postal Code: 4600
                       </span>
                     </div>
                   </div>
                 </div>
 
-                <div className="flex-shrink-0 pt-2 md:pt-0 pl-14 md:pl-0">
+                <div className="flex-shrink-0 pt-2 md:pt-0 pl-16 md:pl-0">
                   <a
                     href={SCHOOL_MAPS_LINK}
                     target="_blank"
                     rel="noreferrer"
-                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold text-white transition-opacity hover:opacity-90 shadow-sm"
-                    style={{ backgroundColor: "#5C0102" }}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold text-white shadow-[0_4px_12px_rgba(92,1,2,0.3),inset_0_1px_0_rgba(255,255,255,0.25)] border-b-[3px] border-b-[#3B0101] hover:brightness-105 active:translate-y-[2px] active:border-b transition-all duration-150 cursor-pointer"
+                    style={{ background: "linear-gradient(135deg, #5C0102 0%, #8B0103 100%)" }}
                   >
                     <span>View on Google Maps</span>
-                    <ExternalLink size={13} />
+                    <ExternalLink size={14} />
                   </a>
                 </div>
               </div>
@@ -211,7 +210,7 @@ export default function AboutCNNHSPage() {
 
             {/* Narrative overview paragraph */}
             <div className="space-y-3">
-              <div className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">
+              <div className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">
                 About the Institution
               </div>
               {briefInfo.split("\n").filter((line) => line.trim() !== "").map((line, i) => (
@@ -232,7 +231,7 @@ export default function AboutCNNHSPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.2 }}
           >
-            <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 sm:p-9 h-full relative overflow-hidden flex flex-col justify-between">
+            <div className="bg-white rounded-3xl border border-gray-200/80 shadow-[0_10px_30px_-4px_rgba(0,0,0,0.06),inset_0_1px_0_rgba(255,255,255,1)] border-b-[3.5px] border-b-gray-300 p-6 sm:p-9 h-full relative overflow-hidden flex flex-col justify-between hover:shadow-[0_18px_36px_-6px_rgba(0,0,0,0.09)] hover:-translate-y-1 transition-all duration-300">
               {/* Decorative top accent */}
               <div
                 className="absolute top-0 left-0 right-0 h-1.5 rounded-t-3xl"
@@ -242,13 +241,13 @@ export default function AboutCNNHSPage() {
               <div>
                 <div className="flex items-center gap-3.5 mb-6 pt-1">
                   <div
-                    className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 border border-gray-100 shadow-sm"
-                    style={{ backgroundColor: "rgba(92, 1, 2, 0.06)", color: "#5C0102" }}
+                    className="w-13 h-13 sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center flex-shrink-0 border border-rose-100 shadow-[0_4px_10px_rgba(92,1,2,0.08),inset_0_1px_0_rgba(255,255,255,0.9)] border-b-[2.5px] border-b-rose-200"
+                    style={{ backgroundColor: "rgba(92, 1, 2, 0.05)", color: "#5C0102" }}
                   >
-                    <Eye size={22} />
+                    <Eye size={24} />
                   </div>
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#5C0102" }}>
+                    <p className="text-xs font-bold uppercase tracking-wider" style={{ color: "#5C0102" }}>
                       Department of Education
                     </p>
                     <h2 className="text-xl sm:text-2xl font-bold text-gray-900 tracking-tight">
@@ -274,7 +273,7 @@ export default function AboutCNNHSPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.3 }}
           >
-            <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 sm:p-9 h-full relative overflow-hidden flex flex-col justify-between">
+            <div className="bg-white rounded-3xl border border-gray-200/80 shadow-[0_10px_30px_-4px_rgba(0,0,0,0.06),inset_0_1px_0_rgba(255,255,255,1)] border-b-[3.5px] border-b-gray-300 p-6 sm:p-9 h-full relative overflow-hidden flex flex-col justify-between hover:shadow-[0_18px_36px_-6px_rgba(0,0,0,0.09)] hover:-translate-y-1 transition-all duration-300">
               {/* Decorative top accent */}
               <div
                 className="absolute top-0 left-0 right-0 h-1.5 rounded-t-3xl"
@@ -284,13 +283,13 @@ export default function AboutCNNHSPage() {
               <div>
                 <div className="flex items-center gap-3.5 mb-6 pt-1">
                   <div
-                    className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 border border-gray-100 shadow-sm"
-                    style={{ backgroundColor: "rgba(92, 1, 2, 0.06)", color: "#5C0102" }}
+                    className="w-13 h-13 sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center flex-shrink-0 border border-rose-100 shadow-[0_4px_10px_rgba(92,1,2,0.08),inset_0_1px_0_rgba(255,255,255,0.9)] border-b-[2.5px] border-b-rose-200"
+                    style={{ backgroundColor: "rgba(92, 1, 2, 0.05)", color: "#5C0102" }}
                   >
-                    <Target size={22} />
+                    <Target size={24} />
                   </div>
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#5C0102" }}>
+                    <p className="text-xs font-bold uppercase tracking-wider" style={{ color: "#5C0102" }}>
                       Department of Education
                     </p>
                     <h2 className="text-xl sm:text-2xl font-bold text-gray-900 tracking-tight">
@@ -311,8 +310,10 @@ export default function AboutCNNHSPage() {
                     {missionBullets.map((line) => (
                       <li key={line} className="flex items-start gap-3.5 text-sm sm:text-base text-gray-600">
                         <span
-                          className="mt-2 w-2 h-2 rounded-full flex-shrink-0"
-                          style={{ backgroundColor: "#5C0102" }}
+                          className="mt-2 w-2.5 h-2.5 rounded-full flex-shrink-0 shadow-[0_2px_4px_rgba(92,1,2,0.3)]"
+                          style={{
+                            background: "radial-gradient(circle at 35% 30%, #ff8080 0%, #5C0102 70%, #200000 100%)",
+                          }}
                         />
                         <span className="leading-relaxed">{line}</span>
                       </li>
@@ -330,7 +331,7 @@ export default function AboutCNNHSPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.4 }}
         >
-          <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 sm:p-10 relative overflow-hidden">
+          <div className="bg-white rounded-3xl border border-gray-200/80 shadow-[0_12px_36px_-6px_rgba(0,0,0,0.06),inset_0_1px_0_rgba(255,255,255,1)] border-b-[3.5px] border-b-gray-300 p-6 sm:p-10 relative overflow-hidden">
             {/* Top decorative gradient line */}
             <div
               className="absolute top-0 left-0 right-0 h-1.5"
@@ -339,8 +340,8 @@ export default function AboutCNNHSPage() {
 
             <div className="text-center mb-10 pt-2">
               <div
-                className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider mb-3.5"
-                style={{ backgroundColor: "rgba(92, 1, 2, 0.06)", color: "#5C0102" }}
+                className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider mb-3.5 border shadow-[0_2px_6px_rgba(92,1,2,0.05),inset_0_1px_0_rgba(255,255,255,0.9)] border-b-[2px] border-b-rose-200"
+                style={{ backgroundColor: "rgba(92, 1, 2, 0.06)", color: "#5C0102", borderColor: "rgba(92, 1, 2, 0.15)" }}
               >
                 <Sparkles size={13} />
                 Guiding Principles
@@ -361,31 +362,34 @@ export default function AboutCNNHSPage() {
                   initial={{ opacity: 0, y: 16 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.4, delay: 0.5 + 0.08 * i }}
-                  className="group relative rounded-2xl border border-gray-100 p-6 text-center transition-all duration-300 hover:shadow-xl hover:-translate-y-1.5 overflow-hidden"
-                  style={{ backgroundColor: "rgba(92, 1, 2, 0.02)" }}
+                  whileHover={{ y: -6, transition: { duration: 0.2, ease: "easeOut" } }}
+                  className="group relative rounded-2xl border border-gray-200/80 p-6 text-center transition-all duration-300 shadow-[0_4px_12px_rgba(0,0,0,0.04),inset_0_1px_0_rgba(255,255,255,1)] hover:shadow-[0_16px_32px_-6px_rgba(92,1,2,0.12),0_8px_16px_-4px_rgba(0,0,0,0.04)] border-b-[3.5px] border-b-gray-300 hover:border-b-[#8B0103] overflow-hidden bg-gradient-to-b from-white to-gray-50/60 hover:to-rose-50/30 cursor-default"
                 >
                   {/* Hover accent bottom line */}
                   <div
-                    className="absolute inset-x-0 bottom-0 h-1.5 rounded-b-2xl opacity-0 transition-opacity duration-300 group-hover:opacity-100"
-                    style={{ background: "linear-gradient(90deg, #5C0102, #8B0103)" }}
+                    className="absolute inset-x-0 bottom-0 h-1.5 opacity-0 transition-all duration-300 group-hover:opacity-100 group-hover:h-2"
+                    style={{
+                      background: "linear-gradient(90deg, #5C0102, #8B0103)",
+                      boxShadow: "0 -2px 10px rgba(92, 1, 2, 0.25)",
+                    }}
                   />
 
-                  {/* Numbered Monogram Badge */}
+                  {/* Numbered Monogram Badge / 3D Medallion */}
                   <div
-                    className="w-12 h-12 rounded-2xl mx-auto mb-4 flex items-center justify-center text-base font-bold transition-all duration-300 group-hover:scale-110 shadow-xs"
+                    className="w-14 h-14 rounded-2xl mx-auto mb-4 flex items-center justify-center text-lg font-black transition-all duration-300 group-hover:scale-110 shadow-[0_4px_10px_rgba(92,1,2,0.1),inset_0_1px_0_rgba(255,255,255,0.9)] border border-rose-200/80 border-b-[2.5px] border-b-rose-300"
                     style={{
-                      backgroundColor: "rgba(92, 1, 2, 0.08)",
+                      background: "linear-gradient(135deg, #FDF2F2 0%, #FEE2E2 100%)",
                       color: "#5C0102",
                     }}
                   >
                     <span>{value.title.charAt(0)}</span>
                   </div>
 
-                  <p className="font-bold text-gray-900 text-base sm:text-lg group-hover:text-[#5C0102] transition-colors duration-200">
+                  <p className="font-extrabold text-gray-900 text-base sm:text-lg group-hover:text-[#5C0102] transition-colors duration-200">
                     {value.title}
                   </p>
                   {value.gloss && (
-                    <p className="text-gray-500 text-xs sm:text-sm mt-1.5 font-medium leading-relaxed">
+                    <p className="text-gray-500 text-xs sm:text-sm mt-2 font-medium leading-relaxed">
                       {value.gloss}
                     </p>
                   )}

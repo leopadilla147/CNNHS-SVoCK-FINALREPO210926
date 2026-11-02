@@ -48,13 +48,7 @@ const SLIDES: HeroSlide[] = [
     id: "welcome",
     eyebrow: "Welcome to CNNHS",
     showLogo: true,
-    title: (
-      <>
-        Camarines Norte
-        <br />
-        National High School
-      </>
-    ),
+    title: "Camarines Norte National High School",
     description: "Secure Online Elections for CNNHS Supreme Student Learner Government",
     tint: "linear-gradient(135deg, #5C0102 0%, #8B0103 50%, #3D0001 100%)",
     ctas: [{ label: "About CNNHS", to: "/about", primary: true }],
@@ -143,10 +137,10 @@ export function HeroCarousel() {
       onMouseLeave={() => setPaused(false)}
       onFocus={() => setPaused(true)}
       onBlur={() => setPaused(false)}
-      className="relative overflow-hidden text-white"
+      className="relative overflow-hidden text-white w-full h-[calc(100vh-4rem)] min-h-[580px] flex flex-col justify-between select-none"
       style={{ background: slide.tint }}
     >
-      <div className="relative min-h-[560px] sm:min-h-[580px] md:min-h-[620px]">
+      <div className="relative flex-1 w-full h-full">
         <AnimatePresence initial={false} custom={direction}>
           <motion.div
             key={index}
@@ -171,17 +165,34 @@ export function HeroCarousel() {
                 opacity: 0.15,
               }}
             />
-            <div className="relative h-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-20 flex flex-col items-center justify-center text-center">
+            <div className="relative h-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-16 flex flex-col items-center justify-center text-center">
               {slide.showLogo && (
-                <img src={cnnhsLogo} alt="CNNHS Logo" className="w-20 h-20 sm:w-24 sm:h-24 mx-auto mb-6" />
+                <div className="p-1 rounded-full bg-white/20 backdrop-blur-md border border-white/30 border-b-2 border-b-black/30 shadow-[0_6px_20px_rgba(0,0,0,0.25)] mx-auto mb-5 sm:mb-6">
+                  <img src={cnnhsLogo} alt="CNNHS Logo" className="w-20 h-20 sm:w-24 sm:h-24 rounded-full object-cover" />
+                </div>
               )}
-              <p className="text-xs sm:text-sm font-medium uppercase tracking-[0.2em] text-white/70 mb-4">
+              <p className="text-xs sm:text-sm font-bold uppercase tracking-[0.2em] text-white/85 mb-4 px-3.5 py-1 rounded-full bg-white/10 backdrop-blur-xs border border-white/15 shadow-[0_2px_4px_rgba(0,0,0,0.1)]">
                 {slide.eyebrow}
               </p>
-              <h1 className="text-3xl sm:text-5xl md:text-6xl text-white mb-4" style={{ fontWeight: 700 }}>
+              <h1
+                className={cn(
+                  "text-white mb-4 tracking-tight drop-shadow-md font-extrabold",
+                  slide.id === "welcome"
+                    ? "text-xl sm:text-3xl md:text-4xl lg:text-5xl xl:text-6xl whitespace-nowrap"
+                    : "text-3xl sm:text-5xl md:text-6xl",
+                )}
+                style={{ fontWeight: 800 }}
+              >
                 {slide.title}
               </h1>
-              <p className="text-white/70 text-base sm:text-lg md:text-xl mb-8 max-w-2xl mx-auto">
+              <p
+                className={cn(
+                  "text-white/85 mb-8 mx-auto font-medium leading-relaxed drop-shadow-xs",
+                  slide.id === "welcome"
+                    ? "text-xs sm:text-sm md:text-base lg:text-lg xl:text-xl whitespace-nowrap max-w-5xl"
+                    : "text-base sm:text-lg md:text-xl max-w-2xl",
+                )}
+              >
                 {slide.description}
               </p>
               {visibleCtas.length > 0 && (
@@ -195,14 +206,14 @@ export function HeroCarousel() {
                         key={cta.to}
                         to={href}
                         className={cn(
-                          "px-6 py-3 rounded-xl text-sm font-medium transition-all",
+                          "px-6 py-3 rounded-xl text-sm font-bold transition-all duration-200 cursor-pointer flex items-center gap-1.5",
                           cta.primary
-                            ? "bg-white hover:shadow-lg hover:-translate-y-0.5"
-                            : "border border-white/40 text-white hover:bg-white/10",
+                            ? "bg-white text-[#5C0102] border-b-[3.5px] border-b-stone-300 shadow-[0_4px_14px_rgba(0,0,0,0.25),inset_0_1px_0_rgba(255,255,255,1)] hover:brightness-105 hover:shadow-[0_8px_22px_rgba(0,0,0,0.32)] hover:-translate-y-0.5 active:translate-y-[1px] active:border-b-2"
+                            : "bg-white/15 text-white border border-white/35 border-b-[3px] border-b-black/25 backdrop-blur-xs shadow-[0_4px_14px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.3)] hover:bg-white/25 hover:-translate-y-0.5 active:translate-y-[1px] active:border-b-2",
                         )}
                         style={cta.primary ? { color: "#5C0102" } : undefined}
                       >
-                        {cta.label} {cta.primary && <ChevronRight size={16} className="inline" />}
+                        {cta.label} {cta.primary && <ChevronRight size={16} className="inline ml-0.5" />}
                       </Link>
                     );
                   })}
@@ -218,21 +229,21 @@ export function HeroCarousel() {
         type="button"
         onClick={goPrev}
         aria-label="Previous slide"
-        className="absolute left-3 sm:left-6 top-1/2 -translate-y-1/2 z-20 w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/10 border border-white/30 backdrop-blur-sm text-white flex items-center justify-center hover:bg-white/25 transition-colors"
+        className="absolute left-3 sm:left-6 top-1/2 -translate-y-1/2 z-20 w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-black/25 hover:bg-black/40 border border-white/30 border-b-2 border-b-black/40 backdrop-blur-md text-white flex items-center justify-center shadow-[0_4px_12px_rgba(0,0,0,0.25)] active:translate-y-[1px] transition-all cursor-pointer"
       >
-        <ChevronLeft size={20} />
+        <ChevronLeft size={22} />
       </button>
       <button
         type="button"
         onClick={goNext}
         aria-label="Next slide"
-        className="absolute right-3 sm:right-6 top-1/2 -translate-y-1/2 z-20 w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/10 border border-white/30 backdrop-blur-sm text-white flex items-center justify-center hover:bg-white/25 transition-colors"
+        className="absolute right-3 sm:right-6 top-1/2 -translate-y-1/2 z-20 w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-black/25 hover:bg-black/40 border border-white/30 border-b-2 border-b-black/40 backdrop-blur-md text-white flex items-center justify-center shadow-[0_4px_12px_rgba(0,0,0,0.25)] active:translate-y-[1px] transition-all cursor-pointer"
       >
-        <ChevronRight size={20} />
+        <ChevronRight size={22} />
       </button>
 
       {/* Dot indicators */}
-      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2">
+      <div className="absolute bottom-5 sm:bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-black/25 backdrop-blur-md border border-white/20 shadow-[0_2px_8px_rgba(0,0,0,0.2)]">
         {SLIDES.map((item, i) => (
           <button
             key={item.id}
@@ -241,8 +252,8 @@ export function HeroCarousel() {
             aria-label={`Go to ${item.eyebrow} slide`}
             aria-current={i === index}
             className={cn(
-              "h-2 rounded-full transition-all duration-300",
-              i === index ? "w-7 bg-white" : "w-2 bg-white/40 hover:bg-white/70",
+              "h-2.5 rounded-full transition-all duration-300 cursor-pointer",
+              i === index ? "w-8 bg-white shadow-[0_0_8px_rgba(255,255,255,0.8)]" : "w-2.5 bg-white/40 hover:bg-white/70",
             )}
           />
         ))}

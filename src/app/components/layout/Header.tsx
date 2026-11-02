@@ -49,17 +49,17 @@ export function Header() {
     pathname.startsWith("/calendar");
 
   const navLinkClass = (active: boolean) =>
-    `px-3 py-1.5 rounded-xl text-sm font-medium transition-all duration-200 ${
+    `px-3.5 py-1.5 rounded-xl text-sm transition-all duration-200 ${
       active
-        ? "text-[#5C0102] bg-[#5C0102]/10 font-semibold shadow-xs"
-        : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/70"
+        ? "text-[#5C0102] bg-gradient-to-b from-red-50 to-red-100/70 border border-red-200/90 border-b-2 border-b-red-300 font-bold shadow-[0_2px_5px_rgba(92,1,2,0.06),inset_0_1px_0_rgba(255,255,255,0.9)]"
+        : "text-gray-700 hover:text-[#5C0102] hover:bg-gradient-to-b hover:from-white hover:to-stone-100/80 border border-transparent hover:border-gray-200/70 hover:shadow-[0_2px_6px_rgba(0,0,0,0.03)] font-medium"
     }`;
 
   const dropdownTriggerClass = (active: boolean, isOpen: boolean) =>
-    `flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-sm font-medium transition-all duration-200 cursor-pointer ${
+    `flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-sm transition-all duration-200 cursor-pointer ${
       active || isOpen
-        ? "text-[#5C0102] bg-[#5C0102]/10 font-semibold"
-        : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/70"
+        ? "text-[#5C0102] bg-gradient-to-b from-red-50 to-red-100/70 border border-red-200/90 border-b-2 border-b-red-300 font-bold shadow-[0_2px_5px_rgba(92,1,2,0.06),inset_0_1px_0_rgba(255,255,255,0.9)]"
+        : "text-gray-700 hover:text-[#5C0102] hover:bg-gradient-to-b hover:from-white hover:to-stone-100/80 border border-transparent hover:border-gray-200/70 hover:shadow-[0_2px_6px_rgba(0,0,0,0.03)] font-medium"
     }`;
 
   // The desktop bar and the mobile panel are siblings, so the outside-click
@@ -178,26 +178,31 @@ export function Header() {
     <>
       <header
         ref={headerRef}
-        className={`w-full sticky top-0 z-50 transition-all duration-300 bg-white/80 backdrop-blur-md supports-[backdrop-filter]:bg-white/75 ${
+        className={`w-full sticky top-0 z-50 transition-all duration-300 ${
           scrolled
-            ? "border-b border-gray-200/80 shadow-xs shadow-black/5"
-            : "border-b border-gray-200/60 shadow-xs"
+            ? "border-b border-gray-200/90 border-b-[2.5px] border-b-gray-300/80 shadow-[0_6px_20px_-2px_rgba(0,0,0,0.08),0_2px_6px_rgba(0,0,0,0.03)] bg-white/95 backdrop-blur-md"
+            : "border-b border-gray-200/80 border-b-[2px] border-b-gray-200 shadow-[0_2px_10px_rgba(0,0,0,0.03)] bg-white/90 backdrop-blur-md"
         }`}
       >
+        {/* Subtle top 3D accent border bar */}
+        <div className="h-[2.5px] w-full bg-gradient-to-r from-[#5C0102] via-[#8B0103] to-[#5C0102] shadow-[0_1px_3px_rgba(92,1,2,0.3)]" />
+
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             {/* Logo + Name */}
             <Link to="/" className="flex items-center gap-3 flex-shrink-0 group">
-              <img
-                src={cnnhsLogo}
-                alt="CNNHS Logo"
-                className="w-10 h-10 rounded-full object-cover ring-2 ring-white/80 shadow-xs group-hover:scale-105 transition-transform duration-200"
-              />
+              <div className="relative p-0.5 rounded-full bg-gradient-to-b from-white to-stone-200 border border-stone-200/80 shadow-[0_2px_6px_rgba(0,0,0,0.1),inset_0_1px_0_rgba(255,255,255,1)] group-hover:shadow-[0_3px_10px_rgba(92,1,2,0.2)] transition-all duration-200">
+                <img
+                  src={cnnhsLogo}
+                  alt="CNNHS Logo"
+                  className="w-10 h-10 rounded-full object-cover group-hover:scale-105 transition-transform duration-200"
+                />
+              </div>
               <div className="hidden sm:block">
-                <div className="text-sm font-bold tracking-tight group-hover:opacity-90 transition-opacity" style={{ color: "#5C0102" }}>
+                <div className="text-sm font-extrabold tracking-tight group-hover:opacity-90 transition-opacity" style={{ color: "#5C0102" }}>
                   CNNHS
                 </div>
-                <div className="text-xs text-gray-500 leading-tight font-medium">Online Voting System</div>
+                <div className="text-xs text-gray-500 leading-tight font-semibold">Online Voting System</div>
               </div>
             </Link>
 
@@ -246,14 +251,14 @@ export function Header() {
                   />
                 </button>
                 {dropdowns.results && (
-                  <div className="absolute left-0 mt-2 w-56 bg-white/95 backdrop-blur-xl border border-gray-200/70 rounded-2xl shadow-xl shadow-gray-900/10 p-1.5 z-50">
+                  <div className="absolute left-0 mt-2 w-56 bg-gradient-to-b from-white via-[#fdfbfb] to-[#faf5f5] backdrop-blur-xl border border-gray-200/90 border-b-[3.5px] border-b-gray-300 rounded-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.12),0_4px_12px_rgba(0,0,0,0.05),inset_0_1px_0_rgba(255,255,255,1)] p-1.5 z-50">
                     <Link
                       to="/official-results"
                       onClick={() => toggleDropdown("results")}
-                      className={`flex w-full items-center gap-2 px-3.5 py-2 text-sm rounded-xl transition-colors ${
+                      className={`flex w-full items-center gap-2 px-3.5 py-2 text-sm rounded-xl transition-all ${
                         pathname === "/official-results"
-                          ? "bg-[#5C0102]/10 text-[#5C0102] font-semibold"
-                          : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/70"
+                          ? "bg-gradient-to-b from-red-50 to-red-100/70 border border-red-200/80 text-[#5C0102] font-bold shadow-[0_1px_3px_rgba(92,1,2,0.05)]"
+                          : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/80 font-medium"
                       }`}
                     >
                       Official Results
@@ -261,10 +266,10 @@ export function Header() {
                     <Link
                       to="/past-elections"
                       onClick={() => toggleDropdown("results")}
-                      className={`flex w-full items-center gap-2 px-3.5 py-2 text-sm rounded-xl transition-colors ${
+                      className={`flex w-full items-center gap-2 px-3.5 py-2 text-sm rounded-xl transition-all ${
                         pathname === "/past-elections"
-                          ? "bg-[#5C0102]/10 text-[#5C0102] font-semibold"
-                          : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/70"
+                          ? "bg-gradient-to-b from-red-50 to-red-100/70 border border-red-200/80 text-[#5C0102] font-bold shadow-[0_1px_3px_rgba(92,1,2,0.05)]"
+                          : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/80 font-medium"
                       }`}
                     >
                       Past Elections
@@ -288,14 +293,14 @@ export function Header() {
                   />
                 </button>
                 {dropdowns.resources && (
-                  <div className="absolute left-0 mt-2 w-60 bg-white/95 backdrop-blur-xl border border-gray-200/70 rounded-2xl shadow-xl shadow-gray-900/10 p-1.5 z-50">
+                  <div className="absolute left-0 mt-2 w-60 bg-gradient-to-b from-white via-[#fdfbfb] to-[#faf5f5] backdrop-blur-xl border border-gray-200/90 border-b-[3.5px] border-b-gray-300 rounded-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.12),0_4px_12px_rgba(0,0,0,0.05),inset_0_1px_0_rgba(255,255,255,1)] p-1.5 z-50">
                     <Link
                       to="/guidelines"
                       onClick={() => toggleDropdown("resources")}
-                      className={`flex w-full items-center gap-2 px-3.5 py-2 text-sm rounded-xl transition-colors ${
+                      className={`flex w-full items-center gap-2 px-3.5 py-2 text-sm rounded-xl transition-all ${
                         pathname === "/guidelines"
-                          ? "bg-[#5C0102]/10 text-[#5C0102] font-semibold"
-                          : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/70"
+                          ? "bg-gradient-to-b from-red-50 to-red-100/70 border border-red-200/80 text-[#5C0102] font-bold shadow-[0_1px_3px_rgba(92,1,2,0.05)]"
+                          : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/80 font-medium"
                       }`}
                     >
                       Election Guidelines
@@ -303,10 +308,10 @@ export function Header() {
                     <Link
                       to={getCalendarHref(currentUser)}
                       onClick={() => toggleDropdown("resources")}
-                      className={`flex w-full items-center gap-2 px-3.5 py-2 text-sm rounded-xl transition-colors ${
+                      className={`flex w-full items-center gap-2 px-3.5 py-2 text-sm rounded-xl transition-all ${
                         pathname.startsWith("/calendar")
-                          ? "bg-[#5C0102]/10 text-[#5C0102] font-semibold"
-                          : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/70"
+                          ? "bg-gradient-to-b from-red-50 to-red-100/70 border border-red-200/80 text-[#5C0102] font-bold shadow-[0_1px_3px_rgba(92,1,2,0.05)]"
+                          : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/80 font-medium"
                       }`}
                     >
                       Election Calendar
@@ -314,10 +319,10 @@ export function Header() {
                     <Link
                       to="/faq"
                       onClick={() => toggleDropdown("resources")}
-                      className={`flex w-full items-center gap-2 px-3.5 py-2 text-sm rounded-xl transition-colors ${
+                      className={`flex w-full items-center gap-2 px-3.5 py-2 text-sm rounded-xl transition-all ${
                         pathname === "/faq"
-                          ? "bg-[#5C0102]/10 text-[#5C0102] font-semibold"
-                          : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/70"
+                          ? "bg-gradient-to-b from-red-50 to-red-100/70 border border-red-200/80 text-[#5C0102] font-bold shadow-[0_1px_3px_rgba(92,1,2,0.05)]"
+                          : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/80 font-medium"
                       }`}
                     >
                       FAQ
@@ -325,10 +330,10 @@ export function Header() {
                     <Link
                       to="/contact"
                       onClick={() => toggleDropdown("resources")}
-                      className={`flex w-full items-center gap-2 px-3.5 py-2 text-sm rounded-xl transition-colors ${
+                      className={`flex w-full items-center gap-2 px-3.5 py-2 text-sm rounded-xl transition-all ${
                         pathname === "/contact"
-                          ? "bg-[#5C0102]/10 text-[#5C0102] font-semibold"
-                          : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/70"
+                          ? "bg-gradient-to-b from-red-50 to-red-100/70 border border-red-200/80 text-[#5C0102] font-bold shadow-[0_1px_3px_rgba(92,1,2,0.05)]"
+                          : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/80 font-medium"
                       }`}
                     >
                       Contact Information
@@ -344,14 +349,13 @@ export function Header() {
                 <>
                   <Link
                     to="/login"
-                    className="text-gray-700 hover:text-[#5C0102] px-3.5 py-2 rounded-xl hover:bg-gray-100/70 transition-all duration-200 text-sm font-medium"
+                    className="text-gray-700 hover:text-[#5C0102] px-3.5 py-1.5 rounded-xl hover:bg-gradient-to-b hover:from-white hover:to-stone-100/80 border border-transparent hover:border-gray-200/80 hover:shadow-[0_2px_5px_rgba(0,0,0,0.04)] transition-all duration-200 text-sm font-semibold"
                   >
                     Login
                   </Link>
                   <Link
                     to="/register"
-                    className="px-4 py-2 rounded-xl text-white text-sm font-medium transition-all duration-200 shadow-sm shadow-[#5C0102]/20 hover:shadow-md hover:shadow-[#5C0102]/30 hover:brightness-110 active:scale-95"
-                    style={{ backgroundColor: "#5C0102" }}
+                    className="px-4 py-1.5 rounded-xl text-white text-sm font-bold transition-all duration-200 bg-gradient-to-b from-[#7A0203] via-[#5C0102] to-[#450001] border-b-[2.5px] border-b-[#2e0001] shadow-[0_3px_10px_rgba(92,1,2,0.25),inset_0_1px_0_rgba(255,255,255,0.3)] hover:brightness-105 hover:shadow-[0_5px_14px_rgba(92,1,2,0.35)] active:translate-y-[1px] active:border-b-2 active:brightness-95"
                   >
                     Register
                   </Link>
@@ -360,18 +364,22 @@ export function Header() {
                 <div className="relative">
                   <button
                     onClick={() => toggleDropdown("user")}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-xl transition-all duration-200 text-sm ${
-                      dropdowns.user ? "bg-gray-100/80 shadow-xs" : "hover:bg-gray-100/70"
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-xl transition-all duration-200 text-sm cursor-pointer border ${
+                      dropdowns.user
+                        ? "bg-gradient-to-b from-stone-50 to-stone-100/90 border-stone-300 border-b-2 border-b-stone-400 shadow-[0_2px_6px_rgba(0,0,0,0.06),inset_0_1px_0_rgba(255,255,255,0.8)]"
+                        : "bg-white/80 border-gray-200/80 border-b-2 border-b-gray-300/80 hover:bg-stone-50 shadow-[0_1px_3px_rgba(0,0,0,0.03)]"
                     }`}
                   >
-                    <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold overflow-hidden shadow-xs ring-1 ring-white/80" style={{ backgroundColor: "#5C0102" }}>
+                    <div
+                      className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold overflow-hidden shadow-[0_2px_4px_rgba(92,1,2,0.3)] ring-1 ring-white/90 bg-gradient-to-b from-[#7A0203] to-[#450001]"
+                    >
                       {avatarPictureUrl ? (
                         <img src={avatarPictureUrl} alt="" className="w-7 h-7 object-cover" />
                       ) : (
                         currentUser.name.charAt(0)
                       )}
                     </div>
-                    <span className="text-gray-800 font-medium">{currentUser.name}</span>
+                    <span className="text-gray-800 font-bold">{currentUser.name}</span>
                     <ChevronDown
                       size={14}
                       className={`text-gray-500 transition-transform duration-200 ${
@@ -380,11 +388,13 @@ export function Header() {
                     />
                   </button>
                   {dropdowns.user && (
-                    <div className="absolute right-0 mt-2 w-64 bg-white/95 backdrop-blur-xl border border-gray-200/70 rounded-2xl shadow-xl shadow-gray-900/10 z-50 p-1.5">
+                    <div className="absolute right-0 mt-2 w-64 bg-gradient-to-b from-white via-[#fdfbfb] to-[#faf5f5] backdrop-blur-xl border border-gray-200/90 border-b-[3.5px] border-b-gray-300 rounded-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.12),0_4px_12px_rgba(0,0,0,0.05),inset_0_1px_0_rgba(255,255,255,1)] z-50 p-1.5">
                       {/* Identity block — photo, name, role/title, My Profile */}
-                      <div className="px-3.5 pt-3 pb-3 border-b border-gray-100 bg-gray-50/70 rounded-xl mb-1">
+                      <div className="px-3.5 pt-3 pb-3 border border-gray-200/80 border-b-2 border-b-gray-300/80 bg-gradient-to-b from-white to-stone-50/90 rounded-xl mb-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,1)]">
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold overflow-hidden flex-shrink-0 shadow-xs" style={{ backgroundColor: "#5C0102" }}>
+                          <div
+                            className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold overflow-hidden flex-shrink-0 bg-gradient-to-b from-[#7A0203] to-[#450001] shadow-[0_2px_6px_rgba(92,1,2,0.25),inset_0_1px_0_rgba(255,255,255,0.3)] border-b-2 border-b-[#2e0001]"
+                          >
                             {avatarPictureUrl ? (
                               <img src={avatarPictureUrl} alt="" className="w-10 h-10 object-cover" />
                             ) : (
@@ -392,14 +402,14 @@ export function Header() {
                             )}
                           </div>
                           <div className="min-w-0">
-                            <div className="text-sm font-semibold text-gray-900 truncate">{currentUser.name}</div>
-                            <div className="text-xs text-gray-500 truncate">{getUserRoleTitle(currentUser)}</div>
+                            <div className="text-sm font-extrabold text-gray-900 truncate">{currentUser.name}</div>
+                            <div className="text-xs text-gray-500 truncate font-medium">{getUserRoleTitle(currentUser)}</div>
                           </div>
                         </div>
                         <Link
                           to={profileHref}
                           onClick={() => toggleDropdown("user")}
-                          className="mt-2.5 flex w-full items-center gap-2 rounded-xl bg-white/90 border border-gray-200/80 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 hover:text-[#5C0102] transition-colors shadow-xs"
+                          className="mt-2.5 flex w-full items-center gap-2 rounded-xl bg-white border border-gray-200/90 border-b-2 border-b-gray-300 px-3 py-1.5 text-sm font-semibold text-gray-700 hover:bg-red-50/50 hover:text-[#5C0102] hover:border-[#5C0102]/30 transition-all shadow-[0_1px_2px_rgba(0,0,0,0.04)]"
                         >
                           <User size={14} /> My Profile
                         </Link>
@@ -410,7 +420,7 @@ export function Header() {
                           key={item.href}
                           to={item.href}
                           onClick={() => toggleDropdown("user")}
-                          className="flex w-full items-center gap-2.5 px-3.5 py-2 text-sm text-gray-700 hover:text-[#5C0102] hover:bg-gray-50/90 rounded-xl transition-colors"
+                          className="flex w-full items-center gap-2.5 px-3.5 py-2 text-sm text-gray-700 hover:text-[#5C0102] hover:bg-stone-100/80 rounded-xl transition-colors font-medium"
                         >
                           {item.icon}
                           <span>{item.label}</span>
@@ -419,7 +429,7 @@ export function Header() {
                       {userTabs.length > 0 && <div className="border-t border-gray-100 my-1" />}
                       <button
                         onClick={handleLogout}
-                        className="flex w-full items-center gap-2.5 px-3.5 py-2 text-sm text-red-600 hover:bg-red-50/90 rounded-xl transition-colors text-left font-medium"
+                        className="flex w-full items-center gap-2.5 px-3.5 py-2 text-sm text-red-600 hover:bg-red-50/90 rounded-xl transition-colors text-left font-bold cursor-pointer"
                       >
                         <LogOut size={16} /> Logout
                       </button>
@@ -436,7 +446,7 @@ export function Header() {
               aria-label="Toggle navigation menu"
               aria-expanded={mobileOpen}
               aria-controls="mobile-nav"
-              className="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-xl text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/70 transition-all duration-200 cursor-pointer active:scale-95"
+              className="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-xl text-gray-700 hover:text-[#5C0102] bg-white border border-gray-200/80 border-b-2 border-b-gray-300 hover:bg-stone-50 shadow-[0_1px_3px_rgba(0,0,0,0.04)] transition-all duration-200 cursor-pointer active:translate-y-[1px]"
             >
               {mobileOpen ? <X size={22} /> : <Menu size={22} />}
             </button>
@@ -450,7 +460,7 @@ export function Header() {
         ref={mobilePanelRef}
         className={`${
           mobileOpen ? "block" : "hidden"
-        } md:hidden border-b border-gray-200/70 bg-white/95 backdrop-blur-xl px-4 py-4 space-y-1.5 shadow-lg transition-all duration-200`}
+        } md:hidden border-b-[3.5px] border-b-gray-300 bg-gradient-to-b from-white via-[#fdfbfb] to-[#faf5f5] backdrop-blur-xl px-4 py-4 space-y-1.5 shadow-[0_12px_28px_-6px_rgba(0,0,0,0.12)] transition-all duration-200`}
       >
         <Link
           to="/"
@@ -637,32 +647,31 @@ export function Header() {
         </div>
 
         {!currentUser ? (
-          <div className="pt-2 border-t border-gray-200/60 space-y-2">
+          <div className="pt-2 border-t border-gray-200/80 space-y-2">
             <Link
               to="/login"
               onClick={() => setMobileOpen(false)}
-              className="block w-full py-2.5 px-4 rounded-xl text-center text-gray-700 hover:bg-gray-100/70 font-medium text-sm transition-colors"
+              className="block w-full py-2.5 px-4 rounded-xl text-center text-gray-700 bg-white border border-gray-200/80 border-b-2 border-b-gray-300 hover:bg-stone-50 font-bold text-sm shadow-[0_1px_3px_rgba(0,0,0,0.04)] transition-all"
             >
               Login
             </Link>
             <Link
               to="/register"
               onClick={() => setMobileOpen(false)}
-              className="block w-full py-2.5 px-4 rounded-xl text-white text-sm font-semibold text-center shadow-sm shadow-[#5C0102]/20 hover:brightness-110 transition-all"
-              style={{ backgroundColor: "#5C0102" }}
+              className="block w-full py-2.5 px-4 rounded-xl text-white text-sm font-bold text-center bg-gradient-to-b from-[#7A0203] via-[#5C0102] to-[#450001] border-b-[2.5px] border-b-[#2e0001] shadow-[0_3px_10px_rgba(92,1,2,0.25),inset_0_1px_0_rgba(255,255,255,0.3)] hover:brightness-105 active:translate-y-[1px] transition-all"
             >
               Register
             </Link>
           </div>
         ) : (
-          <div className="pt-2 border-t border-gray-200/60 space-y-1">
+          <div className="pt-2 border-t border-gray-200/80 space-y-1">
             {/* Signed-in tabs — mirrors the desktop user dropdown */}
             {userTabs.map((item) => (
               <Link
                 key={item.href}
                 to={item.href}
                 onClick={() => setMobileOpen(false)}
-                className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-gray-700 hover:bg-gray-100/70 text-sm font-medium transition-colors"
+                className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-gray-700 hover:text-[#5C0102] hover:bg-stone-100/80 text-sm font-medium transition-colors"
               >
                 {item.icon}
                 <span>{item.label}</span>
@@ -671,7 +680,7 @@ export function Header() {
             <Link
               to={profileHref}
               onClick={() => setMobileOpen(false)}
-              className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-gray-700 hover:bg-gray-100/70 text-sm font-medium transition-colors"
+              className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-gray-700 hover:text-[#5C0102] hover:bg-stone-100/80 text-sm font-medium transition-colors"
             >
               <User size={18} /> My Profile
             </Link>
@@ -680,7 +689,7 @@ export function Header() {
                 handleLogout();
                 setMobileOpen(false);
               }}
-              className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-red-600 hover:bg-red-50 text-sm font-medium w-full text-left transition-colors"
+              className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-red-600 hover:bg-red-50 text-sm font-bold w-full text-left transition-colors cursor-pointer"
             >
               <LogOut size={16} /> Logout
             </button>

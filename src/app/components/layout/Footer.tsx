@@ -92,7 +92,18 @@ export function Footer() {
             <h3 className="text-white font-semibold mb-2">Contact Us</h3>
             <p className="flex items-center space-x-2 text-gray-400">
               <Mail size={16} />
-              <span>{homepageSettings.contactEmail}</span>
+              <a
+                href={`mailto:${
+                  homepageSettings.contactEmail && homepageSettings.contactEmail !== "cnnhs@gmail.com"
+                    ? homepageSettings.contactEmail
+                    : "cnnhsonline@gmail.com"
+                }`}
+                className="hover:text-white transition-colors"
+              >
+                {homepageSettings.contactEmail && homepageSettings.contactEmail !== "cnnhs@gmail.com"
+                  ? homepageSettings.contactEmail
+                  : "cnnhsonline@gmail.com"}
+              </a>
             </p>
             <p className="flex items-start space-x-2 text-gray-400">
               <MapPin size={16} className="mt-0.5 flex-shrink-0" />

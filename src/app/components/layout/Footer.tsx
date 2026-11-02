@@ -23,7 +23,13 @@ export function Footer() {
               Supreme Student Learner Government elections.
             </p>
             <div className="flex space-x-4 mt-4">
-              <a href="#" className="text-gray-400 hover:text-white transition-colors" aria-label="Facebook">
+              <a
+                href="https://www.facebook.com/CamHighCN"
+                target="_blank"
+                rel="noreferrer"
+                className="text-gray-400 hover:text-white transition-colors"
+                aria-label="Facebook"
+              >
                 <Facebook size={20} />
               </a>
             </div>

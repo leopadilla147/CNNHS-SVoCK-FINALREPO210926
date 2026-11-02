@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { ArrowLeft, CheckCircle, AlertCircle, Eye, EyeOff } from "lucide-react";
+import {
+  ArrowLeft,
+  CheckCircle,
+  AlertCircle,
+  Eye,
+  EyeOff,
+  GraduationCap,
+  Lock,
+  ShieldCheck,
+  UserCheck,
+} from "lucide-react";
 import { motion } from "motion/react";
 import { useApp } from "../context/AppContext";
 import { isSupabaseConfigured } from "../lib/supabase";
@@ -12,6 +22,7 @@ import {
   type MasterlistMatchRecord,
 } from "../lib/supabaseData";
 import { useConfirm } from "../lib/useConfirm";
+import cnnhsLogo from "../assets/CNNHS_Logo1.png";
 
 const GRADE_LEVELS = ["Grade 7", "Grade 8", "Grade 9", "Grade 10", "Grade 11", "Grade 12"];
 const GENDERS = ["Male", "Female"];
@@ -50,7 +61,7 @@ const InputField = ({
   disabled = false,
 }: InputFieldProps) => (
   <div>
-    <label className="block text-sm text-gray-700 mb-1.5">
+    <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 mb-1.5">
       {label} {required && <span className="text-red-500">*</span>}
     </label>
     <input
@@ -59,14 +70,18 @@ const InputField = ({
       onChange={(e) => onChange(field, e.target.value)}
       placeholder={placeholder}
       disabled={disabled}
-      className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-[#5C0102] transition-all bg-gray-50 ${
-        error ? "border-red-400" : "border-gray-200"
-      } ${disabled ? "opacity-60 cursor-not-allowed bg-gray-100" : ""}`}
+      className={`w-full px-4 py-2.5 rounded-xl text-sm transition-all duration-200 outline-none ${
+        disabled
+          ? "opacity-60 cursor-not-allowed bg-gray-100 border border-gray-200 text-gray-500"
+          : error
+            ? "border border-red-400 bg-red-50/20 text-gray-900 focus:ring-4 focus:ring-red-100 focus:border-red-500"
+            : "border border-gray-200 bg-gray-50/70 text-gray-900 placeholder:text-gray-400 focus:bg-white focus:border-[#5C0102] focus:ring-4 focus:ring-[#5C0102]/10"
+      }`}
     />
     {hint && !error && <p className="text-xs text-gray-400 mt-1">{hint}</p>}
     {error && (
-      <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
-        <AlertCircle size={12} /> {error}
+      <p className="text-xs text-red-600 mt-1.5 flex items-center gap-1 font-medium">
+        <AlertCircle size={13} className="shrink-0" /> {error}
       </p>
     )}
   </div>
@@ -98,7 +113,11 @@ export default function RegisterPage() {
   const [lrnStatus, setLrnStatus] = useState<LrnStatus>("idle");
   const [masterRecord, setMasterRecord] = useState<MasterlistMatchRecord | null>(null);
   const [mismatch, setMismatch] = useState(false);
-  const submitConfirm = useConfirm({ title: "Submit Registration?", description: "Are you sure you want to register with the provided information?", confirmText: "Submit" });
+  const submitConfirm = useConfirm({
+    title: "Submit Registration?",
+    description: "Are you sure you want to register with the provided information?",
+    confirmText: "Submit",
+  });
 
   // Sequence guard: only the newest LRN check may update state, so a slow
   // in-flight response can never overwrite the result of a newer one.
@@ -296,18 +315,29 @@ export default function RegisterPage() {
     return (
       <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center px-4 py-12 bg-gray-50">
         <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
+          initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="bg-white rounded-2xl shadow-sm border border-gray-200 p-10 max-w-md w-full text-center"
+          transition={{ duration: 0.35 }}
+          className="bg-white rounded-3xl shadow-xl border border-gray-100 p-8 sm:p-12 max-w-lg w-full text-center relative overflow-hidden"
         >
+          {/* Top accent gradient bar */}
           <div
-            className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-5"
-            style={{ backgroundColor: "#FFF0F0" }}
+            className="absolute top-0 left-0 right-0 h-2"
+            style={{ background: "linear-gradient(90deg, #5C0102, #8B0103)" }}
+          />
+
+          <div
+            className="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-sm"
+            style={{ backgroundColor: "rgba(92, 1, 2, 0.08)" }}
           >
-            <CheckCircle size={32} style={{ color: "#5C0102" }} />
+            <CheckCircle size={40} style={{ color: "#5C0102" }} />
           </div>
-          <h2 className="text-gray-900 mb-3">Registration Submitted!</h2>
-          <p className="text-gray-500 text-sm mb-6">
+
+          <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-3 tracking-tight">
+            Registration Submitted!
+          </h2>
+
+          <p className="text-gray-600 text-sm sm:text-base leading-relaxed mb-6 max-w-sm mx-auto">
             {submittedStatus === "approved" ? (
               <>
                 Your registration details matched the official{" "}
@@ -322,14 +352,19 @@ export default function RegisterPage() {
               </>
             )}
           </p>
+
           {submittedStatus === "pending" && (
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700 mb-6">
-              The SSLG Adviser can approve your account from Student Enrollment once your details are verified.
+            <div className="bg-amber-50 border border-amber-200/80 rounded-2xl p-4 text-xs sm:text-sm text-amber-800 mb-6 text-left flex items-start gap-3">
+              <AlertCircle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+              <span>
+                The SSLG Adviser can approve your account from Student Enrollment once your details are verified against school records.
+              </span>
             </div>
           )}
+
           <Link
             to="/login"
-            className="block w-full py-2.5 text-white rounded-lg text-sm font-medium text-center transition-all hover:opacity-90"
+            className="block w-full py-3 text-white rounded-xl text-sm font-semibold text-center transition-all duration-200 hover:opacity-90 shadow-md"
             style={{ backgroundColor: "#5C0102" }}
           >
             Go to Login
@@ -349,36 +384,38 @@ export default function RegisterPage() {
   const lrnBanner = (() => {
     if (lrnStatus === "checking") {
       return (
-        <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs text-gray-600">
-          <div className="w-3.5 h-3.5 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />
-          Checking LRN in the system...
+        <div className="flex items-center gap-2.5 bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs text-gray-600">
+          <div className="w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin shrink-0" />
+          <span>Checking LRN in the system...</span>
         </div>
       );
     }
     if (lrnStatus === "approved") {
       return (
-        <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700">
-          <AlertCircle size={14} className="mt-0.5 shrink-0" />
-          <span>
+        <div className="flex items-start gap-2.5 bg-red-50 border border-red-200 rounded-xl p-3.5 text-xs text-red-700">
+          <AlertCircle size={16} className="mt-0.5 shrink-0" />
+          <span className="leading-relaxed">
             This LRN is already registered and approved. Please{" "}
-            <Link to="/login" className="underline font-medium">log in instead</Link>.
+            <Link to="/login" className="underline font-bold hover:text-red-900">log in instead</Link>.
           </span>
         </div>
       );
     }
     if (lrnStatus === "pendingReview") {
       return (
-        <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700">
-          <AlertCircle size={14} className="mt-0.5 shrink-0" />
-          <span>This LRN already has a registration awaiting SSLG Adviser review. You cannot register again with this LRN.</span>
+        <div className="flex items-start gap-2.5 bg-red-50 border border-red-200 rounded-xl p-3.5 text-xs text-red-700">
+          <AlertCircle size={16} className="mt-0.5 shrink-0" />
+          <span className="leading-relaxed">
+            This LRN already has a registration awaiting SSLG Adviser review. You cannot register again with this LRN.
+          </span>
         </div>
       );
     }
     if (lrnStatus === "inMasterlist") {
       return (
-        <div className="flex items-start gap-2 bg-green-50 border border-green-200 rounded-lg p-3 text-xs text-green-700">
-          <CheckCircle size={14} className="mt-0.5 shrink-0" />
-          <span>
+        <div className="flex items-start gap-2.5 bg-emerald-50 border border-emerald-200 rounded-xl p-3.5 text-xs text-emerald-800">
+          <CheckCircle size={16} className="mt-0.5 shrink-0 text-emerald-600" />
+          <span className="leading-relaxed">
             LRN found in the <strong>Student Masterlist</strong>. Enter your details exactly as
             enrolled — full name, grade level, gender, and birthdate. Exact matches are approved
             automatically; any mismatch prevents registration.
@@ -388,9 +425,9 @@ export default function RegisterPage() {
     }
     if (lrnStatus === "notFound") {
       return (
-        <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700">
-          <AlertCircle size={14} className="mt-0.5 shrink-0" />
-          <span>
+        <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-800">
+          <AlertCircle size={16} className="mt-0.5 shrink-0 text-amber-600" />
+          <span className="leading-relaxed">
             Your LRN was not found in the system or the Student Masterlist. You may still
             register, but your account will <strong>wait for SSLG Adviser verification</strong>.
           </span>
@@ -399,9 +436,11 @@ export default function RegisterPage() {
     }
     if (lrnStatus === "error") {
       return (
-        <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700">
-          <AlertCircle size={14} className="mt-0.5 shrink-0" />
-          <span>The system could not check this LRN right now. You can still submit — duplicate registrations are rejected automatically.</span>
+        <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-800">
+          <AlertCircle size={16} className="mt-0.5 shrink-0 text-amber-600" />
+          <span className="leading-relaxed">
+            The system could not check this LRN right now. You can still submit — duplicate registrations are rejected automatically.
+          </span>
         </div>
       );
     }
@@ -409,38 +448,73 @@ export default function RegisterPage() {
   })();
 
   return (
-    <div className="min-h-[calc(100vh-4rem)] bg-gray-50 py-10 px-4">
+    <div className="min-h-[calc(100vh-4rem)] bg-gray-50 py-10 sm:py-14 px-4 sm:px-6">
       <div className="max-w-2xl mx-auto">
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4 }}
         >
+          {/* ── Page Header ────────────────────────────────────── */}
           <div className="mb-6">
             <Link
               to="/login"
-              className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 mb-5 transition-colors"
+              className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-gray-500 hover:text-[#5C0102] mb-5 transition-colors group"
             >
-              <ArrowLeft size={14} /> Back to Login
+              <ArrowLeft size={16} className="transition-transform group-hover:-translate-x-1" />
+              <span>Back to Login</span>
             </Link>
-            <h1 className="text-gray-900 mb-1">Student Registration</h1>
-            <p className="text-gray-500 text-sm">
+
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 rounded-xl bg-white border border-gray-100 shadow-xs flex items-center justify-center p-1.5">
+                <img src={cnnhsLogo} alt="" className="w-full h-full object-contain rounded-full" />
+              </div>
+              <div>
+                <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: "#5C0102" }}>
+                  Learner Enrollment
+                </span>
+                <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 tracking-tight">
+                  Student Registration
+                </h1>
+              </div>
+            </div>
+
+            <p className="text-gray-500 text-xs sm:text-sm leading-relaxed mt-2">
               Enter your LRN first — the system checks it as you type. LRNs found in the
               Student Masterlist must match it exactly to be approved automatically;
               LRNs not in the system yet wait for SSLG Adviser review.
             </p>
           </div>
 
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-            {/* Header */}
-            <div className="px-6 py-4 border-b border-gray-100" style={{ backgroundColor: "#FFF5F5" }}>
-              <h3 className="text-sm" style={{ color: "#5C0102" }}>
-                Personal Information
-              </h3>
-              <p className="text-xs text-gray-500 mt-0.5">Fields marked with * are required</p>
+          {/* ── Main Form Card ─────────────────────────────────── */}
+          <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+            {/* Card Section Header */}
+            <div
+              className="px-6 sm:px-8 py-5 border-b border-gray-100 flex items-center justify-between"
+              style={{ backgroundColor: "rgba(92, 1, 2, 0.03)" }}
+            >
+              <div className="flex items-center gap-2.5">
+                <div
+                  className="w-8 h-8 rounded-lg flex items-center justify-center text-white"
+                  style={{ backgroundColor: "#5C0102" }}
+                >
+                  <UserCheck size={16} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-gray-900">
+                    Personal Information
+                  </h3>
+                  <p className="text-[11px] text-gray-500 mt-0.5">Fields marked with * are required</p>
+                </div>
+              </div>
+
+              <div className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium text-gray-600 bg-white border border-gray-200">
+                <GraduationCap size={13} style={{ color: "#5C0102" }} />
+                <span>SSLG Voter</span>
+              </div>
             </div>
 
-            <div className="p-6 space-y-4">
+            <div className="p-6 sm:p-8 space-y-6">
               {/* LRN — first field, checked against the system as you type */}
               <div className="space-y-2">
                 <InputField
@@ -455,7 +529,7 @@ export default function RegisterPage() {
                 {lrnBanner}
               </div>
 
-              {/* Name Fields */}
+              {/* Name Fields — 3 columns */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <InputField
                   label="First Name"
@@ -489,14 +563,16 @@ export default function RegisterPage() {
               {/* Grade Level, Gender, Birthdate — one line, 3 columns */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-sm text-gray-700 mb-1.5">
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 mb-1.5">
                     Grade Level <span className="text-red-500">*</span>
                   </label>
                   <select
                     value={form.gradeLevel}
                     onChange={(e) => update("gradeLevel", e.target.value)}
-                    className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-[#5C0102] transition-all bg-gray-50 ${
-                      errors.gradeLevel ? "border-red-400" : "border-gray-200"
+                    className={`w-full px-4 py-2.5 rounded-xl text-sm transition-all duration-200 outline-none ${
+                      errors.gradeLevel
+                        ? "border border-red-400 bg-red-50/20 text-gray-900 focus:ring-4 focus:ring-red-100"
+                        : "border border-gray-200 bg-gray-50/70 text-gray-900 focus:bg-white focus:border-[#5C0102] focus:ring-4 focus:ring-[#5C0102]/10"
                     }`}
                   >
                     <option value="">Select grade level</option>
@@ -507,20 +583,23 @@ export default function RegisterPage() {
                     ))}
                   </select>
                   {errors.gradeLevel && (
-                    <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
-                      <AlertCircle size={12} /> {errors.gradeLevel}
+                    <p className="text-xs text-red-600 mt-1.5 flex items-center gap-1 font-medium">
+                      <AlertCircle size={13} className="shrink-0" /> {errors.gradeLevel}
                     </p>
                   )}
                 </div>
+
                 <div>
-                  <label className="block text-sm text-gray-700 mb-1.5">
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 mb-1.5">
                     Gender <span className="text-red-500">*</span>
                   </label>
                   <select
                     value={form.gender}
                     onChange={(e) => update("gender", e.target.value)}
-                    className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-[#5C0102] transition-all bg-gray-50 ${
-                      errors.gender ? "border-red-400" : "border-gray-200"
+                    className={`w-full px-4 py-2.5 rounded-xl text-sm transition-all duration-200 outline-none ${
+                      errors.gender
+                        ? "border border-red-400 bg-red-50/20 text-gray-900 focus:ring-4 focus:ring-red-100"
+                        : "border border-gray-200 bg-gray-50/70 text-gray-900 focus:bg-white focus:border-[#5C0102] focus:ring-4 focus:ring-[#5C0102]/10"
                     }`}
                   >
                     <option value="">Select gender</option>
@@ -531,11 +610,12 @@ export default function RegisterPage() {
                     ))}
                   </select>
                   {errors.gender && (
-                    <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
-                      <AlertCircle size={12} /> {errors.gender}
+                    <p className="text-xs text-red-600 mt-1.5 flex items-center gap-1 font-medium">
+                      <AlertCircle size={13} className="shrink-0" /> {errors.gender}
                     </p>
                   )}
                 </div>
+
                 <InputField
                   label="Birthdate"
                   field="birthdate"
@@ -548,18 +628,30 @@ export default function RegisterPage() {
 
               {/* Locked MASTER-02 rule: details must match the masterlist exactly */}
               {mismatch && (
-                <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700">
-                  <AlertCircle size={14} className="mt-0.5 shrink-0" />
-                  <span>
+                <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-2xl p-4 text-xs sm:text-sm text-red-700 shadow-xs">
+                  <AlertCircle size={18} className="mt-0.5 shrink-0 text-red-600" />
+                  <span className="leading-relaxed">
                     Your details do not match the Student Masterlist record for this LRN.
                     Registration cannot continue until all details match.
                   </span>
                 </div>
               )}
 
-              {/* Account Details */}
-              <div className="pt-4 border-t border-gray-100">
-                <h3 className="text-sm font-medium text-gray-700 mb-4">Account Details</h3>
+              {/* ── Account Details Section ──────────────────────── */}
+              <div className="pt-6 border-t border-gray-100">
+                <div className="flex items-center gap-2 mb-4">
+                  <div
+                    className="w-7 h-7 rounded-lg flex items-center justify-center text-white"
+                    style={{ backgroundColor: "#5C0102" }}
+                  >
+                    <Lock size={14} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-gray-900">Account Credentials</h3>
+                    <p className="text-[11px] text-gray-500">Used for signing in and voter access</p>
+                  </div>
+                </div>
+
                 <div className="space-y-4">
                   <InputField
                     label="Email Address"
@@ -570,9 +662,10 @@ export default function RegisterPage() {
                     onChange={update}
                     error={errors.email}
                   />
+
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm text-gray-700 mb-1.5">
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 mb-1.5">
                         Password <span className="text-red-500">*</span>
                       </label>
                       <div className="relative">
@@ -581,26 +674,31 @@ export default function RegisterPage() {
                           value={form.password}
                           onChange={(e) => update("password", e.target.value)}
                           placeholder="Min. 6 characters"
-                          className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-[#5C0102] transition-all bg-gray-50 pr-10 ${
-                            errors.password ? "border-red-400" : "border-gray-200"
+                          className={`w-full pl-4 pr-11 py-2.5 rounded-xl text-sm transition-all duration-200 outline-none ${
+                            errors.password
+                              ? "border border-red-400 bg-red-50/20 text-gray-900 focus:ring-4 focus:ring-red-100"
+                              : "border border-gray-200 bg-gray-50/70 text-gray-900 focus:bg-white focus:border-[#5C0102] focus:ring-4 focus:ring-[#5C0102]/10"
                           }`}
                         />
                         <button
                           type="button"
                           onClick={() => setShowPassword(!showPassword)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1"
+                          tabIndex={-1}
+                          aria-label={showPassword ? "Hide password" : "Show password"}
                         >
                           {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                         </button>
                       </div>
                       {errors.password && (
-                        <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
-                          <AlertCircle size={12} /> {errors.password}
+                        <p className="text-xs text-red-600 mt-1.5 flex items-center gap-1 font-medium">
+                          <AlertCircle size={13} className="shrink-0" /> {errors.password}
                         </p>
                       )}
                     </div>
+
                     <div>
-                      <label className="block text-sm text-gray-700 mb-1.5">
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-gray-700 mb-1.5">
                         Confirm Password <span className="text-red-500">*</span>
                       </label>
                       <div className="relative">
@@ -609,21 +707,25 @@ export default function RegisterPage() {
                           value={form.confirmPassword}
                           onChange={(e) => update("confirmPassword", e.target.value)}
                           placeholder="Re-enter password"
-                          className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-200 focus:border-[#5C0102] transition-all bg-gray-50 pr-10 ${
-                            errors.confirmPassword ? "border-red-400" : "border-gray-200"
+                          className={`w-full pl-4 pr-11 py-2.5 rounded-xl text-sm transition-all duration-200 outline-none ${
+                            errors.confirmPassword
+                              ? "border border-red-400 bg-red-50/20 text-gray-900 focus:ring-4 focus:ring-red-100"
+                              : "border border-gray-200 bg-gray-50/70 text-gray-900 focus:bg-white focus:border-[#5C0102] focus:ring-4 focus:ring-[#5C0102]/10"
                           }`}
                         />
                         <button
                           type="button"
                           onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1"
+                          tabIndex={-1}
+                          aria-label={showConfirmPassword ? "Hide password" : "Show password"}
                         >
                           {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                         </button>
                       </div>
                       {errors.confirmPassword && (
-                        <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
-                          <AlertCircle size={12} /> {errors.confirmPassword}
+                        <p className="text-xs text-red-600 mt-1.5 flex items-center gap-1 font-medium">
+                          <AlertCircle size={13} className="shrink-0" /> {errors.confirmPassword}
                         </p>
                       )}
                     </div>
@@ -631,25 +733,30 @@ export default function RegisterPage() {
                 </div>
               </div>
 
-              {/* Important Notice */}
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-xs text-amber-800">
-                <strong>Important:</strong> If your LRN is in the Student Masterlist, your details
-                (name, grade level, gender, birthdate) must match it exactly — any mismatch will
-                prevent registration. If your LRN is not in the system or the masterlist yet, your
-                registration will wait for SSLG Adviser verification. The system does not reveal
-                which personal field is wrong.
+              {/* ── Important Notice ─────────────────────────────── */}
+              <div className="bg-amber-50/80 border border-amber-200/80 rounded-2xl p-4 sm:p-5 text-xs text-amber-900 flex items-start gap-3">
+                <ShieldCheck size={18} className="text-amber-700 shrink-0 mt-0.5" />
+                <div className="leading-relaxed">
+                  <strong className="font-semibold text-amber-950">Important Verification Policy:</strong> If your LRN is in the Student Masterlist, your details
+                  (name, grade level, gender, birthdate) must match it exactly — any mismatch will
+                  prevent registration. If your LRN is not in the system or the masterlist yet, your
+                  registration will wait for SSLG Adviser verification. The system does not reveal
+                  which personal field is wrong.
+                </div>
               </div>
 
+              {/* Submit CTA */}
               <button
+                type="button"
                 onClick={handleSubmit}
                 disabled={loading || lrnBlocked}
-                className="w-full py-3 text-white rounded-lg text-sm font-medium transition-all hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-2"
+                className="w-full py-3.5 text-white rounded-xl text-sm font-semibold transition-all duration-200 hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-md"
                 style={{ backgroundColor: "#5C0102" }}
               >
                 {loading ? (
                   <>
                     <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Submitting Registration...
+                    <span>Submitting Registration...</span>
                   </>
                 ) : (
                   "Submit Registration"

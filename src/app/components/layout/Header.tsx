@@ -27,6 +27,40 @@ export function Header() {
   const { pathname } = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [dropdowns, setDropdowns] = useState(CLOSED_DROPDOWNS);
+  const [scrolled, setScrolled] = useState(false);
+
+  // Monitor scroll for dynamic glassmorphic elevation
+  useEffect(() => {
+    const handleScroll = () => {
+      setScrolled(window.scrollY > 8);
+    };
+    handleScroll();
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  // Active path helpers
+  const isActive = (href: string) => pathname === href;
+  const isResultsActive = pathname === "/official-results" || pathname === "/past-elections";
+  const isResourcesActive =
+    pathname === "/guidelines" ||
+    pathname === "/faq" ||
+    pathname === "/contact" ||
+    pathname.startsWith("/calendar");
+
+  const navLinkClass = (active: boolean) =>
+    `px-3 py-1.5 rounded-xl text-sm font-medium transition-all duration-200 ${
+      active
+        ? "text-[#5C0102] bg-[#5C0102]/10 font-semibold shadow-xs"
+        : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/70"
+    }`;
+
+  const dropdownTriggerClass = (active: boolean, isOpen: boolean) =>
+    `flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-sm font-medium transition-all duration-200 cursor-pointer ${
+      active || isOpen
+        ? "text-[#5C0102] bg-[#5C0102]/10 font-semibold"
+        : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/70"
+    }`;
 
   // The desktop bar and the mobile panel are siblings, so the outside-click
   // check needs a ref for each.
@@ -142,28 +176,40 @@ export function Header() {
 
   return (
     <>
-      <header ref={headerRef} className="w-full bg-white border-b border-gray-200 sticky top-0 z-50 shadow-sm">
+      <header
+        ref={headerRef}
+        className={`w-full sticky top-0 z-50 transition-all duration-300 bg-white/80 backdrop-blur-md supports-[backdrop-filter]:bg-white/75 ${
+          scrolled
+            ? "border-b border-gray-200/80 shadow-xs shadow-black/5"
+            : "border-b border-gray-200/60 shadow-xs"
+        }`}
+      >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             {/* Logo + Name */}
-            <Link to="/" className="flex items-center gap-3 flex-shrink-0">
-              <img src={cnnhsLogo} alt="CNNHS Logo" className="w-10 h-10 rounded-full object-cover" />
+            <Link to="/" className="flex items-center gap-3 flex-shrink-0 group">
+              <img
+                src={cnnhsLogo}
+                alt="CNNHS Logo"
+                className="w-10 h-10 rounded-full object-cover ring-2 ring-white/80 shadow-xs group-hover:scale-105 transition-transform duration-200"
+              />
               <div className="hidden sm:block">
-                <div className="text-sm font-bold" style={{ color: "#5C0102" }}>
+                <div className="text-sm font-bold tracking-tight group-hover:opacity-90 transition-opacity" style={{ color: "#5C0102" }}>
                   CNNHS
                 </div>
-                <div className="text-xs text-gray-500 leading-tight">Online Voting System</div>
+                <div className="text-xs text-gray-500 leading-tight font-medium">Online Voting System</div>
               </div>
             </Link>
 
             {/* Desktop Nav */}
-            <div className="hidden md:flex items-center gap-6">
-              {/* About CNNHS — direct tab, leftmost of the tabs */}
+            <div className="hidden md:flex items-center gap-1.5 lg:gap-2">
+              {/* About — direct tab, leftmost of the tabs */}
               <Link
                 to="/about"
-                className="px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors text-sm"
+                aria-label="About CNNHS"
+                className={navLinkClass(isActive("/about"))}
               >
-                About CNNHS
+                About
               </Link>
 
               {/* Student Registration — direct tab; hidden once any user is
@@ -171,7 +217,7 @@ export function Header() {
               {!currentUser && (
                 <Link
                   to="/register"
-                  className="px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors text-sm"
+                  className={navLinkClass(isActive("/register"))}
                 >
                   Student Registration
                 </Link>
@@ -180,7 +226,7 @@ export function Header() {
               {/* Current Election — direct tab */}
               <Link
                 to="/current-election"
-                className="px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors text-sm"
+                className={navLinkClass(isActive("/current-election"))}
               >
                 Current Election
               </Link>
@@ -189,24 +235,37 @@ export function Header() {
               <div className="relative">
                 <button
                   onClick={() => toggleDropdown("results")}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors text-sm"
+                  className={dropdownTriggerClass(isResultsActive, dropdowns.results)}
                 >
-                  Results
-                  <ChevronDown size={14} className="text-gray-500" />
+                  <span>Results</span>
+                  <ChevronDown
+                    size={14}
+                    className={`transition-transform duration-200 ${
+                      dropdowns.results ? "rotate-180 text-[#5C0102]" : "text-gray-500"
+                    }`}
+                  />
                 </button>
                 {dropdowns.results && (
-                  <div className="absolute left-0 mt-1 w-56 bg-white border border-gray-200 rounded-lg shadow-lg py-2 z-50">
+                  <div className="absolute left-0 mt-2 w-56 bg-white/95 backdrop-blur-xl border border-gray-200/70 rounded-2xl shadow-xl shadow-gray-900/10 p-1.5 z-50">
                     <Link
                       to="/official-results"
                       onClick={() => toggleDropdown("results")}
-                      className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                      className={`flex w-full items-center gap-2 px-3.5 py-2 text-sm rounded-xl transition-colors ${
+                        pathname === "/official-results"
+                          ? "bg-[#5C0102]/10 text-[#5C0102] font-semibold"
+                          : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/70"
+                      }`}
                     >
                       Official Results
                     </Link>
                     <Link
                       to="/past-elections"
                       onClick={() => toggleDropdown("results")}
-                      className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                      className={`flex w-full items-center gap-2 px-3.5 py-2 text-sm rounded-xl transition-colors ${
+                        pathname === "/past-elections"
+                          ? "bg-[#5C0102]/10 text-[#5C0102] font-semibold"
+                          : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/70"
+                      }`}
                     >
                       Past Elections
                     </Link>
@@ -218,38 +277,59 @@ export function Header() {
               <div className="relative">
                 <button
                   onClick={() => toggleDropdown("resources")}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors text-sm"
+                  className={dropdownTriggerClass(isResourcesActive, dropdowns.resources)}
                 >
-                  Resources
-                  <ChevronDown size={14} className="text-gray-500" />
+                  <span>Resources</span>
+                  <ChevronDown
+                    size={14}
+                    className={`transition-transform duration-200 ${
+                      dropdowns.resources ? "rotate-180 text-[#5C0102]" : "text-gray-500"
+                    }`}
+                  />
                 </button>
                 {dropdowns.resources && (
-                  <div className="absolute left-0 mt-1 w-60 bg-white border border-gray-200 rounded-lg shadow-lg py-2 z-50">
+                  <div className="absolute left-0 mt-2 w-60 bg-white/95 backdrop-blur-xl border border-gray-200/70 rounded-2xl shadow-xl shadow-gray-900/10 p-1.5 z-50">
                     <Link
                       to="/guidelines"
                       onClick={() => toggleDropdown("resources")}
-                      className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                      className={`flex w-full items-center gap-2 px-3.5 py-2 text-sm rounded-xl transition-colors ${
+                        pathname === "/guidelines"
+                          ? "bg-[#5C0102]/10 text-[#5C0102] font-semibold"
+                          : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/70"
+                      }`}
                     >
                       Election Guidelines
                     </Link>
                     <Link
                       to={getCalendarHref(currentUser)}
                       onClick={() => toggleDropdown("resources")}
-                      className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                      className={`flex w-full items-center gap-2 px-3.5 py-2 text-sm rounded-xl transition-colors ${
+                        pathname.startsWith("/calendar")
+                          ? "bg-[#5C0102]/10 text-[#5C0102] font-semibold"
+                          : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/70"
+                      }`}
                     >
                       Election Calendar
                     </Link>
                     <Link
                       to="/faq"
                       onClick={() => toggleDropdown("resources")}
-                      className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                      className={`flex w-full items-center gap-2 px-3.5 py-2 text-sm rounded-xl transition-colors ${
+                        pathname === "/faq"
+                          ? "bg-[#5C0102]/10 text-[#5C0102] font-semibold"
+                          : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/70"
+                      }`}
                     >
                       FAQ
                     </Link>
                     <Link
                       to="/contact"
                       onClick={() => toggleDropdown("resources")}
-                      className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                      className={`flex w-full items-center gap-2 px-3.5 py-2 text-sm rounded-xl transition-colors ${
+                        pathname === "/contact"
+                          ? "bg-[#5C0102]/10 text-[#5C0102] font-semibold"
+                          : "text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/70"
+                      }`}
                     >
                       Contact Information
                     </Link>
@@ -259,18 +339,18 @@ export function Header() {
             </div>
 
             {/* User Actions */}
-            <div className="hidden md:flex items-center gap-4">
+            <div className="hidden md:flex items-center gap-3">
               {!currentUser ? (
                 <>
                   <Link
                     to="/login"
-                    className="text-gray-600 hover:text-[#5C0102] transition-colors text-sm"
+                    className="text-gray-700 hover:text-[#5C0102] px-3.5 py-2 rounded-xl hover:bg-gray-100/70 transition-all duration-200 text-sm font-medium"
                   >
                     Login
                   </Link>
                   <Link
                     to="/register"
-                    className="px-4 py-2 rounded-lg text-white text-sm transition-colors"
+                    className="px-4 py-2 rounded-xl text-white text-sm font-medium transition-all duration-200 shadow-sm shadow-[#5C0102]/20 hover:shadow-md hover:shadow-[#5C0102]/30 hover:brightness-110 active:scale-95"
                     style={{ backgroundColor: "#5C0102" }}
                   >
                     Register
@@ -280,24 +360,31 @@ export function Header() {
                 <div className="relative">
                   <button
                     onClick={() => toggleDropdown("user")}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors text-sm"
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-xl transition-all duration-200 text-sm ${
+                      dropdowns.user ? "bg-gray-100/80 shadow-xs" : "hover:bg-gray-100/70"
+                    }`}
                   >
-                    <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold overflow-hidden" style={{ backgroundColor: "#5C0102" }}>
+                    <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold overflow-hidden shadow-xs ring-1 ring-white/80" style={{ backgroundColor: "#5C0102" }}>
                       {avatarPictureUrl ? (
                         <img src={avatarPictureUrl} alt="" className="w-7 h-7 object-cover" />
                       ) : (
                         currentUser.name.charAt(0)
                       )}
                     </div>
-                    <span className="text-gray-700">{currentUser.name}</span>
-                    <ChevronDown size={14} className="text-gray-500" />
+                    <span className="text-gray-800 font-medium">{currentUser.name}</span>
+                    <ChevronDown
+                      size={14}
+                      className={`text-gray-500 transition-transform duration-200 ${
+                        dropdowns.user ? "rotate-180 text-[#5C0102]" : ""
+                      }`}
+                    />
                   </button>
                   {dropdowns.user && (
-                    <div className="absolute right-0 mt-1 w-60 bg-white border border-gray-200 rounded-lg shadow-lg z-50">
+                    <div className="absolute right-0 mt-2 w-64 bg-white/95 backdrop-blur-xl border border-gray-200/70 rounded-2xl shadow-xl shadow-gray-900/10 z-50 p-1.5">
                       {/* Identity block — photo, name, role/title, My Profile */}
-                      <div className="px-4 pt-3 pb-3 border-b border-gray-100 bg-gray-50/60 rounded-t-lg">
+                      <div className="px-3.5 pt-3 pb-3 border-b border-gray-100 bg-gray-50/70 rounded-xl mb-1">
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold overflow-hidden flex-shrink-0" style={{ backgroundColor: "#5C0102" }}>
+                          <div className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold overflow-hidden flex-shrink-0 shadow-xs" style={{ backgroundColor: "#5C0102" }}>
                             {avatarPictureUrl ? (
                               <img src={avatarPictureUrl} alt="" className="w-10 h-10 object-cover" />
                             ) : (
@@ -312,7 +399,7 @@ export function Header() {
                         <Link
                           to={profileHref}
                           onClick={() => toggleDropdown("user")}
-                          className="mt-2.5 flex w-full items-center gap-2 rounded-lg bg-white border border-gray-200 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+                          className="mt-2.5 flex w-full items-center gap-2 rounded-xl bg-white/90 border border-gray-200/80 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 hover:text-[#5C0102] transition-colors shadow-xs"
                         >
                           <User size={14} /> My Profile
                         </Link>
@@ -323,16 +410,16 @@ export function Header() {
                           key={item.href}
                           to={item.href}
                           onClick={() => toggleDropdown("user")}
-                          className="flex w-full items-center gap-2.5 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                          className="flex w-full items-center gap-2.5 px-3.5 py-2 text-sm text-gray-700 hover:text-[#5C0102] hover:bg-gray-50/90 rounded-xl transition-colors"
                         >
                           {item.icon}
                           <span>{item.label}</span>
                         </Link>
                       ))}
-                      {userTabs.length > 0 && <div className="border-t border-gray-100" />}
+                      {userTabs.length > 0 && <div className="border-t border-gray-100 my-1" />}
                       <button
                         onClick={handleLogout}
-                        className="flex w-full items-center gap-2.5 px-4 py-2 text-sm text-red-600 hover:bg-red-50 text-left"
+                        className="flex w-full items-center gap-2.5 px-3.5 py-2 text-sm text-red-600 hover:bg-red-50/90 rounded-xl transition-colors text-left font-medium"
                       >
                         <LogOut size={16} /> Logout
                       </button>
@@ -349,7 +436,7 @@ export function Header() {
               aria-label="Toggle navigation menu"
               aria-expanded={mobileOpen}
               aria-controls="mobile-nav"
-              className="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg text-gray-700 hover:bg-gray-100 transition-colors"
+              className="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-xl text-gray-700 hover:text-[#5C0102] hover:bg-gray-100/70 transition-all duration-200 cursor-pointer active:scale-95"
             >
               {mobileOpen ? <X size={22} /> : <Menu size={22} />}
             </button>
@@ -361,23 +448,33 @@ export function Header() {
       <div
         id="mobile-nav"
         ref={mobilePanelRef}
-        className={`${mobileOpen ? "block" : "hidden"} md:hidden border-t border-gray-200 bg-white px-4 py-4 space-y-2`}
+        className={`${
+          mobileOpen ? "block" : "hidden"
+        } md:hidden border-b border-gray-200/70 bg-white/95 backdrop-blur-xl px-4 py-4 space-y-1.5 shadow-lg transition-all duration-200`}
       >
         <Link
           to="/"
           onClick={() => setMobileOpen(false)}
-          className="block py-2 text-gray-700 text-sm"
+          className={`block px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
+            pathname === "/"
+              ? "bg-[#5C0102]/10 text-[#5C0102] font-semibold"
+              : "text-gray-700 hover:bg-gray-100/70"
+          }`}
         >
           Home
         </Link>
-        <div className="border-t border-gray-200 pt-2">
-          {/* Mobile About CNNHS */}
+        <div className="border-t border-gray-200/60 pt-2 space-y-1">
+          {/* Mobile About */}
           <Link
             to="/about"
             onClick={() => setMobileOpen(false)}
-            className="block py-2 text-gray-700 text-sm"
+            className={`block px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
+              pathname === "/about"
+                ? "bg-[#5C0102]/10 text-[#5C0102] font-semibold"
+                : "text-gray-700 hover:bg-gray-100/70"
+            }`}
           >
-            About CNNHS
+            About
           </Link>
 
           {/* Mobile Student Registration — hidden once any user is signed in */}
@@ -385,7 +482,11 @@ export function Header() {
             <Link
               to="/register"
               onClick={() => setMobileOpen(false)}
-              className="block py-2 text-gray-700 text-sm"
+              className={`block px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
+                pathname === "/register"
+                  ? "bg-[#5C0102]/10 text-[#5C0102] font-semibold"
+                  : "text-gray-700 hover:bg-gray-100/70"
+              }`}
             >
               Student Registration
             </Link>
@@ -395,33 +496,45 @@ export function Header() {
           <Link
             to="/current-election"
             onClick={() => setMobileOpen(false)}
-            className="block py-2 text-gray-700 text-sm"
+            className={`block px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
+              pathname === "/current-election"
+                ? "bg-[#5C0102]/10 text-[#5C0102] font-semibold"
+                : "text-gray-700 hover:bg-gray-100/70"
+            }`}
           >
             Current Election
           </Link>
 
           {/* Mobile Results */}
-          <div className="py-2">
+          <div className="py-1">
             <button
               onClick={() => toggleDropdown("results")}
-              className="w-full text-left text-gray-700 py-2 hover:bg-gray-50"
+              className={`flex items-center justify-between w-full px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
+                isResultsActive || dropdowns.results
+                  ? "bg-[#5C0102]/10 text-[#5C0102] font-semibold"
+                  : "text-gray-700 hover:bg-gray-100/70"
+              }`}
             >
-              Results
+              <span>Results</span>
               {dropdowns.results ? (
-                <ChevronUp size={16} className="ml-2 text-gray-500" />
+                <ChevronUp size={16} className="text-[#5C0102]" />
               ) : (
-                <ChevronDown size={16} className="ml-2 text-gray-500" />
+                <ChevronDown size={16} className="text-gray-500" />
               )}
             </button>
             {dropdowns.results && (
-              <>
+              <div className="mt-1 space-y-1 pl-4">
                 <Link
                   to="/official-results"
                   onClick={() => {
                     setMobileOpen(false);
                     toggleDropdown("results");
                   }}
-                  className="block pl-8 py-1 text-sm text-gray-600 hover:text-[#5C0102]"
+                  className={`block px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                    pathname === "/official-results"
+                      ? "text-[#5C0102] font-semibold"
+                      : "text-gray-600 hover:text-[#5C0102] hover:bg-gray-50"
+                  }`}
                 >
                   Official Results
                 </Link>
@@ -431,46 +544,62 @@ export function Header() {
                     setMobileOpen(false);
                     toggleDropdown("results");
                   }}
-                  className="block pl-8 py-1 text-sm text-gray-600 hover:text-[#5C0102]"
+                  className={`block px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                    pathname === "/past-elections"
+                      ? "text-[#5C0102] font-semibold"
+                      : "text-gray-600 hover:text-[#5C0102] hover:bg-gray-50"
+                  }`}
                 >
                   Past Elections
                 </Link>
-              </>
+              </div>
             )}
           </div>
 
           {/* Mobile Resources */}
-          <div className="py-2">
+          <div className="py-1">
             <button
               onClick={() => toggleDropdown("resources")}
-              className="w-full text-left text-gray-700 py-2 hover:bg-gray-50"
+              className={`flex items-center justify-between w-full px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
+                isResourcesActive || dropdowns.resources
+                  ? "bg-[#5C0102]/10 text-[#5C0102] font-semibold"
+                  : "text-gray-700 hover:bg-gray-100/70"
+              }`}
             >
-              Resources
+              <span>Resources</span>
               {dropdowns.resources ? (
-                <ChevronUp size={16} className="ml-2 text-gray-500" />
+                <ChevronUp size={16} className="text-[#5C0102]" />
               ) : (
-                <ChevronDown size={16} className="ml-2 text-gray-500" />
+                <ChevronDown size={16} className="text-gray-500" />
               )}
             </button>
             {dropdowns.resources && (
-              <>
-                  <Link
-                    to="/guidelines"
-                    onClick={() => {
-                      setMobileOpen(false);
-                      toggleDropdown("resources");
-                    }}
-                    className="block pl-8 py-1 text-sm text-gray-600 hover:text-[#5C0102]"
-                  >
-                    Election Guidelines
-                  </Link>
+              <div className="mt-1 space-y-1 pl-4">
+                <Link
+                  to="/guidelines"
+                  onClick={() => {
+                    setMobileOpen(false);
+                    toggleDropdown("resources");
+                  }}
+                  className={`block px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                    pathname === "/guidelines"
+                      ? "text-[#5C0102] font-semibold"
+                      : "text-gray-600 hover:text-[#5C0102] hover:bg-gray-50"
+                  }`}
+                >
+                  Election Guidelines
+                </Link>
                 <Link
                   to={getCalendarHref(currentUser)}
                   onClick={() => {
                     setMobileOpen(false);
                     toggleDropdown("resources");
                   }}
-                  className="block pl-8 py-1 text-sm text-gray-600 hover:text-[#5C0102]"
+                  className={`block px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                    pathname.startsWith("/calendar")
+                      ? "text-[#5C0102] font-semibold"
+                      : "text-gray-600 hover:text-[#5C0102] hover:bg-gray-50"
+                  }`}
                 >
                   Election Calendar
                 </Link>
@@ -480,7 +609,11 @@ export function Header() {
                     setMobileOpen(false);
                     toggleDropdown("resources");
                   }}
-                  className="block pl-8 py-1 text-sm text-gray-600 hover:text-[#5C0102]"
+                  className={`block px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                    pathname === "/faq"
+                      ? "text-[#5C0102] font-semibold"
+                      : "text-gray-600 hover:text-[#5C0102] hover:bg-gray-50"
+                  }`}
                 >
                   FAQ
                 </Link>
@@ -490,42 +623,46 @@ export function Header() {
                     setMobileOpen(false);
                     toggleDropdown("resources");
                   }}
-                  className="block pl-8 py-1 text-sm text-gray-600 hover:text-[#5C0102]"
+                  className={`block px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                    pathname === "/contact"
+                      ? "text-[#5C0102] font-semibold"
+                      : "text-gray-600 hover:text-[#5C0102] hover:bg-gray-50"
+                  }`}
                 >
                   Contact Information
                 </Link>
-              </>
+              </div>
             )}
           </div>
         </div>
 
         {!currentUser ? (
-          <>
+          <div className="pt-2 border-t border-gray-200/60 space-y-2">
             <Link
               to="/login"
               onClick={() => setMobileOpen(false)}
-              className="block py-2 text-gray-700 text-sm"
+              className="block w-full py-2.5 px-4 rounded-xl text-center text-gray-700 hover:bg-gray-100/70 font-medium text-sm transition-colors"
             >
               Login
             </Link>
             <Link
               to="/register"
               onClick={() => setMobileOpen(false)}
-              className="block py-2 px-4 rounded-lg text-white text-sm text-center"
+              className="block w-full py-2.5 px-4 rounded-xl text-white text-sm font-semibold text-center shadow-sm shadow-[#5C0102]/20 hover:brightness-110 transition-all"
               style={{ backgroundColor: "#5C0102" }}
             >
               Register
             </Link>
-          </>
+          </div>
         ) : (
-          <>
+          <div className="pt-2 border-t border-gray-200/60 space-y-1">
             {/* Signed-in tabs — mirrors the desktop user dropdown */}
             {userTabs.map((item) => (
               <Link
                 key={item.href}
                 to={item.href}
                 onClick={() => setMobileOpen(false)}
-                className="flex items-center gap-2 py-2 text-gray-700 text-sm"
+                className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-gray-700 hover:bg-gray-100/70 text-sm font-medium transition-colors"
               >
                 {item.icon}
                 <span>{item.label}</span>
@@ -534,7 +671,7 @@ export function Header() {
             <Link
               to={profileHref}
               onClick={() => setMobileOpen(false)}
-              className="flex items-center gap-2 py-2 text-gray-700 text-sm"
+              className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-gray-700 hover:bg-gray-100/70 text-sm font-medium transition-colors"
             >
               <User size={18} /> My Profile
             </Link>
@@ -543,11 +680,11 @@ export function Header() {
                 handleLogout();
                 setMobileOpen(false);
               }}
-              className="block py-2 text-red-600 text-sm w-full text-left"
+              className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-red-600 hover:bg-red-50 text-sm font-medium w-full text-left transition-colors"
             >
-              Logout
+              <LogOut size={16} /> Logout
             </button>
-          </>
+          </div>
         )}
       </div>
       {logoutConfirm.dialog}

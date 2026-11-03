@@ -609,7 +609,7 @@ export async function fetchSupabaseState() {
   ] = await Promise.all([
     safeSelect("students", "*", "registered_at"),
     safeSelect("student_masterlist", "*", "imported_at"),
-    safeSelect("election_periods", "*", "updated_at", 1, "completed"),
+    safeSelect("election_periods", "*", "updated_at", 1, ["completed", "cancelled"]),
     safeSelect("candidates", "*, parties(name)", "submitted_at"),
     // 052's "parties scoped readable" policy already lets any signed-in role
     // read the live period's parties, so this needs no extra grant.  The
@@ -728,11 +728,13 @@ export async function syncElectionPeriod(period: ElectionPeriod): Promise<{ ok: 
   // lifecycle_stage = 'completed' on the row it retires, and the old
   // "order by election_date desc limit 1" lookup could resolve one of
   // those — Postgres sorts NULLs first on DESC, so a freshly reset
-  // period and a retired one both end up in contention.
+  // period and a retired one both end up in contention.  131: a
+  // cancelled period is retired history too — never current.
   const { data } = await supabase
     .from("election_periods")
     .select("id")
     .neq("lifecycle_stage", "completed")
+    .neq("lifecycle_stage", "cancelled")
     .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -938,13 +940,15 @@ async function safeSelect(
   select: string,
   orderBy: string,
   limit?: number,
-  notLifecycleStage?: string
+  // 058: retired stages a live-row lookup must skip.  131 added 'cancelled'
+  // beside 'completed' — a reset-aborted election is history too.
+  notLifecycleStages?: string[]
 ) {
   if (!supabase) return [];
   let query = supabase.from(table).select(select).order(orderBy, { ascending: false });
-  // 058: retired election periods carry lifecycle_stage = 'completed' and must
-  // never be mistaken for the live one.
-  if (notLifecycleStage) query = query.neq("lifecycle_stage", notLifecycleStage);
+  for (const stage of notLifecycleStages ?? []) {
+    query = query.neq("lifecycle_stage", stage);
+  }
   if (limit) query = query.limit(limit);
   const { data, error } = await query;
   if (error) {
@@ -1984,6 +1988,9 @@ export async function getCurrentPublicElection(): Promise<PublicCurrentElection 
     .from("election_periods")
     .select("id, lifecycle_stage, election_date, start_time, end_date, end_time, venue, voting_method")
     .neq("lifecycle_stage", "completed")
+    // 131: a cancelled period is retired history — the public site never
+    // shows it as the current election.
+    .neq("lifecycle_stage", "cancelled")
     .order("updated_at", { ascending: false, nullsFirst: false })
     .order("school_year", { ascending: false })
     .limit(1)
@@ -2034,11 +2041,13 @@ export async function getCurrentPublicElection(): Promise<PublicCurrentElection 
 export async function getCurrentElectionId(): Promise<string | null> {
   if (!supabase) return null;
   // 058: an archived period (lifecycle_stage = 'completed', left behind by
-  // Reset Election Plan) must never resolve as the current one.
+  // Reset Election Plan) must never resolve as the current one.  131: nor a
+  // cancelled one.
   const { data } = await supabase
     .from("election_periods")
     .select("id")
     .neq("lifecycle_stage", "completed")
+    .neq("lifecycle_stage", "cancelled")
     .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -2486,6 +2495,9 @@ export async function getOfficialResults(): Promise<PastElectionResults | null> 
     .from("election_periods")
     .select("id")
     .neq("lifecycle_stage", "completed")
+    // 131: a cancelled period was never published — excluded defensively so
+    // the Official Results read can never land on one.
+    .neq("lifecycle_stage", "cancelled")
     .eq("results_published", true)
     .eq("is_active", false)
     .order("updated_at", { ascending: false })
@@ -2758,6 +2770,9 @@ export async function reloadElectionPeriod(): Promise<ElectionPeriod> {
     .from("election_periods")
     .select("*")
     .neq("lifecycle_stage", "completed")
+    // 131: a cancelled period is retired history — the dashboard works on
+    // the live period or nothing (Stage 1) at all.
+    .neq("lifecycle_stage", "cancelled")
     .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -2876,6 +2891,10 @@ export interface ResetElectionPlanResult {
    * "noop" = nothing was in progress.
    */
   mode: "cleared" | "archived" | "started" | "noop";
+  /** 131 — how an archived period was retired: 'cancelled' when the reset
+   * happened before the results were published and the winners proclaimed,
+   * 'completed' otherwise.  Absent on the clean/noop paths. */
+  retiredAs?: "cancelled" | "completed";
 }
 
 /**
@@ -2901,6 +2920,38 @@ export async function resetElectionPlanRpc(
       : undefined,
     schoolYear: row.school_year ? String(row.school_year) : undefined,
     mode: (row.mode as ResetElectionPlanResult["mode"]) || "cleared",
+    retiredAs:
+      row.retired_as === "cancelled" || row.retired_as === "completed"
+        ? (row.retired_as as "cancelled" | "completed")
+        : undefined,
+  };
+}
+
+export interface FinalizeElectionResult {
+  /** The period that was retired as 'completed'. */
+  electionPeriodId: string;
+  schoolYear?: string;
+}
+
+/**
+ * 131 — Finalize Election: the Stage 5 close-out.  Retires the proclaimed /
+ * published period as 'completed' (archived into Past Elections) and hands
+ * the plan back to Stage 1.  Requires the caller's own Electoral Board
+ * password — the RPC verifies it server-side.
+ */
+export async function finalizeElectionRpc(password: string): Promise<FinalizeElectionResult> {
+  const client = requireSupabase();
+  const { data, error } = await client.rpc("finalize_election_rpc", {
+    p_password: password,
+  });
+  if (error) throw new Error(error.message);
+  const row = (data || {}) as Record<string, unknown>;
+  if (!row.election_period_id) {
+    throw new Error("The election could not be finalized.");
+  }
+  return {
+    electionPeriodId: String(row.election_period_id),
+    schoolYear: row.school_year ? String(row.school_year) : undefined,
   };
 }
 

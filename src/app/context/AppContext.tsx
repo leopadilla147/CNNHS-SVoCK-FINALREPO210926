@@ -175,12 +175,15 @@ export interface SslgAdviser {
 }
 
 /**
- * Where an election period sits in the four-stage lifecycle.
+ * Where an election period sits in the lifecycle.
  *
  * `completed` is a retired period: 058's Reset Election Plan archives one by
- * setting this, which is why every period lookup filters it out.  History is
- * never deleted (migration 052) — the row and its candidates simply stop being
- * the live one.
+ * setting this (and 131's Finalize Election does the same to a proclaimed
+ * period), which is why every period lookup filters it out.
+ * `cancelled` (131) is the other retired value: a period a reset put down
+ * BEFORE its results were published and its winners proclaimed.  History is
+ * never deleted (migration 052) — the row and its candidates simply stop
+ * being the live one.
  */
 export type ElectionStage =
   | "application"
@@ -189,7 +192,10 @@ export type ElectionStage =
   | "fingerprint_registration"
   | "voting"
   | "results"
-  | "completed";
+  | "completed"
+  /** 131: a period a reset retired before its results were published
+   *  and its winners proclaimed.  Terminal — never the current period. */
+  | "cancelled";
 
 export interface ElectionPeriod {
   id?: string;

@@ -344,11 +344,6 @@ export default function ChiefDashboard() {
                 count: students.filter((s) => s.status === "pending").length,
                 color: "bg-amber-500",
               },
-              {
-                label: "Rejected / Blocked",
-                count: students.filter((s) => s.status === "rejected").length,
-                color: "bg-red-500",
-              },
             ].map((item) => (
               <div key={item.label}>
                 <div className="flex items-center justify-between text-xs mb-1.5 font-medium">

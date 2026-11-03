@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
-import { LogOut, Menu, X, ChevronRight } from "lucide-react";
+import { LogOut, Menu, X, ChevronRight, Database } from "lucide-react";
+import { toast } from "sonner";
 import { useApp } from "../../context/AppContext";
 import { useConfirm } from "../../lib/useConfirm";
 import { supabase, isSupabaseConfigured } from "../../lib/supabase";
@@ -19,11 +20,16 @@ export function DashboardSidebar() {
   const location = useLocation();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [seeding, setSeeding] = useState(false);
 
   if (!currentUser || !currentUser.role) return null;
 
   const isChief = currentUser.role === "admin" && currentUser.commissionerRole === "chief";
   const isSslgAdviser = currentUser.role === "sslg_adviser";
+  // 130: only the Commissioner of Electoral Board gets the seed-injection
+  // shortcut (the co-commissioner carries the same commissioner_role).
+  const isElectoralBoard =
+    currentUser.role === "admin" && currentUser.commissionerRole === "electoral_board";
 
   const navItems = getUserNavItems(currentUser);
   const portalLabel = getUserPortalLabel(currentUser);
@@ -57,6 +63,59 @@ export function DashboardSidebar() {
     }
     setCurrentUser(null);
     navigate("/");
+  };
+
+  // 130: inject the extra-parties seed (AZ/seed_extra_parties_and_candidates.sql)
+  // into the ACTIVE election period.  The batch itself lives in the
+  // seed_extra_parties_rpc migration — one RPC call is one transaction, so a
+  // failure anywhere rolls the whole thing back and nothing is ever deleted.
+  const seedConfirm = useConfirm({
+    title: "Inject seed data?",
+    description: "Are you sure you want to inject the seed data into the active election period?",
+    confirmText: "Inject seed data",
+    cancelText: "Cancel",
+    destructive: true,
+  });
+
+  const handleSeedParties = async () => {
+    const ok = await seedConfirm.confirm({
+      description: (
+        <>
+          This adds <strong>3 parties</strong> and <strong>46 candidates</strong> to the active
+          election period{electionPeriod.schoolYear ? ` (${electionPeriod.schoolYear})` : ""}.
+          Nothing is deleted, and the whole batch is all-or-nothing — if anything fails, nothing is
+          written.
+        </>
+      ),
+    });
+    if (!ok) return;
+    if (!isSupabaseConfigured || !supabase) {
+      toast.error("Supabase is not configured.");
+      return;
+    }
+    const periodId = electionPeriod.id ?? null;
+    if (!periodId) {
+      toast.error("No active election period found. Create an election period first.");
+      return;
+    }
+    setSeeding(true);
+    try {
+      const { data, error } = await supabase.rpc("seed_extra_parties_rpc", {
+        p_election_period_id: periodId,
+      });
+      if (error) {
+        toast.error(error.message || "Failed to inject the seed data.");
+        return;
+      }
+      const result = (data ?? {}) as { new_parties?: number; new_candidates?: number };
+      toast.success(
+        `Seed data injected: ${result.new_parties ?? 3} parties and ${result.new_candidates ?? 46} candidates added to the active election period.`,
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to inject the seed data.");
+    } finally {
+      setSeeding(false);
+    }
   };
 
   const SidebarContent = () => (
@@ -143,6 +202,16 @@ export function DashboardSidebar() {
 
       {/* Footer */}
       <div className="p-3 border-t border-white/10">
+        {isElectoralBoard && (
+          <button
+            onClick={handleSeedParties}
+            disabled={seeding}
+            className="flex items-center gap-3 px-3 py-2.5 w-full rounded-lg text-white/70 hover:bg-white/10 hover:text-white transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Database size={18} />
+            <span>{seeding ? "Injecting seed data…" : "Inject seed data"}</span>
+          </button>
+        )}
         <button
           onClick={handleLogout}
           className="flex items-center gap-3 px-3 py-2.5 w-full rounded-lg text-white/70 hover:bg-white/10 hover:text-white transition-all text-sm"
@@ -213,6 +282,7 @@ export function DashboardSidebar() {
         </div>
       )}
       {logoutConfirm.dialog}
+      {seedConfirm.dialog}
     </>
   );
 }

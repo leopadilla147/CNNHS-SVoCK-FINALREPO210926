@@ -1,9 +1,9 @@
 import type { ElectionPeriod } from "../context/AppContext";
 
 /**
- * The five working stages the election moves through.  `completed` is a
- * retired period (AppContext's ElectionStage) — never a stage anything is
- * working on, which is why it is absent here.
+ * The five working stages the election moves through.  `completed` and
+ * `cancelled` (131) are retired periods (AppContext's ElectionStage) — never
+ * a stage anything is working on, which is why they are absent here.
  */
 export type Stage =
   | "application"
@@ -47,13 +47,21 @@ export function resolveStage(electionPeriod: ElectionPeriod): Stage {
  * point on the roster is final: nothing may be filed, revised, resubmitted,
  * or re-applied for (109 gates the RPCs; the UI shows the friendly version).
  *
- * `completed` is checked explicitly because resolveStage() deliberately lets
- * a retired period fall through to the legacy booleans and land on
- * 'application' for the admin tabs — a reading that must never reopen this
- * gate.  A period without `lifecycle_stage` (pre-058 data) falls back to the
- * booleans via resolveStage().
+ * `completed`/`cancelled` are checked explicitly because resolveStage()
+ * deliberately lets a retired period fall through to the legacy booleans and
+ * land on 'application' for the admin tabs — a reading that must never reopen
+ * this gate.  A period without `lifecycle_stage` (pre-058 data) falls back to
+ * the booleans via resolveStage().
  */
 export function applicationStageEnded(electionPeriod: ElectionPeriod): boolean {
-  if (electionPeriod.lifecycleStage === "completed") return true;
+  // 131 — 'cancelled' joins 'completed': a retired period (either flavour)
+  // never reopens its application stage, even if a stale caller still holds
+  // the old row object after a finalize/reset refresh.
+  if (
+    electionPeriod.lifecycleStage === "completed" ||
+    electionPeriod.lifecycleStage === "cancelled"
+  ) {
+    return true;
+  }
   return resolveStage(electionPeriod) !== "application";
 }

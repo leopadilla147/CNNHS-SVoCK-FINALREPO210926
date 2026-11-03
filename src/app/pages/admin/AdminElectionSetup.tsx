@@ -5,6 +5,7 @@ import {
   CheckCircle2, Lock, AlertCircle, Loader2, Eye, FileCheck2,
   Megaphone, Users, KeyRound, RotateCcw, ShieldAlert, X, Fingerprint,
   Gavel, ChevronDown, ChevronLeft, ChevronRight, Pencil, XCircle, Download,
+  Flag,
 } from "lucide-react";
 import { useApp } from "../../context/AppContext";
 import type { ElectionStage, ElectionPeriod } from "../../context/AppContext";
@@ -30,6 +31,7 @@ import {
   saveCampaignWindowRpc,
   countActiveComplaintsRpc,
   resetElectionPlanRpc,
+  finalizeElectionRpc,
 } from "../../lib/supabaseData";
 import type { ProclaimedWinner, ProclamationTallyRow, TieResolution } from "../../lib/supabaseData";
 import { isSupabaseConfigured } from "../../lib/supabase";
@@ -72,6 +74,9 @@ const STAGE_LABELS: Record<ElectionStage, string> = {
   voting: "Voting Period",
   results: "Election Result",
   completed: "Completed",
+  // 131 — terminal, never current: shown only if a stale period object is
+  // still held across a finalize/reset refresh.
+  cancelled: "Cancelled",
 };
 
 /**
@@ -366,6 +371,11 @@ export default function AdminElectionSetup() {
   const [resetOpen, setResetOpen] = useState(false);
   const [resetPassword, setResetPassword] = useState("");
   const [resetError, setResetError] = useState<string | null>(null);
+  // 131 — Finalize Election: the Stage 5 close-out modal (same password gate
+  // as the reset, which it replaces once the record is committed).
+  const [finalizeOpen, setFinalizeOpen] = useState(false);
+  const [finalizePassword, setFinalizePassword] = useState("");
+  const [finalizeError, setFinalizeError] = useState<string | null>(null);
   // 084 — password gate for the consequential voting moves (reopen /
   // end stage / void election). Mirrors the reset-dialog flow: the
   // password is verified server-side by the RPC, never stored.
@@ -1669,13 +1679,20 @@ export default function AdminElectionSetup() {
       setResetOpen(false);
       setResetPassword("");
       const mode = result?.mode;
+      // 131 — an archived period is named for how it retired: a reset that
+      // happened before the results were published and the winners proclaimed
+      // leaves a CANCELLED election behind, not a completed one.
+      const retired =
+        result?.retiredAs === "cancelled"
+          ? "The previous election period was cancelled with all its candidates and votes intact"
+          : "The previous election period was archived with all its candidates and votes intact";
       const detail =
         mode === "noop"
           ? "There was no election period in progress, so there was nothing to reset."
           : mode === "archived" && !result?.electionPeriodId
-            ? "The previous election period was archived with all its candidates and votes intact. Set the School Year in Stage 1 to start the next election."
+            ? `${retired}. Set the School Year in Stage 1 to start the next election.`
             : result?.archivedPrevious
-              ? "The previous election period was archived with all its candidates and votes intact. A new period was created."
+              ? `${retired}. A new period was created.`
               : "The election plan was cleared back to Stage 1.";
       addLog({
         user: logUser, role: "Admin",
@@ -1686,6 +1703,45 @@ export default function AdminElectionSetup() {
       showSuccess(detail);
     } catch (err: any) {
       setResetError(err.message || "Failed to reset the election plan.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 131 — Finalize Election: the Stage 5 close-out.  Retires the proclaimed /
+  // published period as 'completed' (archived into Past Elections) and hands
+  // the plan back to Stage 1, where the next School Year is set.  Same
+  // password gate as the reset — the RPC verifies it server-side.
+  const submitFinalize = async () => {
+    setFinalizeError(null);
+    if (!finalizePassword) {
+      setFinalizeError("Enter the Electoral Board password to continue.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const result = isSupabaseConfigured
+        ? await finalizeElectionRpc(finalizePassword)
+        : null;
+      // Keep the cached fallback id in step with the outcome, so hasPeriod
+      // drops and Stage 1 offers the School Year input — the same landing the
+      // reset gives an archived period.
+      setElectionId(null);
+      await refreshPeriod();
+      setFinalizeOpen(false);
+      setFinalizePassword("");
+      const detail = result?.schoolYear
+        ? `Election period ${result.schoolYear} was finalized. The proclaimed winners and published results are on permanent record. Set the School Year in Stage 1 to start the next election.`
+        : "The election was finalized. The proclaimed winners and published results are on permanent record. Set the School Year in Stage 1 to start the next election.";
+      addLog({
+        user: logUser, role: "Admin",
+        action: "Election Finalized",
+        details: detail,
+        type: "success",
+      });
+      showSuccess(detail);
+    } catch (err: any) {
+      setFinalizeError(err.message || "Failed to finalize the election.");
     } finally {
       setLoading(false);
     }
@@ -2827,6 +2883,28 @@ export default function AdminElectionSetup() {
               Winners have been proclaimed. View full details on the Official Results page.
             </div>
           )}
+
+          {/* 131 — Finalize Election: the one-way close-out under the proclaimed
+              winners (right side).  It replaces the Reset Plan danger zone once
+              the record is committed: the period retires as 'completed', is
+              archived into Past Elections, and the plan returns to Stage 1
+              where the next School Year is set.  Electoral Board password
+              required. */}
+          {(electionPeriod.proclaimed || electionPeriod.resultsPublished) && (
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => { setFinalizeError(null); setFinalizePassword(""); setFinalizeOpen(true); }}
+                disabled={loading}
+                title="Complete this election permanently, archive it to Past Elections, and return the plan to Stage 1."
+                className="px-5 py-2.5 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:opacity-90 disabled:opacity-50"
+                style={{ backgroundColor: "#5C0102" }}
+              >
+                {loading ? <Loader2 size={16} className="animate-spin" /> : <Flag size={16} />}
+                Finalize Election
+              </button>
+            </div>
+          )}
         </div>
       </div>
       )}
@@ -2855,7 +2933,12 @@ export default function AdminElectionSetup() {
         </button>
       </div>
 
-      {/* Danger zone */}
+      {/* Danger zone — 131: hidden once the record is committed (results
+          published / winners proclaimed).  From there the only exit is the
+          Finalize Election button in Stage 5; a reset is still offered in
+          every earlier stage, and it retires a dirty period as 'cancelled'
+          when it happens before the results. */}
+      {!electionPeriod.proclaimed && !electionPeriod.resultsPublished && (
       <div className="bg-white rounded-xl p-6 shadow-sm border border-red-100">
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -2865,8 +2948,10 @@ export default function AdminElectionSetup() {
             </h3>
             <p className="text-xs text-gray-500 max-w-xl">
               Returns the plan to Stage 1. Nothing is ever deleted: if the current period already has
-              candidates or votes, it is archived and kept permanently as history, and the School Year
-              is set in Stage 1 to start the next election. This requires the Electoral Board password.
+              candidates or votes, it is archived — as a Cancelled election when this happens before
+              the results were published and the winners proclaimed — and kept permanently as history,
+              and the School Year is set in Stage 1 to start the next election. This requires the
+              Electoral Board password.
             </p>
             {stageLabel !== "Completed" && (
               <p className="text-xs text-gray-400 mt-1">Current stage: {stageLabel}</p>
@@ -2881,6 +2966,7 @@ export default function AdminElectionSetup() {
           </button>
         </div>
       </div>
+      )}
 
       {startCandidacyConfirm.dialog}
       {saveMeetingConfirm.dialog}
@@ -2933,8 +3019,9 @@ export default function AdminElectionSetup() {
             </div>
             <p className="text-xs text-gray-500 mb-4">
               Every stage is cleared back to Stage 1. Candidates, votes and published results are
-              retained permanently. If the period already has candidates or votes, it is archived
-              and you set the School Year in Stage 1 to start the next election.
+              retained permanently. If the period already has candidates or votes, it is archived — as
+              a Cancelled election when this happens before the results were published and the winners
+              proclaimed — and you set the School Year in Stage 1 to start the next election.
             </p>
 
             <label className="block text-xs text-gray-600 mb-1" htmlFor="reset-password">
@@ -2975,6 +3062,80 @@ export default function AdminElectionSetup() {
               >
                 {loading ? <Loader2 size={15} className="animate-spin" /> : <RotateCcw size={15} />}
                 Reset Plan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 131 — Finalize Election modal: same password gate as the reset. */}
+      {finalizeOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" onClick={() => !loading && setFinalizeOpen(false)} />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="finalize-election-title"
+            className="relative bg-white rounded-2xl shadow-xl border border-gray-100 p-6 w-full max-w-md"
+          >
+            <button
+              onClick={() => setFinalizeOpen(false)}
+              disabled={loading}
+              aria-label="Close"
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 disabled:opacity-50"
+            >
+              <X size={18} />
+            </button>
+
+            <div className="flex items-center gap-2 mb-1">
+              <Flag size={18} style={{ color: "#5C0102" }} />
+              <h3 id="finalize-election-title" className="text-gray-900 text-sm font-semibold">Finalize this election?</h3>
+            </div>
+            <p className="text-xs text-gray-500 mb-4">
+              The election period is retired as completed and archived to Past Elections with its
+              proclaimed winners and published results on permanent record. This cannot be undone —
+              the plan returns to Stage 1, where you set the School Year for the next election.
+            </p>
+
+            <label className="block text-xs text-gray-600 mb-1" htmlFor="finalize-password">
+              Electoral Board Password
+            </label>
+            <div className="flex items-center gap-2">
+              <KeyRound size={14} className="text-gray-400 shrink-0" />
+              <input
+                id="finalize-password"
+                type="password"
+                value={finalizePassword}
+                onChange={(e) => setFinalizePassword(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") submitFinalize(); }}
+                placeholder="Your account password"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50"
+              />
+            </div>
+
+            {finalizeError && (
+              <div className="mt-3 p-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-start gap-2">
+                <AlertCircle size={13} className="mt-0.5 shrink-0" />
+                {finalizeError}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 mt-5">
+              <button
+                onClick={() => setFinalizeOpen(false)}
+                disabled={loading}
+                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitFinalize}
+                disabled={loading}
+                className="px-4 py-2 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:opacity-90 disabled:opacity-50"
+                style={{ backgroundColor: "#5C0102" }}
+              >
+                {loading ? <Loader2 size={15} className="animate-spin" /> : <Flag size={15} />}
+                Finalize Election
               </button>
             </div>
           </div>

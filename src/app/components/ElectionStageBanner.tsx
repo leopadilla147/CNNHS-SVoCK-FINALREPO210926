@@ -9,6 +9,7 @@ import {
   Trophy,
   CheckCircle2,
   ArrowRight,
+  Ban,
 } from "lucide-react";
 import { useApp, type ElectionStage } from "../context/AppContext";
 import { resolveStage } from "../pages/admin/AdminElectionSetup";
@@ -64,6 +65,15 @@ const ANNOUNCEMENTS: Record<ElectionStage, StageAnnouncement> = {
     description:
       "This election has been completed and archived.",
     icon: <CheckCircle2 size={22} />,
+  },
+  // 131 — terminal but never current: resolveStage() can only land here on a
+  // stale row object held across a finalize/reset refresh.  Kept for the
+  // Record's exhaustiveness and for that stale-tick window.
+  cancelled: {
+    label: "Cancelled",
+    description:
+      "This election was cancelled before its results were published and its winners proclaimed.",
+    icon: <Ban size={22} />,
   },
 };
 

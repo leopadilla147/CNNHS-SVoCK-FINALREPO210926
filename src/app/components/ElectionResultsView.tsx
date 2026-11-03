@@ -71,18 +71,6 @@ export function PositionCard({ position }: { position: PastElectionPositionResul
             <Ban size={12} />
             {position.abstentions} abstention{position.abstentions === 1 ? "" : "s"}
           </span>
-          {position.wasTie && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-amber-400/25 border border-amber-300/60 border-b-2 border-b-amber-500/40 px-2.5 py-0.5 text-[11px] font-bold text-amber-100 shadow-[0_2px_4px_rgba(0,0,0,0.15),inset_0_1px_0_rgba(255,255,255,0.25)]">
-              <Gavel size={12} />
-              {/* 117 — a 2-way both-proclaimed tie has no board pick, so no
-                  resolution method exists for it; manual ties name theirs. */}
-              {position.tieResolutionMethod === "tie_both"
-                ? "Tie — Both Proclaimed"
-                : position.tieBreakNote
-                  ? `Tie Resolved Using ${position.tieBreakNote}`
-                  : "Tie resolved by the Board"}
-            </span>
-          )}
         </div>
       </div>
 
@@ -149,6 +137,20 @@ export function PositionCard({ position }: { position: PastElectionPositionResul
                           Highest vote
                         </span>
                       ) : null}
+                      {position.wasTie && candidate.proclaimedWinner && (
+                        /* The tie-resolution record explains how THIS
+                           candidate won, so it sits right of the "Proclaimed
+                           winner" badge. 117 — a 2-way both-proclaimed tie has
+                           no board pick, so no resolution method exists for it. */
+                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-300 text-[#5C0102] border border-amber-200/80 border-b-2 border-b-amber-500 px-2.5 py-0.5 text-[11px] font-bold shadow-[0_2px_5px_rgba(0,0,0,0.2)]">
+                          <Gavel size={11} />
+                          {position.tieResolutionMethod === "tie_both"
+                            ? "Tie — Both Proclaimed"
+                            : position.tieBreakNote
+                              ? `Tie Resolved Using ${position.tieBreakNote}`
+                              : "Tie resolved by the Board"}
+                        </span>
+                      )}
                     </div>
                     <p className={`text-sm truncate font-medium ${candidate.proclaimedWinner ? "text-white/80" : "text-gray-500"}`}>
                       {candidate.partyName || "Independent"} · {candidate.gradeLevel}

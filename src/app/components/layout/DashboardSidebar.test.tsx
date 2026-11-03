@@ -1,38 +1,52 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DashboardSidebar } from "./DashboardSidebar";
 import type { CommissionerRole } from "../../context/AppContext";
 
-const { mockCurrentUser } = vi.hoisted(() => ({
-  mockCurrentUser: {
-    id: "electoral-1",
-    name: "Electoral Commissioner",
-    role: "admin" as "admin" | "sslg_adviser",
-    email: "electoral@cnnhs.edu",
-    commissionerRole: "electoral_board" as CommissionerRole | undefined,
-    mustChangePassword: false,
-    profilePictureUrl: undefined as string | undefined,
-    isCoCommissioner: false as boolean | undefined,
-  },
-}));
+const { mockCurrentUser, mockElectionPeriod, mockConfirm, mockRpc, mockToastSuccess, mockToastError } =
+  vi.hoisted(() => ({
+    mockCurrentUser: {
+      id: "electoral-1",
+      name: "Electoral Commissioner",
+      role: "admin" as "admin" | "sslg_adviser",
+      email: "electoral@cnnhs.edu",
+      commissionerRole: "electoral_board" as CommissionerRole | undefined,
+      mustChangePassword: false,
+      profilePictureUrl: undefined as string | undefined,
+      isCoCommissioner: false as boolean | undefined,
+    },
+    mockElectionPeriod: {
+      officialListPosted: false,
+      id: "period-1" as string | undefined,
+      schoolYear: "2026-2027" as string | undefined,
+    },
+    mockConfirm: vi.fn(),
+    mockRpc: vi.fn(),
+    mockToastSuccess: vi.fn(),
+    mockToastError: vi.fn(),
+  }));
 
 vi.mock("../../context/AppContext", () => ({
   useApp: () => ({
     currentUser: mockCurrentUser,
     candidates: [],
-    electionPeriod: { officialListPosted: false },
+    electionPeriod: mockElectionPeriod,
     setCurrentUser: vi.fn(),
   }),
 }));
 
+vi.mock("sonner", () => ({
+  toast: { success: mockToastSuccess, error: mockToastError },
+}));
+
 vi.mock("../../lib/useConfirm", () => ({
-  useConfirm: () => ({ confirm: vi.fn(), dialog: null }),
+  useConfirm: () => ({ confirm: mockConfirm, dialog: null }),
 }));
 
 vi.mock("../../lib/supabase", () => ({
-  supabase: null,
-  isSupabaseConfigured: false,
+  supabase: { rpc: mockRpc, auth: { signOut: vi.fn() } },
+  isSupabaseConfigured: true,
 }));
 
 vi.mock("../notifications/NotificationBell", () => ({
@@ -53,6 +67,13 @@ describe("DashboardSidebar", () => {
     mockCurrentUser.role = "admin";
     mockCurrentUser.profilePictureUrl = undefined;
     mockCurrentUser.isCoCommissioner = false;
+    mockElectionPeriod.id = "period-1";
+    mockElectionPeriod.schoolYear = "2026-2027";
+    mockConfirm.mockReset();
+    mockConfirm.mockResolvedValue(false);
+    mockRpc.mockReset();
+    mockToastSuccess.mockClear();
+    mockToastError.mockClear();
   });
 
   it("shows Live Results for the Electoral Board", () => {
@@ -205,5 +226,96 @@ describe("DashboardSidebar", () => {
         ).toBeTruthy();
       },
     );
+  });
+
+  describe("seed injection button (130)", () => {
+    it("shows the Inject seed data button above Logout for the Electoral Board commissioner", () => {
+      renderSidebar();
+
+      const seedButton = screen.getByRole("button", { name: /Inject seed data/i });
+      const logoutButton = screen.getByRole("button", { name: "Logout" });
+      // Positioned above the Logout button in the footer.
+      expect(
+        seedButton.compareDocumentPosition(logoutButton) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it.each(["screening_validation", "grievance"] as const)(
+      "hides the seed button from the %s commissioner",
+      (commissionerRole) => {
+        mockCurrentUser.commissionerRole = commissionerRole;
+
+        renderSidebar();
+
+        expect(screen.queryByRole("button", { name: /Inject seed data/i })).toBeNull();
+      },
+    );
+
+    it("hides the seed button from the SSLG Adviser", () => {
+      mockCurrentUser.role = "sslg_adviser";
+      mockCurrentUser.commissionerRole = undefined;
+
+      renderSidebar();
+
+      expect(screen.queryByRole("button", { name: /Inject seed data/i })).toBeNull();
+    });
+
+    it("calls seed_extra_parties_rpc with the active period id on confirm", async () => {
+      mockConfirm.mockResolvedValueOnce(true);
+      mockRpc.mockResolvedValueOnce({ data: { new_parties: 3, new_candidates: 46 }, error: null });
+
+      renderSidebar();
+      fireEvent.click(screen.getByRole("button", { name: /Inject seed data/i }));
+
+      await waitFor(() => expect(mockToastSuccess).toHaveBeenCalled());
+      expect(mockRpc).toHaveBeenCalledWith("seed_extra_parties_rpc", {
+        p_election_period_id: "period-1",
+      });
+      expect(mockToastSuccess).toHaveBeenCalledWith(
+        "Seed data injected: 3 parties and 46 candidates added to the active election period.",
+      );
+      expect(mockToastError).not.toHaveBeenCalled();
+    });
+
+    it("surfaces the Postgres guard error verbatim when the rpc fails", async () => {
+      mockConfirm.mockResolvedValueOnce(true);
+      mockRpc.mockResolvedValueOnce({
+        data: null,
+        error: { message: "These students already have a candidacy in this period: 999900000021." },
+      });
+
+      renderSidebar();
+      fireEvent.click(screen.getByRole("button", { name: /Inject seed data/i }));
+
+      await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+      expect(mockToastError).toHaveBeenCalledWith(
+        "These students already have a candidacy in this period: 999900000021.",
+      );
+      expect(mockToastSuccess).not.toHaveBeenCalled();
+    });
+
+    it("does not call the rpc when the confirm is cancelled", async () => {
+      mockConfirm.mockResolvedValue(false);
+
+      renderSidebar();
+      fireEvent.click(screen.getByRole("button", { name: /Inject seed data/i }));
+
+      await waitFor(() => expect(mockConfirm).toHaveBeenCalled());
+      expect(mockRpc).not.toHaveBeenCalled();
+    });
+
+    it("reports a missing active election period instead of calling the rpc", async () => {
+      mockElectionPeriod.id = undefined;
+      mockConfirm.mockResolvedValueOnce(true);
+
+      renderSidebar();
+      fireEvent.click(screen.getByRole("button", { name: /Inject seed data/i }));
+
+      await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+      expect(mockToastError).toHaveBeenCalledWith(
+        "No active election period found. Create an election period first.",
+      );
+      expect(mockRpc).not.toHaveBeenCalled();
+    });
   });
 });

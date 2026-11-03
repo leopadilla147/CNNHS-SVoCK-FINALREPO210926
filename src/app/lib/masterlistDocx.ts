@@ -40,33 +40,70 @@ export function toTitleCase(value: string): string {
     .replace(/(^|[\s\-'.,])([a-z])/g, (_match, separator: string, letter: string) => separator + letter.toUpperCase());
 }
 
-/** Split the template's "LASTNAME, FIRSTNAME MIDDLENAME" cell into parts.
- *  The comma form is the documented template layout; a comma-less name
- *  falls back to first/middle/last tokens so the DB NOT NULL columns stay
- *  filled rather than rejecting the whole row. */
+/** A single-letter token with an optional period ("A", "A.") — a middle initial. */
+const SINGLE_INITIAL_RE = /^[A-Za-z].?$/;
+
+interface NameParts {
+  lastName: string;
+  firstName: string;
+  middleName: string;
+}
+
+/**
+ * Split the template's comma-separated name cell — "LAST NAME, FIRST NAME,
+ * MIDDLE INITIAL" — into its parts.  The comma is the field separator, so
+ * everything between the first and second comma is the WHOLE first name: a
+ * two-word first name ("DELA CRUZ, MARIA GRACE, A." → first "Maria Grace")
+ * is never split, and no comma is ever left glued to a part.  In the
+ * single-comma form ("DELA CRUZ, JUAN A.") a trailing single-initial token
+ * still reads as the middle initial, matching sheets that keep the
+ * documented space-separated layout.  A comma-less name falls back to
+ * first/middle/last tokens so the DB NOT NULL columns stay filled rather
+ * than rejecting the whole row (validation separately requires the comma).
+ */
+export function parseNameParts(fullName: string): NameParts {
+  const collapsed = fullName.trim().replace(/\s+/g, " ");
+  const segments = collapsed.split(",").map((s) => s.trim());
+
+  if (segments.length > 1 && (segments[0] !== "" || segments[1] !== "")) {
+    const tailTokens = (segments[1] || "").split(" ").filter(Boolean);
+    // "LAST, JUAN A." — with no third segment, a trailing single-initial
+    // token in the second segment is the middle initial.
+    const trailingInitial =
+      segments.length === 2 &&
+      tailTokens.length > 1 &&
+      SINGLE_INITIAL_RE.test(tailTokens[tailTokens.length - 1]);
+    return {
+      lastName: segments[0],
+      firstName: trailingInitial ? tailTokens.slice(0, -1).join(" ") : tailTokens.join(" "),
+      middleName: trailingInitial
+        ? tailTokens[tailTokens.length - 1]
+        : segments.slice(2).filter(Boolean).join(" "),
+    };
+  }
+
+  const tokens = collapsed.split(" ").filter(Boolean);
+  if (tokens.length <= 1) {
+    return { lastName: collapsed, firstName: "", middleName: "" };
+  }
+  return {
+    firstName: tokens[0],
+    middleName: tokens.slice(1, -1).join(" "),
+    lastName: tokens[tokens.length - 1],
+  };
+}
+
+/** Title-Case wrapper over `parseNameParts` for display/DB storage. */
 export function splitFullName(fullName: string): {
   lastName: string;
   firstName: string;
   middleName: string;
 } {
-  const collapsed = fullName.trim().replace(/\s+/g, " ");
-  const [head, tail] = collapsed.split(",");
-  if (tail !== undefined) {
-    const parts = tail.trim().split(" ").filter(Boolean);
-    return {
-      lastName: toTitleCase(head.trim()),
-      firstName: toTitleCase(parts[0] || ""),
-      middleName: toTitleCase(parts.slice(1).join(" ")),
-    };
-  }
-  const tokens = collapsed.split(" ").filter(Boolean);
-  if (tokens.length <= 1) {
-    return { lastName: toTitleCase(collapsed), firstName: "", middleName: "" };
-  }
+  const parts = parseNameParts(fullName);
   return {
-    firstName: toTitleCase(tokens[0]),
-    middleName: toTitleCase(tokens.slice(1, -1).join(" ")),
-    lastName: toTitleCase(tokens[tokens.length - 1]),
+    lastName: toTitleCase(parts.lastName),
+    firstName: toTitleCase(parts.firstName),
+    middleName: toTitleCase(parts.middleName),
   };
 }
 
@@ -216,8 +253,8 @@ export type MasterlistRowResult =
  *   LRN         — exactly 12 digits, numbers only (a pre-printed "1)" row
  *                 marker sharing the cell is tolerated).
  *   Full Name   — "LAST NAME, FIRST NAME, MIDDLE INITIAL(optional)"; the
- *                 comma is required, and a middle part must be a single
- *                 initial.
+ *                 comma is the field separator (a two-word first name stays
+ *                 whole), and the middle part must be a single initial.
  *   Sex/Gender  — Male / Female (case-insensitive) or M / F.
  *   Birthdate   — MM/DD/YYYY, a real calendar date.
  *   Grade Level — Grade 7 to Grade 12 (case-insensitive) or bare 7-12.
@@ -254,19 +291,18 @@ export function validateMasterlistRow(
     };
   }
 
-  // Full Name — "LAST NAME, FIRST NAME, MIDDLE INITIAL(optional)".
+  // Full Name — "LAST NAME, FIRST NAME, MIDDLE INITIAL(optional)": the comma
+  // is the field separator, so the WHOLE second segment is the first name
+  // (a two-word first name like "JUAN CARLOS" stays one name) and the third
+  // segment, when present, must be a single initial.
   const fullName = at("name");
   if (!fullName) {
     problems.push("missing Full Name (Last Name, First Name, Middle Initial)");
   } else {
-    const commaAt = fullName.indexOf(",");
-    const lastName = (commaAt >= 0 ? fullName.slice(0, commaAt) : "").trim();
-    const tailParts = commaAt >= 0 ? fullName.slice(commaAt + 1).trim().split(/\s+/).filter(Boolean) : [];
-    const firstName = tailParts[0] || "";
-    const middleName = tailParts.slice(1).join(" ");
-    if (commaAt < 0 || !lastName || !firstName) {
+    const parts = parseNameParts(fullName);
+    if (!fullName.includes(",") || !parts.lastName || !parts.firstName) {
       problems.push('invalid Full Name — use "Last Name, First Name, Middle Initial"');
-    } else if (middleName && !/^[A-Za-z]\.?$/.test(middleName.replace(/\s+/g, ""))) {
+    } else if (parts.middleName && !/^[A-Za-z]\.?$/.test(parts.middleName.replace(/\s+/g, ""))) {
       problems.push("invalid Full Name — the middle name must be a single initial");
     }
   }

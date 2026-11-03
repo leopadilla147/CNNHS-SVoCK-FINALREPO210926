@@ -358,11 +358,38 @@ describe("validateMasterlistRow (required-field rules)", () => {
     expect(result.problems.join(" ")).toContain('invalid Full Name — use "Last Name, First Name, Middle Initial"');
   });
 
-  it("rejects a multi-letter middle name", () => {
-    const result = validateMasterlistRow([...ok.slice(0, 1), "DELA CRUZ, JUAN ANTHONY", ...ok.slice(2)]);
+  it("rejects a multi-letter middle segment after the second comma", () => {
+    // With two commas the third segment is explicitly the middle initial —
+    // a multi-letter value there is still rejected.
+    const result = validateMasterlistRow([...ok.slice(0, 1), "DELA CRUZ, JUAN, ANTHONY", ...ok.slice(2)]);
     expect(result.kind).toBe("invalid");
     if (result.kind !== "invalid") return;
     expect(result.problems.join(" ")).toContain("middle name must be a single initial");
+  });
+
+  it("keeps a two-word first name whole (comma is the separator)", () => {
+    // "JUAN CARLOS" between the commas is the whole first name — it must not
+    // be read as first name + middle name.
+    const result = validateMasterlistRow([...ok.slice(0, 1), "DELA CRUZ, JUAN CARLOS", ...ok.slice(2)]);
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
+    expect(result.row.fullName).toBe("Dela Cruz, Juan Carlos");
+
+    // The stated layout "Last name, Firstname, middle initial": the middle
+    // initial is its own comma segment and the first name stays whole.
+    const withInitial = validateMasterlistRow([
+      ...ok.slice(0, 1),
+      "DELA CRUZ, JUAN CARLOS, A.",
+      ...ok.slice(2),
+    ]);
+    expect(withInitial.kind).toBe("ok");
+    if (withInitial.kind !== "ok") return;
+    expect(withInitial.row.fullName).toBe("Dela Cruz, Juan Carlos, A.");
+  });
+
+  it("accepts a middle initial written as its own comma segment", () => {
+    const result = validateMasterlistRow([...ok.slice(0, 1), "DELA CRUZ, JUAN, A.", ...ok.slice(2)]);
+    expect(result.kind).toBe("ok");
   });
 
   it("rejects an invalid Sex/Gender", () => {
@@ -567,6 +594,27 @@ describe("isFullMasterlistMatch (D-10)", () => {
 describe("splitFullName", () => {
   it("splits the template's LAST, FIRST MIDDLE form and Title Cases it", () => {
     expect(splitFullName("DELA CRUZ, JUAN A.")).toEqual({
+      lastName: "Dela Cruz",
+      firstName: "Juan",
+      middleName: "A.",
+    });
+  });
+
+  it("keeps a two-word first name whole between the commas", () => {
+    expect(splitFullName("DELA CRUZ, JUAN CARLOS")).toEqual({
+      lastName: "Dela Cruz",
+      firstName: "Juan Carlos",
+      middleName: "",
+    });
+    expect(splitFullName("DELA CRUZ, MARIA GRACE, A.")).toEqual({
+      lastName: "Dela Cruz",
+      firstName: "Maria Grace",
+      middleName: "A.",
+    });
+  });
+
+  it("reads the middle initial from its own comma segment (no comma glued to the first name)", () => {
+    expect(splitFullName("DELA CRUZ, JUAN, A.")).toEqual({
       lastName: "Dela Cruz",
       firstName: "Juan",
       middleName: "A.",

@@ -20,6 +20,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { toast } from "sonner";
 import AdminStudents from "./AdminStudents";
 import type { MasterlistRow } from "../../lib/masterlistDocx";
 
@@ -148,6 +149,13 @@ function uploadFile(container: HTMLElement) {
   });
 }
 
+/** The parsed sheet is staged in a confirmation dialog (Radix renders it
+ *  with role="alertdialog"); confirming is what writes to the masterlist. */
+async function confirmMasterlistDialog() {
+  const dialog = await screen.findByRole("alertdialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: /Add to Masterlist/i }));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockReviewStudentRpc.mockResolvedValue(undefined);
@@ -181,6 +189,7 @@ describe("AdminStudents masterlist upload (partial import)", () => {
   it("imports only new rows, skips existing LRNs, and reports invalid rows with fix guidance", async () => {
     const { container } = renderPage();
     uploadFile(container);
+    await confirmMasterlistDialog();
 
     // Inserted + awaiting share ONE combined box: 2 new rows imported, but
     // 3 students have no registered account yet (222 was already listed).
@@ -242,9 +251,11 @@ describe("AdminStudents masterlist upload (partial import)", () => {
     const { container } = renderPage();
     uploadFile(container);
 
+    // Nothing valid to add — the confirmation dialog is never offered.
     expect(
       await screen.findByText("2 rows could not be imported — nothing was imported. Fix the highlighted rows and upload the sheet again:")
     ).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(mockImportStudentMasterlistDocx).not.toHaveBeenCalled();
   });
 
@@ -264,6 +275,7 @@ describe("AdminStudents masterlist upload (partial import)", () => {
 
     const { container } = renderPage();
     uploadFile(container);
+    await confirmMasterlistDialog();
 
     expect(
       await screen.findByText("2 masterlist rows inserted — all listed as awaiting student registration.")
@@ -289,10 +301,62 @@ describe("AdminStudents masterlist upload (partial import)", () => {
 
     const { container } = renderPage();
     uploadFile(container);
+    await confirmMasterlistDialog();
 
     expect(await screen.findByText("1 masterlist row inserted.")).toBeInTheDocument();
     expect(screen.queryByText(/awaiting student registration/)).toBeNull();
     expect(mockReviewStudentRpc).not.toHaveBeenCalled();
+  });
+
+  it("stages the parsed sheet behind a confirmation dialog and adds nothing until confirmed", async () => {
+    const { container } = renderPage();
+    uploadFile(container);
+
+    // The summary dialog appears first; the import call has NOT happened.
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Add These Students to the Masterlist?")).toBeInTheDocument();
+    expect(within(dialog).getByText("New rows to add")).toBeInTheDocument();
+    // The dialog lists exactly the students that will be added — the two
+    // NEW rows with their LRNs; the skipped (already-in-system) rows 222
+    // and 333 are not offered.
+    expect(within(dialog).getByText("Students to be added")).toBeInTheDocument();
+    expect(within(dialog).getAllByText("Dela Cruz, Juan A.")).toHaveLength(2);
+    expect(within(dialog).getByText("LRN: 111111111111")).toBeInTheDocument();
+    expect(within(dialog).getByText("LRN: 444444444444")).toBeInTheDocument();
+    expect(within(dialog).queryByText("LRN: 222222222222")).toBeNull();
+    expect(within(dialog).queryByText("LRN: 333333333333")).toBeNull();
+    expect(mockImportStudentMasterlistDocx).not.toHaveBeenCalled();
+
+    // Cancelling aborts the import — no rows written, no auto-approvals,
+    // and the cancellation is audited.
+    fireEvent.click(within(dialog).getByRole("button", { name: /Cancel/i }));
+    await waitFor(() =>
+      expect(mockAddLog).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "Masterlist Import Cancelled", type: "info" })
+      )
+    );
+    expect(mockImportStudentMasterlistDocx).not.toHaveBeenCalled();
+    expect(mockReviewStudentRpc).not.toHaveBeenCalled();
+    expect(mockSetStudentMasterlist).not.toHaveBeenCalled();
+  });
+
+  it("shows the in-page error banner, toast, and audit entry when the import fails", async () => {
+    mockImportStudentMasterlistDocx.mockRejectedValue(new Error("The database rejected the import."));
+    const { container } = renderPage();
+    uploadFile(container);
+    await confirmMasterlistDialog();
+
+    // In-page red banner (role="alert") with the failure reason.
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText("Masterlist upload failed — nothing was added.")).toBeInTheDocument();
+    expect(screen.getByText("The database rejected the import.")).toBeInTheDocument();
+    // Toast + error audit entry.
+    expect(toast.error).toHaveBeenCalledWith("The database rejected the import.");
+    expect(mockAddLog).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "Masterlist Import Failed", type: "error" })
+    );
+    // No local masterlist state was mutated by the failed import.
+    expect(mockSetStudentMasterlist).not.toHaveBeenCalled();
   });
 });
 

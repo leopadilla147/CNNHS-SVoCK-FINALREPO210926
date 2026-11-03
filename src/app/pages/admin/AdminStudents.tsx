@@ -109,8 +109,21 @@ export default function AdminStudents() {
     invalidMessages: string[];
     failures?: string[];
   } | null>(null);
+  /** In-page failure banner for the last upload attempt (parse, network,
+   *  or DB error).  Rendered directly under the upload box so a failed
+   *  import is impossible to miss. */
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const approveConfirm = useConfirm({ title: "Approve Student?", description: "This will approve the student's registration and grant them access to the election system.", confirmText: "Approve", destructive: false });
   const rejectConfirm = useConfirm({ title: "Reject Student?", description: "This will reject the student's registration. They will not be able to participate in the election.", confirmText: "Reject", destructive: true });
+  // MASTER-01 — a parsed sheet is staged in this dialog first; rows are
+  // only written to student_masterlist once the adviser confirms.  The
+  // summary (new / skipped / invalid counts) is attached per call.
+  const masterlistConfirm = useConfirm({
+    title: "Add These Students to the Masterlist?",
+    description:
+      "The parsed rows will be added to the student masterlist. Rows whose LRN already exists are skipped automatically.",
+    confirmText: "Add to Masterlist",
+  });
 
   // 107 — Disable Student Accounts: a password-gated dialog behind the
   // upload row.  Step "gate" verifies the acting adviser's OWN password
@@ -306,6 +319,7 @@ export default function AdminStudents() {
     if (!file) return;
     setUploading(true);
     setUploadBanner(null);
+    setUploadError(null);
     try {
       const {
         parsed: { rows, skipped, errors },
@@ -346,6 +360,72 @@ export default function AdminStudents() {
         importRows = rows.filter((r) => !conflicts.has(r.lrn));
         duplicateRows = skippedRows.length;
         duplicateMessages = skippedRows.map((r) => describeSkippedLrn(r, conflicts.get(r.lrn)!));
+      }
+
+      // Confirmation gate: nothing is written until the adviser reviews
+      // this summary and confirms.  The LRN lookup above is read-only, so
+      // running it before the dialog keeps the counts accurate.
+      const ok = await masterlistConfirm.confirm({
+        description: `You are about to add students to the Student Masterlist for SY ${schoolYear}. Please review the list before continuing.`,
+        className: "sm:max-w-2xl",
+        content: (
+          <div className="space-y-3 text-sm">
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-gray-500">New rows to add</span>
+                <span className="font-medium text-gray-900">{importRows.length}</span>
+              </div>
+              {duplicateRows > 0 && (
+                <div className="flex items-center justify-between gap-4 mt-1.5">
+                  <span className="text-gray-500">Already in the system (skipped)</span>
+                  <span className="font-medium text-gray-900">{duplicateRows}</span>
+                </div>
+              )}
+              {skipped > 0 && (
+                <div className="flex items-center justify-between gap-4 mt-1.5">
+                  <span className="text-gray-500">Invalid rows (skipped)</span>
+                  <span className="font-medium text-red-700">{skipped}</span>
+                </div>
+              )}
+            </div>
+            {importRows.length > 0 && (
+              <div>
+                <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">
+                  Students to be added
+                </div>
+                <div className="rounded-lg border border-gray-200 divide-y divide-gray-100 max-h-56 overflow-y-auto">
+                  {importRows.map((row) => (
+                    <div key={row.lrn} className="flex items-center justify-between gap-3 px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="font-medium text-gray-900 truncate">{row.fullName}</div>
+                        <div className="text-xs text-gray-500">LRN: {row.lrn}</div>
+                      </div>
+                      <div className="text-xs text-gray-500 text-right whitespace-nowrap flex-shrink-0">
+                        {row.gradeLevel}
+                        {row.section ? ` • ${row.section}` : ""}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {importRows.length === 0 && (
+              <p className="text-xs text-gray-500">
+                Every valid row already exists in the system — nothing new will be added, but matched pending registrations may still be auto-approved.
+              </p>
+            )}
+          </div>
+        ),
+      });
+      if (!ok) {
+        addLog({
+          user: logUser,
+          role: logRole,
+          action: "Masterlist Import Cancelled",
+          details: `Cancelled the masterlist upload of "${file.name}" for SY ${schoolYear} — nothing was added.`,
+          type: "info",
+        });
+        return;
       }
 
       // MASTER-01 insert flow: persist every NEW row so students who
@@ -459,12 +539,17 @@ export default function AdminStudents() {
         type: failures.length > 0 || skipped > 0 ? "warning" : "info",
       });
     } catch (err: any) {
-      toast.error(err.message || "Could not read the masterlist file. Make sure it is a valid .docx in the CNNHS masterlist format.");
+      const message =
+        err?.message ||
+        "Could not read the masterlist file. Make sure it is a valid .docx in the CNNHS masterlist format.";
+      // In-page red banner (definitely rendered) + toast + audit entry.
+      setUploadError(message);
+      toast.error(message);
       addLog({
         user: logUser,
         role: logRole,
         action: "Masterlist Import Failed",
-        details: err.message || "Could not parse the uploaded masterlist.",
+        details: message,
         type: "error",
       });
     } finally {
@@ -600,8 +685,9 @@ export default function AdminStudents() {
             </div>
             <p className="text-xs text-gray-400 mt-1.5">
               Only rows with an LRN are read. Required per row: LRN (12 digits), Full Name
-              (Last Name, First Name, Middle Initial), Sex (Male/Female), Birthdate (MM/DD/YYYY),
-              and Grade Level (Grade 7–12). Rows are listed as "Awaiting Registration".
+              (Last Name, First Name, Middle Initial — commas separate the parts, e.g.
+              "Dela Cruz, Juan Carlos, A."; a two-word first name stays whole), Sex (Male/Female),
+              Birthdate (MM/DD/YYYY), and Grade Level (Grade 7–12). Rows are listed as "Awaiting Registration".
             </p>
           </label>
           <a
@@ -626,6 +712,16 @@ export default function AdminStudents() {
             <span className="text-xs text-gray-400">Graduated / Transferred (password required)</span>
           </button>
         </div>
+
+        {uploadError && (
+          <div className="mt-3 bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700 flex items-start gap-2" role="alert">
+            <AlertTriangle size={15} className="flex-shrink-0 mt-0.5" />
+            <div>
+              <div className="font-medium">Masterlist upload failed — nothing was added.</div>
+              <p className="mt-0.5">{uploadError}</p>
+            </div>
+          </div>
+        )}
 
         {uploadBanner && (
           <div className="mt-3 space-y-2">
@@ -1271,6 +1367,7 @@ export default function AdminStudents() {
       )}
       {approveConfirm.dialog}
       {rejectConfirm.dialog}
+      {masterlistConfirm.dialog}
     </div>
   );
 }

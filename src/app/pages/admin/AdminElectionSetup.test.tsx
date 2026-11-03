@@ -23,6 +23,7 @@ const {
   mockSaveCampaignWindowRpc,
   mockCountActiveComplaintsRpc,
   mockResetElectionPlanRpc,
+  mockFinalizeElectionRpc,
   mockOpenElectionRpc,
   mockForceOpenVotingRpc,
   mockCloseElectionRpc,
@@ -48,6 +49,7 @@ const {
   mockSaveCampaignWindowRpc: vi.fn(),
   mockCountActiveComplaintsRpc: vi.fn(),
   mockResetElectionPlanRpc: vi.fn(),
+  mockFinalizeElectionRpc: vi.fn(),
   mockOpenElectionRpc: vi.fn(),
   mockForceOpenVotingRpc: vi.fn(),
   mockCloseElectionRpc: vi.fn(),
@@ -75,6 +77,7 @@ vi.mock("../../lib/supabaseData", () => ({
   saveCampaignWindowRpc: mockSaveCampaignWindowRpc,
   countActiveComplaintsRpc: mockCountActiveComplaintsRpc,
   resetElectionPlanRpc: mockResetElectionPlanRpc,
+  finalizeElectionRpc: mockFinalizeElectionRpc,
   openElectionRpc: mockOpenElectionRpc,
   forceOpenVotingRpc: mockForceOpenVotingRpc,
   closeElectionRpc: mockCloseElectionRpc,
@@ -266,6 +269,10 @@ describe("AdminElectionSetup", () => {
       archivedPrevious: false,
       schoolYear: "2027-2028",
       mode: "cleared",
+    });
+    mockFinalizeElectionRpc.mockResolvedValue({
+      electionPeriodId: PERIOD_ID,
+      schoolYear: "2027-2028",
     });
     mockForceOpenVotingRpc.mockResolvedValue(undefined);
     mockReopenVotingRpc.mockResolvedValue(undefined);
@@ -2106,6 +2113,97 @@ describe("AdminElectionSetup", () => {
     expect(await screen.findByText("No active school year")).toBeInTheDocument();
   });
 
+  // 131 — Finalize Election replaces the Reset Plan danger zone once the
+  // record is committed (results published + winners proclaimed).
+  describe("Finalize Election (131)", () => {
+    // Stage 5 after Publish & Proclaim Winners: the committed record.
+    const committed = period({
+      lifecycleStage: "results",
+      isActive: false,
+      votingEndedAt: "2026-11-02T17:30:00.000Z",
+      resultsPublished: true,
+      proclaimed: true,
+      candidacyOpen: false,
+      rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+      startDate: "2026-11-02",
+      startTime: "08:00",
+      endDate: "2026-11-02",
+      endTime: "17:00",
+      schoolYear: "2026-2027",
+    });
+
+    it("replaces the Reset Plan danger zone once the record is committed", async () => {
+      const user = userEvent.setup();
+      electionPeriod = committed;
+      renderPage();
+
+      await gotoStage(user, "Results");
+      expect(screen.getByRole("button", { name: /Finalize Election/ })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Reset Plan/ })).toBeNull();
+    });
+
+    it("still offers the reset — the cancelled path — before results are published", async () => {
+      const user = userEvent.setup();
+      electionPeriod = period({
+        lifecycleStage: "results",
+        isActive: false,
+        votingEndedAt: "2026-11-02T17:30:00.000Z",
+        resultsPublished: false,
+        proclaimed: false,
+        candidacyOpen: false,
+        rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
+        startDate: "2026-11-02",
+        startTime: "08:00",
+        endDate: "2026-11-02",
+        endTime: "17:00",
+      });
+      renderPage();
+
+      await gotoStage(user, "Results");
+      expect(screen.getByRole("button", { name: /Reset Plan/ })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Finalize Election/ })).toBeNull();
+    });
+
+    it("will not finalize without a password", async () => {
+      const user = userEvent.setup();
+      electionPeriod = committed;
+      renderPage();
+
+      await gotoStage(user, "Results");
+      await user.click(screen.getByRole("button", { name: /Finalize Election/ }));
+      const dialog = await screen.findByRole("dialog");
+      await user.click(within(dialog).getByRole("button", { name: "Finalize Election" }));
+
+      expect(mockFinalizeElectionRpc).not.toHaveBeenCalled();
+      expect(
+        within(dialog).getByText("Enter the Electoral Board password to continue."),
+      ).toBeInTheDocument();
+    });
+
+    it("finalizes with the password and lands on Stage 1's school-year input", async () => {
+      const user = userEvent.setup();
+      electionPeriod = committed;
+      mockFinalizeElectionRpc.mockImplementation(async () => {
+        mockReloadElectionPeriod.mockResolvedValue({ ...emptyElectionPeriod });
+        return { electionPeriodId: PERIOD_ID, schoolYear: "2026-2027" };
+      });
+      mockApplyElectionPeriod.mockImplementation((fresh: ElectionPeriod) => {
+        electionPeriod = fresh;
+      });
+      renderPage();
+
+      await gotoStage(user, "Results");
+      await user.click(screen.getByRole("button", { name: /Finalize Election/ }));
+      const dialog = await screen.findByRole("dialog");
+      await user.type(within(dialog).getByLabelText("Electoral Board Password"), "chief123");
+      await user.click(within(dialog).getByRole("button", { name: "Finalize Election" }));
+
+      expect(mockFinalizeElectionRpc).toHaveBeenCalledWith("chief123");
+      expect(await screen.findByLabelText("School Year")).toBeInTheDocument();
+      expect(await screen.findByText("No active school year")).toBeInTheDocument();
+    });
+  });
+
   it("shows the current school year period next to the title", () => {
     electionPeriod = period({ schoolYear: "2027-2028" });
     renderPage();
@@ -2127,7 +2225,13 @@ describe("AdminElectionSetup", () => {
   it("explains that a reset with history archives instead of deleting", () => {
     renderPage();
 
-    expect(screen.getByText(/archived and kept permanently as history/)).toBeInTheDocument();
+    // 131 — the copy also names the cancelled retirement: a dirty period a
+    // reset puts down BEFORE the results were published/proclaimed is
+    // archived as a Cancelled election, never deleted.
+    expect(
+      screen.getByText(/it is archived — as a Cancelled election when this happens before/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/kept permanently as history/)).toBeInTheDocument();
   });
 
   describe("proclaim winners", () => {

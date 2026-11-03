@@ -175,7 +175,7 @@ export default function ElectoralDashboard() {
     const loadVotes = async () => {
       const { data, error } = await supabase!
         .from("votes")
-        .select("voter_id, abstained, kiosk_id, transaction_id, voted_at")
+        .select("voter_id, abstained, transaction_id, voted_at")
         .eq("election_period_id", periodId);
       if (cancelled || error || !data) return;
       setVoteRows(data as VoteListRow[]);

@@ -112,12 +112,82 @@ describe("OfficialResultsPage", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText("Tie — resolved via Coin Toss")).toBeTruthy();
+      expect(screen.getByText("Tie Resolved Using Coin Toss")).toBeTruthy();
     });
 
     expect(
       screen.getByText(/Electoral Board note: The complaint was reviewed/),
     ).toBeTruthy();
+  });
+
+  it("labels a both-proclaimed tie and hides the highest-vote tag on tied positions", async () => {
+    // 117 — a 2-way Grade-Rep tie proclaims both (no method of record), and
+    // a tied candidate the Board did NOT pick must not wear "Highest vote".
+    mockGetOfficialResults.mockResolvedValue({
+      ...results(),
+      positions: [
+        {
+          ...results().positions[0],
+          wasTie: true,
+          tieResolutionMethod: "tie_both" as const,
+          candidates: [
+            {
+              name: "Dela Cruz, Gabriel",
+              gradeLevel: "Grade 12",
+              partyName: "Alpha",
+              votes: 75,
+              totalVotes: 150,
+              isWinner: true,
+              proclaimedWinner: true,
+            },
+            {
+              name: "Santos, Adrian",
+              gradeLevel: "Grade 12",
+              partyName: undefined,
+              votes: 75,
+              totalVotes: 150,
+              isWinner: true,
+              proclaimedWinner: true,
+            },
+          ],
+        },
+        {
+          position: "Vice President",
+          votesCast: 150,
+          abstentions: 5,
+          wasTie: true,
+          tieResolutionMethod: "manual" as const,
+          tieBreakNote: "Coin Toss",
+          candidates: [
+            {
+              name: "Reyes, Maria",
+              gradeLevel: "Grade 11",
+              partyName: "Beta",
+              votes: 70,
+              totalVotes: 150,
+              isWinner: true,
+              proclaimedWinner: true,
+            },
+            {
+              name: "Cruz, Pedro",
+              gradeLevel: "Grade 11",
+              partyName: undefined,
+              votes: 70,
+              totalVotes: 150,
+              isWinner: true,
+              proclaimedWinner: false,
+            },
+          ],
+        },
+      ],
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("Tie — Both Proclaimed")).toBeTruthy();
+    expect(screen.getByText("Tie Resolved Using Coin Toss")).toBeTruthy();
+    // The tied runner-up who lost the board's pick wears no "Highest vote".
+    expect(screen.queryByText("Highest vote")).toBeNull();
   });
 
   it("shows the election's complaint record with click-to-reveal findings", async () => {

@@ -11,6 +11,7 @@ import {
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { Lock, RefreshCw, Trophy, Activity, Users, BarChart3, MinusCircle, Gavel } from "lucide-react";
 import { FULL_POSITION_ORDER as POSITIONS } from "../../lib/partyScope";
+import { resolveStage } from "../../lib/electionStage";
 import { complaintsForElection } from "../../lib/complaints";
 import { ComplaintRecordSection } from "../../components/ComplaintRecordSection";
 
@@ -41,7 +42,19 @@ export default function AdminLiveResults() {
   const electionIdRef = useRef<string | null>(null);
 
   const approved = contextCandidates.filter((c) => c.status === "approved");
-  const showResults = electionPeriod.isActive || electionPeriod.resultsPublished;
+  // 129 — the Live Result page is readable from the Voting Stage (running or
+  // closed/paused) through the Results Stage — publish and proclaim
+  // included — and only an election-plan reset closes it (the reset either
+  // clears the period back to 'application' or archives it to 'completed').
+  // resolveStage keeps the pre-058 boolean fallback for un-migrated data.
+  const stage = resolveStage(electionPeriod);
+  const showResults = stage === "voting" || stage === "results";
+  // The context period is the app-wide current period (058 semantics: the
+  // latest non-completed row, matching current_election_period_id()).  The
+  // realtime subscription and the proclamation record key off it — the old
+  // election_date-desc guess could latch onto an archived period after a
+  // reset.
+  const contextPeriodId = electionPeriod.id ?? null;
 
   const fetchLiveResults = useCallback(async () => {
     if (!isSupabaseConfigured || !supabase) return;
@@ -79,19 +92,25 @@ export default function AdminLiveResults() {
     fetchLiveResults();
 
     const setupRealtime = async () => {
-      const { data: ep } = await supabase!
-        .from("election_periods")
-        .select("id")
-        .order("election_date", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (!alive) return;
-      electionIdRef.current = ep?.id || null;
+      let periodId = contextPeriodId;
+      if (!periodId) {
+        // No id in the context yet — fall back to the same "latest
+        // non-completed period" read reloadElectionPeriod() uses.
+        const { data: ep } = await supabase!
+          .from("election_periods")
+          .select("id")
+          .neq("lifecycle_stage", "completed")
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (!alive) return;
+        periodId = ep?.id || null;
+      }
+      electionIdRef.current = periodId;
       // 081 — load the tie/proclamation/complaint record for the period; the
       // helper fails soft so an un-migrated database just shows no badges.
-      if (electionIdRef.current) {
-        getProclamationAnnotations(electionIdRef.current).then((record) => {
+      if (periodId) {
+        getProclamationAnnotations(periodId).then((record) => {
           if (alive) setAnnotations(record);
         });
       }
@@ -100,8 +119,8 @@ export default function AdminLiveResults() {
         supabase!.removeChannel(channelRef.current);
       }
 
-      const filter = ep?.id
-        ? `election_period_id=eq.${ep.id}`
+      const filter = periodId
+        ? `election_period_id=eq.${periodId}`
         : undefined;
 
       channelRef.current = supabase!
@@ -126,7 +145,7 @@ export default function AdminLiveResults() {
         channelRef.current = null;
       }
     };
-  }, [showResults, fetchLiveResults]);
+  }, [showResults, contextPeriodId, fetchLiveResults]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -179,6 +198,10 @@ export default function AdminLiveResults() {
         status: c.status,
         decision: c.decision ?? null,
         findings: c.findings ?? null,
+        // 127 — sanctions and the disqualified candidates ride along so the
+        // shared record section reveals them with the findings.
+        sanctions: c.sanctions ?? [],
+        disqualifiedCandidates: c.disqualifiedCandidates ?? [],
       })),
     [complaints, electionPeriod.id],
   );
@@ -225,7 +248,13 @@ export default function AdminLiveResults() {
                </span>
                <p className="text-sm font-medium text-gray-500 flex items-center gap-2">
                  <span className="hidden md:inline">•</span>
-                 {!electionPeriod.proclaimed && !electionPeriod.resultsPublished ? "Live vote counting in progress" : "Final vote tallies"}
+                 {electionPeriod.proclaimed || electionPeriod.resultsPublished
+                    ? "Final vote tallies"
+                    : electionPeriod.isActive
+                      ? "Live vote counting in progress"
+                      : stage === "voting"
+                        ? "Voting is paused"
+                        : "Vote counting has ended"}
                </p>
              </div>
            </div>
@@ -321,6 +350,13 @@ export default function AdminLiveResults() {
           const totalVotes = candidateVotes.reduce((s, c) => s + c.votes, 0);
           const winner = candidateVotes[0];
           const hasVotes = totalVotes > 0;
+          // 129 — before "Result and Proclaim Winners", a tie at the top is
+          // UNRESOLVED: the tied candidates wear no leader treatment (no
+          // trophy, no amber, no "Leading" badge) and the tie-resolution
+          // record below only exists once the board proclaims.  A unique
+          // leader keeps the "Leading" badge.
+          const topTied = hasVotes && candidateVotes.length > 1 && winner.votes === candidateVotes[1].votes;
+          const tieUnresolved = !electionPeriod.proclaimed && topTied;
           // 081 — the proclamation record for this position: the tie badge in
           // the header and the per-candidate "Proclaimed winner" badge.
           const positionProclamation = annotations.ties.find((t) => t.position === pos);
@@ -351,7 +387,13 @@ export default function AdminLiveResults() {
                      {positionTie && (
                        <span className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-700 border border-amber-200 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider">
                          <Gavel size={11} />
-                         {positionTie.tieBreakNote ? `Tie — resolved via ${positionTie.tieBreakNote}` : "Tie resolved by the Board"}
+                         {/* 117 — a 2-way both-proclaimed tie has no board
+                             pick, so no resolution method exists for it. */}
+                         {positionTie.resolutionMethod === "tie_both"
+                           ? "Tie — Both Proclaimed"
+                           : positionTie.tieBreakNote
+                             ? `Tie Resolved Using ${positionTie.tieBreakNote}`
+                             : "Tie resolved by the Board"}
                        </span>
                      )}
                    </div>
@@ -362,8 +404,8 @@ export default function AdminLiveResults() {
               <div className="p-3 flex-1 flex flex-col gap-2 bg-gray-50/30">
                 {candidateVotes.map((candidate, index) => {
                   const percentage = hasVotes ? (candidate.votes / totalVotes) * 100 : 0;
-                  const isWinner = index === 0 && candidate.votes > 0;
-                  const isTie = index > 0 && candidate.votes === winner.votes && candidate.votes > 0;
+                  const isWinner = !tieUnresolved && index === 0 && candidate.votes > 0;
+                  const isTie = !tieUnresolved && index > 0 && candidate.votes === winner.votes && candidate.votes > 0;
                   const isLeader = isWinner || isTie;
                   // 081 — the board's proclaimed pick: the whole row wears the
                   // proclamation colour, matching the Proclamation Dialog.

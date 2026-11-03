@@ -74,7 +74,13 @@ export function PositionCard({ position }: { position: PastElectionPositionResul
           {position.wasTie && (
             <span className="inline-flex items-center gap-1 rounded-full bg-amber-400/25 border border-amber-300/60 border-b-2 border-b-amber-500/40 px-2.5 py-0.5 text-[11px] font-bold text-amber-100 shadow-[0_2px_4px_rgba(0,0,0,0.15),inset_0_1px_0_rgba(255,255,255,0.25)]">
               <Gavel size={12} />
-              {position.tieBreakNote ? `Tie — resolved via ${position.tieBreakNote}` : "Tie resolved by the Board"}
+              {/* 117 — a 2-way both-proclaimed tie has no board pick, so no
+                  resolution method exists for it; manual ties name theirs. */}
+              {position.tieResolutionMethod === "tie_both"
+                ? "Tie — Both Proclaimed"
+                : position.tieBreakNote
+                  ? `Tie Resolved Using ${position.tieBreakNote}`
+                  : "Tie resolved by the Board"}
             </span>
           )}
         </div>
@@ -133,7 +139,11 @@ export function PositionCard({ position }: { position: PastElectionPositionResul
                           <Gavel size={11} />
                           Proclaimed winner
                         </span>
-                      ) : candidate.isWinner ? (
+                      ) : candidate.isWinner && !position.wasTie ? (
+                        /* A tie has no single highest-vote winner of record —
+                           the tied candidate(s) the Board did NOT pick must
+                           not wear the "Highest vote" tag (the proclaimed
+                           one(s) carry "Proclaimed winner" instead). */
                         <span className="inline-flex items-center gap-1 rounded-full bg-gradient-to-b from-emerald-50 to-emerald-100/70 text-emerald-800 border border-emerald-200 border-b-2 border-b-emerald-300 px-2.5 py-0.5 text-[11px] font-bold shadow-[0_1px_3px_rgba(16,185,129,0.1)]">
                           <Trophy size={11} />
                           Highest vote

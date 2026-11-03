@@ -2084,6 +2084,8 @@ export interface PastElectionPositionResult {
   candidates: PastElectionCandidateTally[];
   /** 081 — this position ended in a tie the Board resolved manually. */
   wasTie?: boolean;
+  /** 117 — 'manual' (the Board picked) or 'tie_both' (both proclaimed). */
+  tieResolutionMethod?: "manual" | "tie_both";
   /** How the Board recorded the resolution (e.g. "Coin Toss"). */
   tieBreakNote?: string;
 }
@@ -2226,6 +2228,10 @@ export async function listPastElections(): Promise<PastElectionSummary[]> {
 export interface ProclamationTieAnnotation {
   position: string;
   wasTie: boolean;
+  /** 117 — how the record resolves the position: 'manual' (the Board
+   *  picked the winner) or 'tie_both' (a 2-way Grade Rep tie proclaimed
+   *  both — no pick, so no tie-break note exists for it). */
+  resolutionMethod?: "manual" | "tie_both";
   tieBreakNote?: string;
   /** The proclaimed candidate for this position (every proclaimed position
    *  appears in `ties`, tie or not — so this doubles as the winners list). */
@@ -2323,6 +2329,10 @@ export async function getProclamationAnnotations(
       // 117 — 'tie_both' (a 2-way Grade Level Representative tie that
       // proclaimed both winners) is a tie of record just like 'manual'.
       wasTie: row.resolution_method === "manual" || row.resolution_method === "tie_both",
+      resolutionMethod:
+        row.resolution_method === "manual" || row.resolution_method === "tie_both"
+          ? row.resolution_method
+          : undefined,
       tieBreakNote: row.tie_break_note || undefined,
       candidateId: row.candidate_id || undefined,
     }));
@@ -2359,6 +2369,7 @@ export async function getPastElectionResults(
       const tie = annotations.ties.find((t) => t.position === position.position && t.wasTie);
       if (tie) {
         position.wasTie = true;
+        position.tieResolutionMethod = tie.resolutionMethod;
         position.tieBreakNote = tie.tieBreakNote;
       }
     }

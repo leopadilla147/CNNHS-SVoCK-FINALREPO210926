@@ -35,6 +35,7 @@ const {
   mockExtractAndParse,
   mockVerifyAdviserPassword,
   mockDisableStudentAccounts,
+  mockNotifyStudentReviewEmail,
 } = vi.hoisted(() => ({
   mockSetStudents: vi.fn(),
   mockSetStudentMasterlist: vi.fn(),
@@ -46,6 +47,7 @@ const {
   mockExtractAndParse: vi.fn(),
   mockVerifyAdviserPassword: vi.fn(),
   mockDisableStudentAccounts: vi.fn(),
+  mockNotifyStudentReviewEmail: vi.fn(),
 }));
 
 vi.mock("react-router", async (importOriginal) => {
@@ -118,6 +120,7 @@ vi.mock("../../lib/supabaseData", () => ({
   findExistingLrns: mockFindExistingLrns,
   verifyAdviserPasswordRpc: mockVerifyAdviserPassword,
   disableStudentAccountsRpc: mockDisableStudentAccounts,
+  notifyStudentReviewEmail: mockNotifyStudentReviewEmail,
 }));
 
 vi.mock("sonner", () => ({
@@ -163,6 +166,7 @@ beforeEach(() => {
   mockFindExistingLrns.mockResolvedValue(new Map());
   mockVerifyAdviserPassword.mockResolvedValue(true);
   mockDisableStudentAccounts.mockResolvedValue({ disabled: 1 });
+  mockNotifyStudentReviewEmail.mockResolvedValue(undefined);
   // Parsed sheet: Row 2 valid+new, Row 3 valid+listed, Row 4 valid+registered,
   // Row 5 invalid (reported by the parser), Row 6 valid+new.
   mockExtractAndParse.mockResolvedValue({
@@ -511,5 +515,99 @@ describe("AdminStudents disable student accounts (107)", () => {
 
     expect(await screen.findByText("No students selected yet.")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: /^Disable Accounts?$/i })).toBeDisabled();
+  });
+});
+
+// =============================================================
+// 133/134 — rejection dialog + review email.  A rejection now REQUIRES
+// the Adviser to record what is wrong or missing; the explanation travels
+// to review_student_rpc, which DELETES the registration row (134) and
+// files the reason in student_rejection_notices for the
+// notify_student_review emailer.
+// =============================================================
+describe("AdminStudents rejection dialog + review email (133/134)", () => {
+  it("blocks the rejection until an issue or note is provided (RPC never called)", async () => {
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+
+    await screen.findByText("Reject Student Registration");
+
+    // Nothing selected -> inline error, no RPC, dialog stays open.
+    fireEvent.click(screen.getByRole("button", { name: /Reject & Email Student/i }));
+    expect(
+      await screen.findByText(/Select at least one issue \(or write a note\)/i),
+    ).toBeInTheDocument();
+    expect(mockReviewStudentRpc).not.toHaveBeenCalled();
+    expect(mockNotifyStudentReviewEmail).not.toHaveBeenCalled();
+  });
+
+  it("records the explanation, deletes the row from the roster, and emails the student", async () => {
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    await screen.findByText("Reject Student Registration");
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /LRN was not found/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /details do not match/i }));
+    fireEvent.change(screen.getByLabelText(/Notes for the student/i), {
+      target: { value: "Please verify your birthdate with the registrar." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Reject & Email Student/i }));
+
+    await waitFor(() => expect(mockNotifyStudentReviewEmail).toHaveBeenCalledWith("s333"));
+
+    // The RPC carries the composed explanation (one item per line).
+    expect(mockReviewStudentRpc).toHaveBeenCalledTimes(1);
+    const [studentId, action, actorId, verification, reason] = mockReviewStudentRpc.mock.calls[0];
+    expect(studentId).toBe("s333");
+    expect(action).toBe("reject");
+    expect(actorId).toBe("adv-1");
+    expect(verification).toBeUndefined();
+    expect(reason).toContain("The LRN was not found in the current Student Masterlist.");
+    expect(reason).toContain("The submitted details do not match the school records");
+    expect(reason).toContain("Note from the SSLG Adviser: Please verify your birthdate with the registrar.");
+
+    // 134: the row is REMOVED from the roster (not flipped to rejected) —
+    // only the still-approved student remains.
+    expect(mockSetStudents).toHaveBeenCalledWith([
+      expect.objectContaining({ id: "s777", status: "approved" }),
+    ]);
+    // The account no longer exists, so there is no in-app bell
+    // notification — the email is the notification.
+    expect(mockInsertNotification).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith(expect.stringContaining("Rejection email sent"));
+
+    // Success closes the dialog.
+    await waitFor(() => expect(screen.queryByText("Reject Student Registration")).toBeNull());
+  });
+
+  it('requires notes when "Other" is selected', async () => {
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    await screen.findByText("Reject Student Registration");
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /Other \(explain in the notes below\)/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Reject & Email Student/i }));
+    expect(
+      await screen.findByText(/please explain the problem in the notes field/i),
+    ).toBeInTheDocument();
+    expect(mockReviewStudentRpc).not.toHaveBeenCalled();
+  });
+
+  it("keeps the rejection and warns the Adviser when the email send fails", async () => {
+    mockNotifyStudentReviewEmail.mockRejectedValue(new Error("Brevo outage"));
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    await screen.findByText("Reject Student Registration");
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /LRN was not found/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Reject & Email Student/i }));
+
+    // The rejection itself already succeeded — the row is flipped.
+    await waitFor(() => expect(mockSetStudents).toHaveBeenCalled());
+    // ...and the Adviser is told only the email failed.
+    expect(toast.error).toHaveBeenCalledWith(
+      "The student was rejected, but the notification email failed to send.",
+    );
+    expect(mockReviewStudentRpc).toHaveBeenCalledTimes(1);
   });
 });

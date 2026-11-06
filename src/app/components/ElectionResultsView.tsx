@@ -147,8 +147,8 @@ export function PositionCard({ position }: { position: PastElectionPositionResul
                           {position.tieResolutionMethod === "tie_both"
                             ? "Tie — Both Proclaimed"
                             : position.tieBreakNote
-                              ? `Tie Resolved Using ${position.tieBreakNote}`
-                              : "Tie resolved by the Board"}
+                              ? `Tie Resolved By Electoral Board Using ${position.tieBreakNote}`
+                              : "Tie Resolved By Electoral Board"}
                         </span>
                       )}
                     </div>

@@ -112,7 +112,7 @@ describe("OfficialResultsPage", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText("Tie Resolved Using Coin Toss")).toBeTruthy();
+      expect(screen.getByText("Tie Resolved By Electoral Board Using Coin Toss")).toBeTruthy();
     });
 
     expect(
@@ -187,7 +187,7 @@ describe("OfficialResultsPage", () => {
     // Both proclaimed winners carry the tie record in front of their name,
     // so the both-proclaimed label appears once per winner row.
     expect((await screen.findAllByText("Tie — Both Proclaimed")).length).toBe(2);
-    expect(screen.getByText("Tie Resolved Using Coin Toss")).toBeTruthy();
+    expect(screen.getByText("Tie Resolved By Electoral Board Using Coin Toss")).toBeTruthy();
     // The tied runner-up who lost the board's pick wears no "Highest vote".
     expect(screen.queryByText("Highest vote")).toBeNull();
   });

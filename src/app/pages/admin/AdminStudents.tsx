@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo } from "react";
 import { useSearchParams } from "react-router";
-import { Search, CheckCircle, XCircle, Clock, Eye, AlertTriangle, Upload, Loader2, Download, Ban, ShieldAlert, X, MinusCircle } from "lucide-react";
+import { Search, CheckCircle, XCircle, Clock, Eye, AlertTriangle, Upload, Loader2, Download, FileSpreadsheet, Ban, ShieldAlert, X, MinusCircle } from "lucide-react";
 import { motion } from "motion/react";
 import { useApp, Student, StudentMasterlistEntry } from "../../context/AppContext";
-import { reviewStudentRpc, importStudentMasterlistDocx, findExistingLrns, verifyAdviserPasswordRpc, disableStudentAccountsRpc } from "../../lib/supabaseData";
+import { reviewStudentRpc, importStudentMasterlistDocx, findExistingLrns, verifyAdviserPasswordRpc, disableStudentAccountsRpc, notifyStudentReviewEmail } from "../../lib/supabaseData";
 import {
   extractAndParseMasterlist,
   partitionMasterlistMatches,
@@ -13,6 +13,7 @@ import {
   toIsoBirthdate,
 } from "../../lib/masterlistDocx";
 import { isSupabaseConfigured } from "../../lib/supabase";
+import { saveMasterlistTemplateXlsx } from "../../lib/masterlistXlsx";
 import { useConfirm } from "../../lib/useConfirm";
 import { toast } from "sonner";
 
@@ -114,7 +115,37 @@ export default function AdminStudents() {
    *  import is impossible to miss. */
   const [uploadError, setUploadError] = useState<string | null>(null);
   const approveConfirm = useConfirm({ title: "Approve Student?", description: "This will approve the student's registration and grant them access to the election system.", confirmText: "Approve", destructive: false });
-  const rejectConfirm = useConfirm({ title: "Reject Student?", description: "This will reject the student's registration. They will not be able to participate in the election.", confirmText: "Reject", destructive: true });
+  // 133 — rejection now runs through a dedicated dialog: the Adviser picks
+  // WHAT is wrong or missing (checked issues + optional notes).  The joined
+  // explanation is stored on the students row and emailed to the student,
+  // so a bare confirm is no longer enough.
+  const [rejectTarget, setRejectTarget] = useState<Student | null>(null);
+  const [rejectIssues, setRejectIssues] = useState<string[]>([]);
+  const [rejectNotes, setRejectNotes] = useState("");
+  const [rejectError, setRejectError] = useState<string | null>(null);
+  const [rejecting, setRejecting] = useState(false);
+  const REJECTION_ISSUES: { id: string; label: string }[] = [
+    { id: "details", label: "The submitted details do not match the school records (check the name spelling, birthdate, grade level, or gender)." },
+    { id: "lrn", label: "The LRN was not found in the current Student Masterlist." },
+    { id: "missing", label: "Required registration information is missing or incomplete." },
+    { id: "other", label: "Other (explain in the notes below)." },
+  ];
+  const openRejectDialog = (student: Student) => {
+    setRejectTarget(student);
+    setRejectIssues([]);
+    setRejectNotes("");
+    setRejectError(null);
+  };
+  const closeRejectDialog = () => {
+    setRejectTarget(null);
+    setRejectIssues([]);
+    setRejectNotes("");
+    setRejectError(null);
+  };
+  const toggleRejectIssue = (id: string) => {
+    setRejectIssues((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+    setRejectError(null);
+  };
   // MASTER-01 — a parsed sheet is staged in this dialog first; rows are
   // only written to student_masterlist once the adviser confirms.  The
   // summary (new / skipped / invalid counts) is attached per call.
@@ -584,6 +615,18 @@ export default function AdminStudents() {
         message: "Your student registration has been approved. You can now access the election system.",
         link: "/student/dashboard",
       });
+      // 133 — email the student through the system emailer (Brevo, via the
+      // notify_student_review edge function).  The review already stands,
+      // so a failed send never blocks the approval — it only warns.
+      if (isSupabaseConfigured) {
+        try {
+          await notifyStudentReviewEmail(student.id);
+          toast.success(`Approval email sent to ${student.email || "the student"}.`);
+        } catch (emailErr) {
+          console.error("notify_student_review (approve) failed:", emailErr);
+          toast.error("The student was approved, but the notification email failed to send.");
+        }
+      }
     } catch (err: any) {
       toast.error(err.message || "Failed to approve student");
       addLog({
@@ -598,29 +641,25 @@ export default function AdminStudents() {
     setSelected(null);
   };
 
-  const handleReject = async (student: Student) => {
-    const ok = await rejectConfirm.confirm();
-    if (!ok) return;
+  const handleReject = async (student: Student, reason: string) => {
     setProcessing(student.id);
+    let rejected = false;
     try {
       if (isSupabaseConfigured) {
-        await reviewStudentRpc(student.id, "reject", currentUser?.id);
+        await reviewStudentRpc(student.id, "reject", currentUser?.id, undefined, reason);
       }
-      setStudents(students.map((s) => s.id === student.id ? { ...s, status: "rejected" } : s));
+      rejected = true;
+      // 134 — the rejection deletes the registration row server-side
+      // (LRN and email are freed for a corrected resubmission), so drop
+      // the student from the roster here too.  No in-app notification:
+      // the account no longer exists — the email is the notification.
+      setStudents(students.filter((s) => s.id !== student.id));
       addLog({
         user: logUser,
         role: "Admin",
         action: "Rejected Student Registration",
-        details: `Rejected registration of ${student.firstName} ${student.lastName} (LRN: ${student.lrn})`,
+        details: `Rejected registration of ${student.firstName} ${student.lastName} (LRN: ${student.lrn}) — record removed from the roster. Reason: ${reason.replace(/\n/g, "; ")}`,
         type: "warning",
-      });
-      insertNotification({
-        userId: student.id,
-        role: "student",
-        type: "student_rejected",
-        title: "Registration Rejected",
-        message: "Your student registration has been rejected. Please contact the SSLG Adviser for assistance.",
-        link: "/",
       });
     } catch (err: any) {
       toast.error(err.message || "Failed to reject student");
@@ -634,6 +673,47 @@ export default function AdminStudents() {
     }
     setProcessing(null);
     setSelected(null);
+    if (!rejected) return;
+    // 133/134 — email the student the recorded explanation (what is wrong
+    // or missing).  Best-effort: the rejection stands even if the send
+    // fails, but the Adviser must see that it did.
+    if (isSupabaseConfigured) {
+      try {
+        await notifyStudentReviewEmail(student.id);
+        toast.success(`Rejection email sent to ${student.email || "the student"}.`);
+      } catch (emailErr) {
+        console.error("notify_student_review (reject) failed:", emailErr);
+        toast.error("The student was rejected, but the notification email failed to send.");
+      }
+    }
+    closeRejectDialog();
+  };
+
+  /** Dialog confirm: validate the explanation, compose the stored/email
+   *  text (one item per line), then hand off to handleReject. */
+  const confirmReject = async () => {
+    if (!rejectTarget) return;
+    const labels = REJECTION_ISSUES
+      .filter((issue) => rejectIssues.includes(issue.id))
+      .map((issue) => issue.label);
+    const notes = rejectNotes.trim();
+    if (labels.length === 0 && !notes) {
+      setRejectError("Select at least one issue (or write a note) so the student knows what is wrong or missing.");
+      return;
+    }
+    if (rejectIssues.includes("other") && !notes) {
+      setRejectError('You selected "Other" — please explain the problem in the notes field.');
+      return;
+    }
+    const reason = [...labels, notes ? `Note from the SSLG Adviser: ${notes}` : ""]
+      .filter((line) => line.length > 0)
+      .join("\n");
+    setRejecting(true);
+    try {
+      await handleReject(rejectTarget, reason);
+    } finally {
+      setRejecting(false);
+    }
   };
 
   const getStatusBadge = (status: string) => {
@@ -667,7 +747,7 @@ export default function AdminStudents() {
           <label className="flex-1 block border-2 border-dashed border-gray-200 rounded-xl p-8 text-center hover:border-[#5C0102] transition-colors cursor-pointer bg-white">
             <input
               type="file"
-              accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              accept=".docx,.xlsx,.xls,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
               className="hidden"
               disabled={uploading}
               onChange={(e) => {
@@ -681,25 +761,39 @@ export default function AdminStudents() {
               ) : (
                 <Upload size={20} className="text-gray-400 flex-shrink-0" />
               )}
-              <span className="text-sm font-medium text-gray-700">{uploading ? "Reading masterlist..." : "Upload Masterlist (.docx)"}</span>
+              <span className="text-sm font-medium text-gray-700">{uploading ? "Reading masterlist..." : "Upload Masterlist (.docx or .xlsx)"}</span>
             </div>
             <p className="text-xs text-gray-400 mt-1.5">
               Only rows with an LRN are read. Required per row: LRN (12 digits), Full Name
               (Last Name, First Name, Middle Initial — commas separate the parts, e.g.
               "Dela Cruz, Juan Carlos, A."; a two-word first name stays whole), Sex (Male/Female),
               Birthdate (MM/DD/YYYY), and Grade Level (Grade 7–12). Rows are listed as "Awaiting Registration".
+              Both Word (.docx) and Excel (.xlsx / .xls) files are accepted.
             </p>
           </label>
-          <a
-            href={MASTERLIST_TEMPLATE_URL}
-            download="CNNHS-MASTER-LIST-FORMAT.docx"
-            className="flex flex-col items-center justify-center gap-2 sm:w-56 bg-white border border-gray-200 rounded-xl p-6 text-center hover:border-[#5C0102] hover:bg-[#FFF5F5] transition-colors"
-            title="Download a blank copy of the official CNNHS masterlist format"
-          >
-            <Download size={20} className="text-[#5C0102] flex-shrink-0" />
-            <span className="text-sm font-medium text-gray-700">Download Masterlist Format</span>
-            <span className="text-xs text-gray-400">Blank .docx copy of the official template</span>
-          </a>
+          <div className="flex flex-col justify-center gap-2 sm:w-56 bg-white border border-gray-200 rounded-xl p-4 hover:border-[#5C0102] transition-colors">
+            <a
+              href={MASTERLIST_TEMPLATE_URL}
+              download="CNNHS-MASTER-LIST-FORMAT.docx"
+              className="flex flex-col items-center gap-1 text-center"
+              title="Download a blank copy of the official CNNHS masterlist format"
+            >
+              <Download size={20} className="text-[#5C0102] flex-shrink-0" />
+              <span className="text-sm font-medium text-gray-700">Download Masterlist Format</span>
+              <span className="text-xs text-gray-400">Blank .docx copy of the official template</span>
+            </a>
+            <div className="border-t border-gray-100" aria-hidden="true" />
+            <button
+              type="button"
+              onClick={() => void saveMasterlistTemplateXlsx(electionPeriod?.schoolYear)}
+              className="flex flex-col items-center gap-1 text-center hover:opacity-75 transition-opacity"
+              title="Download the same masterlist format as an Excel workbook (.xlsx) for uploading straight from Excel"
+            >
+              <FileSpreadsheet size={20} className="text-[#5C0102] flex-shrink-0" />
+              <span className="text-sm font-medium text-gray-700">Excel format (.xlsx)</span>
+              <span className="text-xs text-gray-400">Same format for Excel uploads</span>
+            </button>
+          </div>
           {/* 107 — Disable Student Accounts (SSLG Adviser password gate). */}
           <button
             type="button"
@@ -921,7 +1015,7 @@ export default function AdminStudents() {
                     <label className="flex items-center justify-center gap-2 border-2 border-dashed border-gray-200 rounded-lg p-3 text-center hover:border-[#5C0102] cursor-pointer bg-white text-xs text-gray-600">
                       <input
                         type="file"
-                        accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        accept=".docx,.xlsx,.xls,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                         className="hidden"
                         disabled={parsingGraduated}
                         onChange={(e) => {
@@ -936,7 +1030,7 @@ export default function AdminStudents() {
                       )}
                       {parsingGraduated
                         ? "Reading masterlist..."
-                        : "Upload Graduated Masterlist (.docx) — auto-selects matching students"}
+                        : "Upload Graduated Masterlist (.docx or .xlsx) — auto-selects matching students"}
                     </label>
                     {graduatedReport && (
                       <div className="bg-blue-50 border border-blue-200 rounded-lg p-2.5 text-xs text-blue-700">
@@ -1211,7 +1305,7 @@ export default function AdminStudents() {
                             Approve
                           </button>
                           <button
-                            onClick={() => handleReject(student)}
+                            onClick={() => openRejectDialog(student)}
                             disabled={processing === student.id}
                             className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-red-600 text-white text-xs hover:bg-red-700 transition-colors disabled:opacity-60"
                           >
@@ -1343,7 +1437,7 @@ export default function AdminStudents() {
                     <button onClick={() => handleApprove(selected)} className="flex-1 py-2.5 bg-green-600 text-white rounded-xl text-sm font-medium hover:bg-green-700 transition-colors">
                       ✓ Approve
                     </button>
-                    <button onClick={() => handleReject(selected)} className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-700 transition-colors">
+                    <button onClick={() => openRejectDialog(selected)} className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-700 transition-colors">
                       ✗ Reject
                     </button>
                   </>
@@ -1366,7 +1460,90 @@ export default function AdminStudents() {
         </div>
       )}
       {approveConfirm.dialog}
-      {rejectConfirm.dialog}
+      {/* 133 — rejection dialog: the Adviser records WHAT is wrong or
+          missing; the joined explanation is stored on the students row and
+          emailed to the student (notify_student_review). */}
+      {rejectTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/50" onClick={closeRejectDialog}>
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white rounded-2xl shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-5 border-b border-gray-100">
+              <h3 className="text-gray-900">Reject Student Registration</h3>
+              <p className="text-gray-500 text-sm mt-1">
+                <span className="font-medium text-gray-700">{rejectTarget.firstName} {rejectTarget.lastName}</span>
+                <span className="text-gray-400"> · LRN {rejectTarget.lrn}</span>
+              </p>
+            </div>
+            <div className="p-5 space-y-4">
+              <p className="text-sm text-gray-600">
+                Select what is wrong or missing in the submitted registration — this explanation will be
+                <span className="font-medium text-gray-800"> emailed to the student</span>.
+              </p>
+              <div className="space-y-2">
+                {REJECTION_ISSUES.map((issue) => (
+                  <label
+                    key={issue.id}
+                    className={`flex items-start gap-2.5 p-3 rounded-xl border text-sm cursor-pointer transition-colors ${
+                      rejectIssues.includes(issue.id)
+                        ? "border-red-300 bg-red-50 text-red-800"
+                        : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={rejectIssues.includes(issue.id)}
+                      onChange={() => toggleRejectIssue(issue.id)}
+                      className="mt-0.5 accent-red-600"
+                    />
+                    <span>{issue.label}</span>
+                  </label>
+                ))}
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1.5" htmlFor="reject-notes">
+                  Notes for the student (optional)
+                </label>
+                <textarea
+                  id="reject-notes"
+                  value={rejectNotes}
+                  onChange={(e) => { setRejectNotes(e.target.value); setRejectError(null); }}
+                  rows={3}
+                  maxLength={1000}
+                  placeholder="e.g. Please use the email address given by the school, then see the SSLG Adviser office."
+                  className="w-full border border-gray-200 rounded-xl p-3 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:border-red-300 resize-none"
+                />
+              </div>
+              {rejectError && (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-700 flex items-start gap-2" role="alert">
+                  <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+                  <span>{rejectError}</span>
+                </div>
+              )}
+            </div>
+            <div className="p-5 pt-0 flex gap-2">
+              <button
+                onClick={closeRejectDialog}
+                disabled={rejecting}
+                className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmReject}
+                disabled={rejecting}
+                className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-700 transition-colors disabled:opacity-60 flex items-center justify-center gap-2"
+              >
+                {rejecting ? <Loader2 size={14} className="animate-spin" /> : <XCircle size={14} />}
+                {rejecting ? "Rejecting..." : "Reject & Email Student"}
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
       {masterlistConfirm.dialog}
     </div>
   );

@@ -1396,19 +1396,46 @@ export async function reviewStudentRpc(
   // auto-approve passes "automatic"; the adviser's manual review passes
   // nothing (the RPC keeps the registration's own verdict, defaulting to
   // 'manual').
-  p_verification?: "automatic" | "manual"
+  p_verification?: "automatic" | "manual",
+  // 133: the Adviser's explanation, REQUIRED on the reject path (the RPC
+  // raises without it) — emailed to the student by notify_student_review.
+  // One item per line — the email renders it as a list.  134: a reject
+  // also DELETES the registration row; the explanation is filed in
+  // student_rejection_notices for the emailer.
+  p_rejection_reason?: string
 ): Promise<any> {
   if (!supabase) throw new Error("Supabase is not configured.");
   const { data, error } = await supabase.rpc("review_student_rpc", {
     p_student_id,
     p_action,
     p_verification: p_verification ?? null,
+    p_rejection_reason: p_rejection_reason ?? null,
   });
   if (error) {
     const msg = [error.message, error.details, error.hint].filter(Boolean).join(" | ");
     throw new Error(msg);
   }
   return data;
+}
+
+/**
+ * 133 — student registration review email (approve / reject).  Fires the
+ * notify_student_review edge function AFTER a successful review RPC; the
+ * function resolves the content from the DATABASE, never from the client:
+ * a student_rejection_notices row (134 — rejections delete the students
+ * row) carries the verdict + reason for rejects, the live students row
+ * carries approvals.  Identity rides the x-session-token side channel;
+ * the function re-checks the adminprofiles gate itself.  Callers treat a
+ * throw as best-effort: the review already stands, only the email failed.
+ */
+export async function notifyStudentReviewEmail(studentId: string): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client.functions.invoke("notify_student_review", {
+    body: { studentId },
+  });
+  if (error) {
+    throw new Error("Unable to send the notification email right now. Please try again later.");
+  }
 }
 
 /** 107 — the password gate in front of the "Disable Student Accounts"

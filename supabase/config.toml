@@ -44,3 +44,11 @@ verify_jwt = false
 # and the 120 verify RPC's shared 023 login lockout, not by a JWT.
 [functions.send_password_reset]
 verify_jwt = false
+
+# notify_student_review (student registration approve/reject emails)
+# authenticates via the x-session-token side channel — same reasoning as
+# create_commissioner/create_sslg_adviser above: identity resolves from
+# the 022 sessions table + an adminprofiles membership gate, not a
+# platform JWT.
+[functions.notify_student_review]
+verify_jwt = false

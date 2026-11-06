@@ -66,9 +66,13 @@ describe("isInLivePeriod", () => {
     expect(isInLivePeriod(candidate({ electionPeriodId: undefined }), period())).toBe(true);
   });
 
-  it("keeps everything while the live period has no id yet", () => {
-    // Before the boot load resolves there is nothing safe to hide.
-    expect(isInLivePeriod(candidate({ electionPeriodId: "period-past" }), period({ id: undefined }))).toBe(true);
+  it("hides everything when there is no live period id", () => {
+    // No period row (every election completed/cancelled, or none yet): the
+    // whole store is history, so a past election's roster can never read as
+    // current.  AppContext sets candidates and the period in one batched
+    // update, so an empty id never describes "loaded but not yet scoped".
+    expect(isInLivePeriod(candidate({ electionPeriodId: "period-past" }), period({ id: undefined }))).toBe(false);
+    expect(isInLivePeriod(candidate({ electionPeriodId: undefined }), period({ id: undefined }))).toBe(false);
   });
 });
 
@@ -98,7 +102,9 @@ describe("splitCandidatesByPeriod", () => {
     expect(live.length + archived.length).toBe(rows.length);
   });
 
-  it("splits nothing when the live period has no id", () => {
+  it("archives everything when the live period has no id", () => {
+    // No period = no current election: past rosters stay reachable for the
+    // archive surfaces, but no current-election screen may show them.
     const rows = [
       candidate({ id: "a", electionPeriodId: "period-live" }),
       candidate({ id: "b", electionPeriodId: "period-past" }),
@@ -106,8 +112,8 @@ describe("splitCandidatesByPeriod", () => {
 
     const { live, archived } = splitCandidatesByPeriod(rows, period({ id: undefined }));
 
-    expect(live).toHaveLength(2);
-    expect(archived).toHaveLength(0);
+    expect(live).toHaveLength(0);
+    expect(archived).toHaveLength(2);
   });
 });
 
@@ -142,5 +148,15 @@ describe("replaceLiveCandidates", () => {
     const merged = replaceLiveCandidates(previous, [], period());
 
     expect(merged.map((c) => c.id)).toEqual(["past-a"]);
+  });
+
+  it("leaves the store untouched when there is no live period to replace", () => {
+    // The exposed live list is empty without a period, so callers pass an
+    // empty next; appending anything would file rows into retired history.
+    const previous = [candidate({ id: "past-a", electionPeriodId: "period-past" })];
+
+    const merged = replaceLiveCandidates(previous, [], period({ id: undefined }));
+
+    expect(merged).toEqual(previous);
   });
 });

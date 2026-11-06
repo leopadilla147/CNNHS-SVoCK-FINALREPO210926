@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Search, Trophy, Mail, Phone, MapPin, EyeOff } from "lucide-react";
+import { Search, Trophy, Mail, Phone, MapPin, EyeOff, CalendarX } from "lucide-react";
 import { motion } from "motion/react";
 import { useApp } from "../../context/AppContext";
 import { candidatesInLivePeriod, FULL_POSITION_ORDER as ALL_POSITION_ORDER } from "../../lib/partyScope";
@@ -13,6 +13,11 @@ export default function StudentCandidates() {
   const periodCandidates = candidatesInLivePeriod(candidates, electionPeriod);
   const myApplication = periodCandidates.find((c) => c.studentId === currentUser?.id);
   const myParty = myApplication?.status === "approved" ? (myApplication.partyAffiliation ?? null) : null;
+
+  // No period row at all (every election completed/cancelled, or none yet):
+  // nothing is live, so past rosters stay in the archive and this page says
+  // so plainly instead of implying an election is coming.
+  const hasElectionPeriod = Boolean(electionPeriod.id);
 
   // Candidates visible only if admin posted the official list, or student is an approved candidate
   const canViewCandidates = electionPeriod.officialListPosted || myApplication?.status === "approved";
@@ -77,8 +82,25 @@ export default function StudentCandidates() {
         </motion.div>
       )}
 
+      {/* No election period at all: nothing from past elections may read as current */}
+      {!hasElectionPeriod && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="rounded-xl p-8 mb-6 text-center"
+          style={{ background: "linear-gradient(135deg, #5C0102, #8B0103)" }}
+        >
+          <CalendarX size={40} className="mx-auto mb-3 text-white/60" />
+          <h2 className="text-white text-lg mb-2">No Active Election Period</h2>
+          <p className="text-white/70 text-sm max-w-md mx-auto">
+            There is no election underway right now, so no candidates are shown. Candidate
+            rosters will appear here once the Electoral Board opens a new election period.
+          </p>
+        </motion.div>
+      )}
+
       {/* Not yet posted */}
-      {!canViewCandidates && (
+      {hasElectionPeriod && !canViewCandidates && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}

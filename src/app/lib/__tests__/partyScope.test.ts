@@ -80,13 +80,15 @@ describe("candidatesInLivePeriod", () => {
     expect(candidatesInLivePeriod(rows, period()).map((c) => c.id)).toEqual(["legacy"]);
   });
 
-  it("returns every row when the live period has no id", () => {
+  it("returns nothing when there is no live period, so past rosters never read as current", () => {
+    // emptyElectionPeriod (no period row in the database) carries an empty
+    // id: every candidate row belongs to history, none to a live election.
     const rows = [
       candidate({ id: "a", electionPeriodId: "period-past" }),
       candidate({ id: "b", electionPeriodId: "period-live" }),
     ];
 
-    expect(candidatesInLivePeriod(rows, period({ id: undefined }))).toHaveLength(2);
+    expect(candidatesInLivePeriod(rows, period({ id: undefined }))).toHaveLength(0);
   });
 
   it("still scopes by id when the period is closed, because isActive is not the period", () => {
@@ -538,6 +540,14 @@ describe("buildPartyOptions", () => {
     );
 
     expect(options.map((party) => party.name)).not.toContain("Independent");
+  });
+
+  it("offers nothing when there is no live period, so past parties are never joinable", () => {
+    // Without a period row the live list is empty — a past election's
+    // parties must not be offered for joining between elections.
+    expect(
+      buildPartyOptions(parties, candidates, period({ id: undefined }), "Grade 12")
+    ).toEqual([]);
   });
 });
 

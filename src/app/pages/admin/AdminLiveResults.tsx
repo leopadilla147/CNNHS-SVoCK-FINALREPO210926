@@ -392,8 +392,8 @@ export default function AdminLiveResults() {
                          {positionTie.resolutionMethod === "tie_both"
                            ? "Tie — Both Proclaimed"
                            : positionTie.tieBreakNote
-                             ? `Tie Resolved Using ${positionTie.tieBreakNote}`
-                             : "Tie resolved by the Board"}
+                             ? `Tie Resolved By Electoral Board Using ${positionTie.tieBreakNote}`
+                             : "Tie Resolved By Electoral Board"}
                        </span>
                      )}
                    </div>

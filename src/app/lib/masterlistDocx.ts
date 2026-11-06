@@ -5,8 +5,14 @@
  * `extractRawText` ONLY and never convert uploaded .docx to HTML.
  * Input is capped at 5MB and the extract step is wrapped in try/catch
  * with a user-facing message.
+ *
+ * Excel workbooks (.xlsx/.xls) share this pipeline: extractAndParseMasterlist
+ * converts them to the same string[][] shape via ./masterlistXlsx (SheetJS)
+ * and runs the identical row parser, so both formats validate identically.
  */
 import mammoth from "mammoth";
+
+import { extractMasterlistXlsx, isMasterlistExcelFile } from "./masterlistXlsx";
 
 export interface MasterlistRow {
   lrn: string;
@@ -383,16 +389,24 @@ export function toMasterlistRow(
  * a DIFFERENT school year is legitimate, and re-uploading a corrected sheet
  * updates the existing row via the (lrn, school_year) upsert.
  */
+/** A raw row paired with the sheet row number its error messages should cite.
+ *  The docx paths number rows by their position among the COUNTED rows (the
+ *  header is row 1, so the first data row is Row 2); the Excel path passes
+ *  true worksheet rows (its title rows occupy real sheet rows). */
+interface NumberedRow {
+  cells: string[];
+  rowNumber: number;
+}
+
 function readBodyRows(
-  body: string[][],
+  body: NumberedRow[],
   headerIndex: Record<string, number> | null
 ): MasterlistParseResult {
   const result: MasterlistParseResult = { rows: [], skipped: 0, errors: [] };
   const seenLrn = new Map<string, number>();
 
-  for (const [i, fields] of body.entries()) {
+  for (const { cells: fields, rowNumber: sheetRow } of body) {
     if (!fields.some((c) => c.trim())) continue;
-    const sheetRow = i + 2;
     const outcome = validateMasterlistRow(fields, headerIndex);
 
     if (outcome.kind === "ignored") continue; // unfilled template row
@@ -455,7 +469,7 @@ export function parseMasterlist(text: string): MasterlistParseResult {
   const lines = text.split(/\r?\n/).filter((l) => l.trim() !== "");
 
   let headerIndex: Record<string, number> | null = null;
-  const body: string[][] = [];
+  const body: NumberedRow[] = [];
 
   for (const line of lines) {
     // Single-tab split: preserves empty cells, so `\t\tF\t...` keeps its
@@ -472,7 +486,7 @@ export function parseMasterlist(text: string): MasterlistParseResult {
       // it so it never counts as a row.  After the header, everything is
       // data and is validated as usual.
       if (!headerIndex && !rowLooksLikeData(cells)) continue;
-      body.push(cells);
+      body.push({ cells, rowNumber: body.length + 2 });
     } else {
       // Multi-space fallback for non-tabular files (leading spacing is
       // meaningless here, so trim before splitting).  A SINGLE-cell line is
@@ -483,7 +497,7 @@ export function parseMasterlist(text: string): MasterlistParseResult {
       // tabular data line keeps its Row 2 numbering after the header.
       const trimmed = line.trim();
       const spaced = trimmed.split(/ {2,}/);
-      if (spaced.length > 1) body.push(spaced);
+      if (spaced.length > 1) body.push({ cells: spaced, rowNumber: body.length + 2 });
     }
   }
 
@@ -496,11 +510,28 @@ export function parseMasterlist(text: string): MasterlistParseResult {
  * empty cells keep their positions and no row structure is lost (the
  * mammoth text path flattens every cell onto its own line).
  */
-export function parseMasterlistRows(tableRows: string[][]): MasterlistParseResult {
+/**
+ * Parse rows recovered from the docx's actual table XML
+ * (`extractMasterlistDocx`) — one entry per w:tr, one cell per w:tc, so
+ * empty cells keep their positions and no row structure is lost (the
+ * mammoth text path flattens every cell onto its own line).  The Excel path
+ * (masterlistXlsx.ts) feeds the same shape.
+ *
+ * `firstRowNumber` (Excel only) is the 1-based worksheet row number of
+ * `tableRows[0]`: error messages then cite the row the adviser actually
+ * sees, even with title rows above the header.  When omitted — the docx
+ * path — rows are numbered by their position among the COUNTED rows (the
+ * header is row 1, so the first data row is Row 2), exactly as before:
+ * title rows above the header never shift the count.
+ */
+export function parseMasterlistRows(
+  tableRows: string[][],
+  firstRowNumber?: number
+): MasterlistParseResult {
   let headerIndex: Record<string, number> | null = null;
-  const body: string[][] = [];
+  const body: NumberedRow[] = [];
 
-  for (const cells of tableRows) {
+  for (const [pos, cells] of tableRows.entries()) {
     if (!cells.some((c) => c.trim() !== "")) continue;
     if (!headerIndex) {
       const index = buildHeaderIndexFromCells(cells);
@@ -514,7 +545,10 @@ export function parseMasterlistRows(tableRows: string[][]): MasterlistParseResul
       // not be counted as rows or rejected as "invalid LRN".
       if (!rowLooksLikeData(cells)) continue;
     }
-    body.push(cells);
+    body.push({
+      cells,
+      rowNumber: firstRowNumber === undefined ? body.length + 2 : firstRowNumber + pos,
+    });
   }
 
   return readBodyRows(body, headerIndex);
@@ -581,14 +615,32 @@ export async function extractMasterlistDocx(file: File): Promise<MasterlistDocxC
 }
 
 /**
- * Combined upload entry point (MASTER-01): try the structured docx table
- * path first — the real CNNHS-MASTER-LIST-FORMAT.docx stores rows as a
- * table, which mammoth's flat text cannot recover — and fall back to the
- * tab/multi-space text parse for hand-built files.
+ * Combined upload entry point (MASTER-01): Excel workbooks (.xlsx/.xls) are
+ * converted to the docx table shape and run through the identical row
+ * parser; .docx files try the structured table path first — the real
+ * CNNHS-MASTER-LIST-FORMAT.docx stores rows as a table, which mammoth's
+ * flat text cannot recover — and fall back to the tab/multi-space text
+ * parse for hand-built files.
  */
 export async function extractAndParseMasterlist(
   file: File
 ): Promise<{ parsed: MasterlistParseResult; text: string }> {
+  if (isMasterlistExcelFile(file)) {
+    if (file.size > MASTERLIST_MAX_BYTES) {
+      throw new Error("The masterlist file is larger than 5MB. Please upload a smaller file.");
+    }
+    // Prefer a sheet whose header the recognizer knows (a masterlist pasted
+    // into sheet 2 of a workbook still uploads); fall back to the first
+    // readable sheet — the row errors then explain what is missing.
+    const workbook = await extractMasterlistXlsx(await file.arrayBuffer(), (rows) =>
+      rows.some((cells) => buildHeaderIndexFromCells(cells) !== null)
+    );
+    return {
+      parsed: parseMasterlistRows(workbook.rows, workbook.firstRowNumber),
+      text: workbook.text,
+    };
+  }
+
   const docx = await extractMasterlistDocx(file);
   if (docx) {
     const parsed = parseMasterlistRows(docx.rows);

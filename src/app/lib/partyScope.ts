@@ -103,9 +103,11 @@ export function getPositionsForGrade(gradeLevel: string): string[] {
  * visible at once — harmless while a single election existed, wrong the
  * moment a reset leaves a retired period behind.
  *
- * An unknown id is reported as undefined, which makes
- * `candidatesInLivePeriod` fall back to "do not filter" — the pre-058
- * behaviour, and the only safe answer before the period has loaded.
+ * An unknown id (no period row at all, or the boot load has not resolved
+ * yet) is reported as undefined.  `isInLivePeriod` reads that as "no
+ * current election": nothing is live and every row is history, so a
+ * period-less database can never present a past election's candidates as
+ * current ones.
  */
 export function livePeriodId(electionPeriod: ElectionPeriod): string | undefined {
   return electionPeriod.id || undefined;
@@ -113,17 +115,24 @@ export function livePeriodId(electionPeriod: ElectionPeriod): string | undefined
 
 /**
  * Whether a candidate row belongs to the election the UI is currently
- * showing.  Same rule as candidatesInLivePeriod: an unknown live period id
- * and a legacy row with no period id are never filtered out.
+ * showing.
+ *
+ * With no live period id at all — every period completed/cancelled, or none
+ * created yet — NOTHING is live: the whole store is history, which is what
+ * keeps a past election's roster off the current-election screens.  (The
+ * old pass-everything fallback was only ever reachable in that state,
+ * because AppContext sets the candidates and the period in one batched
+ * update — there is no "candidates loaded, period missing" window it could
+ * have been safe for.)  A legacy row with no period id still passes when a
+ * real period exists, so pre-058 data keeps working.
  */
 export function isInLivePeriod(
   candidate: Candidate,
   electionPeriod: ElectionPeriod
 ): boolean {
   const periodId = livePeriodId(electionPeriod);
-  return (
-    !periodId || !candidate.electionPeriodId || candidate.electionPeriodId === periodId
-  );
+  if (!periodId) return false;
+  return !candidate.electionPeriodId || candidate.electionPeriodId === periodId;
 }
 
 export function candidatesInLivePeriod(
@@ -162,6 +171,10 @@ export function replaceLiveCandidates(
   next: Candidate[],
   electionPeriod: ElectionPeriod
 ): Candidate[] {
+  // No live period: the live view is empty by definition, so there is
+  // nothing to replace — return the store untouched rather than appending
+  // rows the next split would classify as history.
+  if (!livePeriodId(electionPeriod)) return previous;
   return [
     ...previous.filter((candidate) => !isInLivePeriod(candidate, electionPeriod)),
     ...next,
@@ -455,6 +468,11 @@ export function buildPartyOptions(
   gradeLevel: string
 ): PartyOption[] {
   const periodId = livePeriodId(electionPeriod);
+
+  // No current election period: nothing is joinable, and listing a past
+  // election's parties here would let a student apply into retired history.
+  if (!periodId) return [];
+
   const byId = new Map<string, PartySummary>();
 
   for (const party of parties) {

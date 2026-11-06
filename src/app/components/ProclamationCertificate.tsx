@@ -19,7 +19,7 @@
  */
 import { format } from "date-fns";
 import cnnhsSealUrl from "../assets/proclamation-cnnhs-seal.webp";
-import sslgSealUrl from "../assets/proclamation-sslg-seal.png";
+import comeaSealUrl from "../assets/proclamation-comea-seal.png";
 import "./proclamation-certificate.css";
 
 /** A proclaimed winner row joined with the candidate's grade level —
@@ -114,11 +114,11 @@ export function ProclamationCertificate({ winner, schoolYear, dateLabel, capture
             </p>
           </div>
 
-          {/* Right seal: the Supreme Secondary Learner Government.  The asset is
-              168px for this 84px slot (@2x) — the exact resolution the rasterizer
-              captures at scale 2, so it is drawn 1:1 and stays crisp. */}
+          {/* Right seal: COMEA.  The asset is 168px for this 84px slot
+              (@2x) — the exact resolution the rasterizer captures at
+              scale 2, so it is drawn 1:1 and stays crisp. */}
           <div className="cert-logo-slot">
-            <img src={sslgSealUrl} alt="SSLG Official Seal" className="cert-school-logo" />
+            <img src={comeaSealUrl} alt="COMEA Official Seal" className="cert-school-logo" />
           </div>
         </header>
 

@@ -188,7 +188,7 @@ describe("AdminLiveResults", () => {
   });
 
   it("names the recorded resolution method and the both-proclaimed tie", async () => {
-    // 129 — a board-picked tie reads "Tie Resolved Using {method}", while a
+    // 129 — a board-picked tie reads "Tie Resolved By Electoral Board Using {method}", while a
     // 2-way Grade-Rep tie proclaimed both has no method of record.
     electionPeriod = period({ proclaimed: true });
     candidates = [
@@ -218,7 +218,7 @@ describe("AdminLiveResults", () => {
     });
     render(<AdminLiveResults />);
 
-    expect(await screen.findByText("Tie Resolved Using Draw Lots")).toBeInTheDocument();
+    expect(await screen.findByText("Tie Resolved By Electoral Board Using Draw Lots")).toBeInTheDocument();
     expect(screen.getByText("Tie — Both Proclaimed")).toBeInTheDocument();
   });
 
@@ -272,7 +272,7 @@ describe("AdminLiveResults", () => {
     render(<AdminLiveResults />);
 
     expect(await screen.findByText("Proclaimed winner")).toBeInTheDocument();
-    expect(screen.getByText("Tie Resolved Using Coin Toss")).toBeInTheDocument();
+    expect(screen.getByText("Tie Resolved By Electoral Board Using Coin Toss")).toBeInTheDocument();
     expect(
       screen.getByText(/Electoral Board note: The complaint was weighed/),
     ).toBeInTheDocument();

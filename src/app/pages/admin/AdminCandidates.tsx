@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
-import { Search, CheckCircle, XCircle, AlertCircle, Clock, Eye, FileCheck, ChevronDown, ChevronUp, Users, Shield, FileSignature, Calendar } from "lucide-react";
+import { Search, CheckCircle, XCircle, AlertCircle, Clock, Eye, FileCheck, ChevronDown, ChevronUp, Users, Shield, FileSignature, Calendar, CalendarX } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useApp, Candidate } from "../../context/AppContext";
 import { positionRank } from "../../lib/partyScope";
@@ -403,6 +403,21 @@ export default function AdminCandidates() {
           </div>
         </div>
       </motion.div>
+
+      {/* No period row: the live list is empty by design, so past rosters
+          never read as current here.  Say why instead of a bare empty table. */}
+      {!electionPeriod.id && (
+        <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-3">
+          <CalendarX size={18} className="text-amber-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-amber-800">No active election period</p>
+            <p className="text-xs text-amber-600 mt-0.5">
+              Rosters from past elections stay archived and do not show here. Create a new
+              election period in Election Setup to open candidacy.
+            </p>
+          </div>
+        </div>
+      )}
 
       {actionError && (
         <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl flex items-start gap-3">

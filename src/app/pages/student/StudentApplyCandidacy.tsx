@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
-import { AlertCircle, Upload, CheckCircle, XCircle, FileImage, FileDown, Pencil, ChevronLeft, ChevronRight, Check } from "lucide-react";
+import { useState, useEffect, type ReactNode } from "react";
+import { AlertCircle, Upload, CheckCircle, XCircle, FileImage, FileDown, Pencil, ChevronLeft, ChevronRight, Check, Trophy } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useApp, Candidate } from "../../context/AppContext";
 import { EAFPreviewDocument } from "../../components/EAFPreviewDocument";
-import { reapplyPartyCandidacyRpc, submitCandidacyRpc, uploadCandidateImage, fetchCandidateGate, fetchEafSignatoriesRpc } from "../../lib/supabaseData";
+import StudentOfficialResults from "../../components/StudentOfficialResults";
+import { type PastElectionResults, reapplyPartyCandidacyRpc, submitCandidacyRpc, uploadCandidateImage, fetchCandidateGate, fetchEafSignatoriesRpc, getPastElectionResults } from "../../lib/supabaseData";
 import { isSupabaseConfigured, supabase } from "../../lib/supabase";
 import { useConfirm } from "../../lib/useConfirm";
 import { escapeHtml } from "../../lib/escapeHtml";
@@ -21,6 +22,15 @@ import {
   partySeatSummaries,
 } from "../../lib/partyScope";
 import { applicationStageEnded } from "../../lib/electionStage";
+import {
+  MONTH_NAMES,
+  birthYearOptions,
+  daysInMonth,
+  joinBirthdate,
+  splitBirthdate,
+  validateBirthdate,
+  type BirthdateParts,
+} from "../../lib/birthdate";
 
 const GENDERS = ["Male", "Female"];
 const LEADERSHIP_SKILLS = ["Motivational", "Problem Solving", "Values-Oriented", "Communication", "Goal-Oriented", "Service-Oriented"];
@@ -33,6 +43,18 @@ const STEPS = [
   "Introductory Profile",
   "Leadership Capsule",
   "Generate Printable EAF",
+];
+
+// One guidance line per wizard step, shown directly under the numbered
+// section title.  Indexed to match STEPS (and the `step` state).
+const STEP_INSTRUCTIONS = [
+  "Fill in your complete and accurate personal details exactly as they appear in your school records, and upload a recent formal 2x2 picture with a plain background.",
+  "Select your province, city/municipality, and barangay from the dropdowns, then enter your house/street details. This address will be printed on your EAF.",
+  "Provide the complete name and an active mobile number of your parent or legal guardian. They may be reached for election-related notices.",
+  "Choose how you are running — join an existing party, create a new party (Grade 11-12 only; creating one makes you its President), or run as an Independent — then select the elective position you are vying for.",
+  "Answer in your own words. Each essay must reach the minimum word count (the counter turns green when met), and the skills you tick must each be explained.",
+  "Follow the direction below: answer the guide question and write at least one SSLG/YES-O project or program for each core value — Maka-Diyos, Maka-Tao, Makakalikasan, and Makabansa.",
+  "Review the summary of your information below. When everything is correct, generate your EAF, print it, complete the missing fields and signatures, then upload clear photos of the front and back pages for review.",
 ];
 
 const PSGC_API = "https://psgc.gitlab.io/api";
@@ -250,6 +272,122 @@ const InputField = ({
   </div>
 );
 
+interface BirthdateFieldProps {
+  label: string;
+  /** Full "YYYY-MM-DD" value (empty string when nothing is picked yet). */
+  value: string;
+  onChange: (value: string) => void;
+  error?: string;
+}
+
+// Date of birth as three compact dropdowns (month / day / year) sized to fit
+// a date.  lib/birthdate gates the year list to the allowed age window — no
+// year from the last 5 years or beyond 100 years back is ever offered — and
+// validateBirthdate re-checks the exact date when the step is validated.
+const BirthdateField = ({ label, value, onChange, error }: BirthdateFieldProps) => {
+  // The dropdowns keep a local draft so a half-picked date (e.g. just the
+  // month) stays visible; only a complete date is emitted to the form as
+  // "YYYY-MM-DD".  When the form value is replaced from outside (prefill
+  // from the registration record), the draft adopts it.
+  const [parts, setParts] = useState<BirthdateParts>(() => splitBirthdate(value));
+  useEffect(() => {
+    if (value !== joinBirthdate(parts.year, parts.month, parts.day)) {
+      setParts(splitBirthdate(value));
+    }
+    // Re-sync only on outside changes; `parts` is the local draft itself.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  const years = birthYearOptions();
+  const currentYear = new Date().getFullYear();
+  // Without a year yet, size February by the current year; picking a year
+  // re-clamps the day (e.g. Feb 29 in a non-leap year drops to 28).
+  const maxDay = parts.month
+    ? daysInMonth(parts.year ? parseInt(parts.year, 10) : currentYear, parseInt(parts.month, 10))
+    : 31;
+
+  const emit = (next: BirthdateParts) => {
+    setParts(next);
+    onChange(joinBirthdate(next.year, next.month, next.day));
+  };
+
+  // Switching to a shorter month clamps an out-of-range day (Jan 31 -> Feb 28)
+  // rather than leaving an impossible date in state.
+  const changeMonth = (month: string) => {
+    const max = month
+      ? daysInMonth(parts.year ? parseInt(parts.year, 10) : currentYear, parseInt(month, 10))
+      : 31;
+    const day = parts.day && parseInt(parts.day, 10) > max ? String(max) : parts.day;
+    emit({ ...parts, month, day });
+  };
+
+  const changeYear = (year: string) => {
+    const max = parts.month
+      ? daysInMonth(year ? parseInt(year, 10) : currentYear, parseInt(parts.month, 10))
+      : 31;
+    const day = parts.day && parseInt(parts.day, 10) > max ? String(max) : parts.day;
+    emit({ ...parts, year, day });
+  };
+
+  const selectClass = `min-w-0 px-2 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] transition-all bg-gray-50 ${
+    error ? "border-red-400" : "border-gray-200"
+  }`;
+
+  return (
+    <div>
+      <label className="block text-sm text-gray-700 mb-1.5">
+        {label} <span className="text-red-500">*</span>
+      </label>
+      <div className="flex gap-2">
+        <select
+          aria-label="Birth month"
+          value={parts.month}
+          onChange={(e) => changeMonth(e.target.value)}
+          className={`${selectClass} flex-[1.5]`}
+        >
+          <option value="">Month</option>
+          {MONTH_NAMES.map((name, i) => (
+            <option key={name} value={i + 1}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="Birth day"
+          value={parts.day}
+          onChange={(e) => emit({ ...parts, day: e.target.value })}
+          className={`${selectClass} flex-[0.7]`}
+        >
+          <option value="">Day</option>
+          {Array.from({ length: maxDay }, (_, i) => i + 1).map((d) => (
+            <option key={d} value={d}>
+              {d}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="Birth year"
+          value={parts.year}
+          onChange={(e) => changeYear(e.target.value)}
+          className={`${selectClass} flex-[1]`}
+        >
+          <option value="">Year</option>
+          {years.map((y) => (
+            <option key={y} value={y}>
+              {y}
+            </option>
+          ))}
+        </select>
+      </div>
+      {error && (
+        <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
+          <AlertCircle size={12} /> {error}
+        </p>
+      )}
+    </div>
+  );
+};
+
 export default function StudentApplyCandidacy() {
   const { candidates, setCandidates, currentUser, students, addLog, insertNotification, electionPeriod, parties } = useApp();
   const currentStudent = students.find((s) => s.id === currentUser?.id);
@@ -270,6 +408,34 @@ export default function StudentApplyCandidacy() {
   // re-applied for.  The RPCs refuse the writes; every check below is the
   // friendly version of that same rule.
   const stage1Ended = applicationStageEnded(electionPeriod);
+
+  // Stage 5 — the official result, read straight from the published archive
+  // snapshot (`get_past_election_results_rpc`, public): every position with
+  // every candidate's tally, not just the proclaimed winners.  A failure
+  // (unpublished period, un-migrated database) degrades to a quiet null —
+  // the section simply never renders.
+  const [officialResults, setOfficialResults] = useState<PastElectionResults | null>(null);
+  const [resultsLoading, setResultsLoading] = useState(false);
+  useEffect(() => {
+    if (!(electionPeriod.resultsPublished || electionPeriod.proclaimed) || !electionPeriod.id) {
+      return;
+    }
+    let cancelled = false;
+    setResultsLoading(true);
+    getPastElectionResults(electionPeriod.id)
+      .then((results) => {
+        if (!cancelled) setOfficialResults(results);
+      })
+      .catch(() => {
+        if (!cancelled) setOfficialResults(null);
+      })
+      .finally(() => {
+        if (!cancelled) setResultsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [electionPeriod.resultsPublished, electionPeriod.proclaimed, electionPeriod.id]);
 
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -484,10 +650,11 @@ export default function StudentApplyCandidacy() {
 
   const fullHomeAddress = `${form.houseStreet ? form.houseStreet + " " : ""}Brgy. ${form.barangayName} ${form.cityName}, ${form.provinceName}`;
 
+  // Auto-age from the picked date of birth, as of the real current date.
   useEffect(() => {
     if (form.dateOfBirth) {
       const dob = new Date(form.dateOfBirth);
-      const today = new Date("2026-03-12");
+      const today = new Date();
       let age = today.getFullYear() - dob.getFullYear();
       const m = today.getMonth() - dob.getMonth();
       if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--;
@@ -599,7 +766,15 @@ export default function StudentApplyCandidacy() {
         if (!form.givenName.trim()) errs.givenName = "Given name is required.";
         if (!form.gradeLevel) errs.gradeLevel = "Grade level is required.";
         if (!form.gender) errs.gender = "Gender is required.";
-        if (!form.dateOfBirth) errs.dateOfBirth = "Date of birth is required.";
+        if (!form.dateOfBirth) {
+          errs.dateOfBirth = "Date of birth is required.";
+        } else {
+          // Age window rule (shared with registration): older than 5 years,
+          // at most 100 — the dropdowns already exclude those years, this
+          // guards the exact date (e.g. a late-2021 birthday still under 5).
+          const birthdateError = validateBirthdate(form.dateOfBirth);
+          if (birthdateError) errs.dateOfBirth = birthdateError;
+        }
         if (!form.email.trim()) errs.email = "Email is required.";
         if (!form.mobileNumber.trim()) errs.mobileNumber = "Mobile number is required.";
         else if (form.mobileNumber.length !== 11 || !form.mobileNumber.startsWith("09")) errs.mobileNumber = "Enter a valid 11-digit PH mobile number (e.g., 09123456789).";
@@ -620,7 +795,18 @@ export default function StudentApplyCandidacy() {
         {
           const partyName = partyMode === "new" ? form.newPartyName.trim() : form.partyAffiliation;
           if (partyMode !== "independent" && !partyName) errs.party = "Party is required.";
-          if (partyMode === "new" && existingParties.some(p => p.toLowerCase() === partyName.toLowerCase())) {
+          // A founder revising their application keeps the party they created:
+          // handleEditExisting prefills "new" mode with their own party's name,
+          // so a name collision with existingParties is their own row, not a
+          // clash.  Fresh applications (and renames onto someone else's party)
+          // still get the duplicate error.  124's update branch keeps the
+          // party as originally filed either way — the UI shows it locked.
+          const ownPartyName = editingExisting ? existing?.partyAffiliation ?? "" : "";
+          if (
+            partyMode === "new" &&
+            existingParties.some(p => p.toLowerCase() === partyName.toLowerCase()) &&
+            partyName.toLowerCase() !== ownPartyName.trim().toLowerCase()
+          ) {
             errs.party = "This party already exists. Select it from existing parties.";
           }
             if (partyMode !== "new") {
@@ -706,6 +892,12 @@ export default function StudentApplyCandidacy() {
       : partyMode === "existing"
         ? partySeats
         : independentSeats;
+
+  // 124's update branch persists only profile fields on a revision — party and
+  // position stay as originally filed.  The revise wizard therefore shows them
+  // locked (read-only selects/inputs) instead of letting the student type a
+  // change the database would silently ignore.
+  const lockPartyPosition = editingExisting;
 
   const buildCandidate = (baseCandidate?: Candidate): Candidate => {
     const isNewParty = partyMode === "new";
@@ -1652,25 +1844,58 @@ export default function StudentApplyCandidacy() {
     return null;
   };
 
+  // The viewer's own candidacy name, built exactly like the archive builds
+  // candidate_name (given + middle + surname + extension) — the key that
+  // highlights their rows in the official result and powers the
+  // congratulations banner when a matching row is a proclaimed winner.
+  const myCandidateName = existing
+    ? [existing.givenName, existing.middleName, existing.surname, existing.extensionName]
+        .map((part) => (part || "").trim())
+        .filter(Boolean)
+        .join(" ")
+    : null;
+
+  // Stage 5 gate — the result is official once the Board has published the
+  // tally (the proclamation rides on top of it).
+  const showOfficialResults = Boolean(
+    electionPeriod.resultsPublished || electionPeriod.proclaimed,
+  );
+
+  // Stage 5 — the official result rides below the status screens (or stands
+  // alone once the closed notice hides): every candidate's tally per
+  // position with the proclaimed winners badged and the viewer's own rows
+  // ringed "You".  `fallback` covers the closed screen so it never blanks.
+  const renderOfficialResults = (fallback?: ReactNode) => (
+    <StudentOfficialResults
+      results={officialResults}
+      loading={resultsLoading}
+      myName={myCandidateName}
+      fallback={fallback}
+    />
+  );
+
   /**
    * 109: the friendly face of the database gate.  The Candidacy Application
    * Stage has ended, so the roster is final — the per-situation detail line
    * explains what this particular student can no longer do.
    */
   const renderStageEnded = (detail: string) => (
-    <div className="p-6 md:p-8 max-w-2xl mx-auto">
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
-        <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 bg-amber-100">
-          <AlertCircle size={28} className="text-amber-600" />
+    <>
+      <div className="p-6 md:p-8 max-w-2xl mx-auto">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
+          <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 bg-amber-100">
+            <AlertCircle size={28} className="text-amber-600" />
+          </div>
+          <h2 className="text-gray-900 mb-2">The Candidacy Application Stage has ended</h2>
+          <p className="text-gray-500 text-sm mb-4">{detail}</p>
+          <p className="text-xs text-gray-400">
+            If you believe this is a mistake, please see the Screening and Validation
+            Commissioner.
+          </p>
         </div>
-        <h2 className="text-gray-900 mb-2">The Candidacy Application Stage has ended</h2>
-        <p className="text-gray-500 text-sm mb-4">{detail}</p>
-        <p className="text-xs text-gray-400">
-          If you believe this is a mistake, please see the Screening and Validation
-          Commissioner.
-        </p>
       </div>
-    </div>
+      {renderOfficialResults()}
+    </>
   );
 
   if (existing?.status === "ongoingSubmission" && !editingExisting) {
@@ -1698,7 +1923,7 @@ export default function StudentApplyCandidacy() {
     const isLowTier = isRejected && existing.rejectionTier === "low";
     const isHighTier = isRejected && existing.rejectionTier === "high";
     return (
-      <div className="p-6 md:p-8 max-w-4xl mx-auto">
+      <div className={`p-6 md:p-8 ${showOfficialResults ? "max-w-5xl" : "max-w-4xl"} mx-auto`}>
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
           {isRejected ? (
             <>
@@ -1777,6 +2002,7 @@ export default function StudentApplyCandidacy() {
             </>
           )}
         </div>
+        {renderOfficialResults()}
         {generateEafConfirm.dialog}
         {finalSubmitConfirm.dialog}
       </div>
@@ -1788,6 +2014,27 @@ export default function StudentApplyCandidacy() {
   // A student who already started an application can still see it here while
   // the stage is current — 109 locks everything in only once it has ended.
   if (!electionPeriod.candidacyOpen && !editingExisting) {
+    // Stage 5: once the result is official, the closed notice yields to it
+    // entirely — this tab becomes the Official Result.  The fallback card
+    // covers a failed read so the screen is never blank.
+    if (showOfficialResults) {
+      return (
+        <div className="p-6 md:p-8 max-w-5xl mx-auto">
+          {renderOfficialResults(
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
+              <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 bg-amber-100">
+                <Trophy size={28} className="text-amber-600" />
+              </div>
+              <h2 className="text-gray-900 mb-2">Official Result</h2>
+              <p className="text-gray-500 text-sm">
+                The official result is not available right now. Please check back
+                shortly or see the Electoral Board.
+              </p>
+            </div>,
+          )}
+        </div>
+      );
+    }
     // The Rules Discussion Meeting announcement is intentionally absent here:
     // this screen only ever renders for a student with NO application in the
     // live period (any candidacy row returns further up), and the meeting date
@@ -1834,6 +2081,8 @@ export default function StudentApplyCandidacy() {
             : "Complete all steps below. The system will generate your printable EAF at the end."}
         </p>
       </motion.div>
+
+      {renderOfficialResults()}
 
       {/* Step Indicator */}
       <div className="mb-8">
@@ -1898,10 +2147,11 @@ export default function StudentApplyCandidacy() {
               {/* Step 0: Personal Information */}
               {step === 0 && (
                 <div>
-                  <h3 className="text-sm font-medium text-gray-700 mb-4 flex items-center gap-2">
+                  <h3 className="text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
                     <span className="w-5 h-5 rounded-full text-white text-xs flex items-center justify-center" style={{ backgroundColor: "#5C0102" }}>1</span>
                     Personal Information
                   </h3>
+                  <p className="text-xs text-gray-400 mb-4">{STEP_INSTRUCTIONS[0]}</p>
 
                   {/* 2x2 Picture */}
                   <div className="mb-6 p-4 rounded-xl" style={{ backgroundColor: "#FFF5F5" }}>
@@ -1970,7 +2220,7 @@ export default function StudentApplyCandidacy() {
                       </select>
                       {errors.gender && <p className="text-xs text-red-500 mt-1"><AlertCircle size={12} /> {errors.gender}</p>}
                     </div>
-                    <InputField label="Date of Birth" field="dateOfBirth" type="date" value={form.dateOfBirth} onChange={update} error={errors.dateOfBirth} />
+                    <BirthdateField label="Date of Birth" value={form.dateOfBirth} onChange={(v) => update("dateOfBirth", v)} error={errors.dateOfBirth} />
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
                     <InputField label="Age" field="age" value={form.age} onChange={update} hint="Auto-calculated" readonly />
@@ -1986,10 +2236,11 @@ export default function StudentApplyCandidacy() {
               {/* Step 1: Home Address */}
               {step === 1 && (
                 <div>
-                  <h3 className="text-sm font-medium text-gray-700 mb-4 flex items-center gap-2">
+                  <h3 className="text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
                     <span className="w-5 h-5 rounded-full text-white text-xs flex items-center justify-center" style={{ backgroundColor: "#5C0102" }}>2</span>
                     Home Address (Region V - Bicol)
                   </h3>
+                  <p className="text-xs text-gray-400 mb-4">{STEP_INSTRUCTIONS[1]}</p>
                   <div className="space-y-3">
                     {addressError && (
                       <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-2 text-xs text-yellow-700">
@@ -2075,10 +2326,11 @@ export default function StudentApplyCandidacy() {
               {/* Step 2: Parent/Guardian Contact */}
               {step === 2 && (
                 <div>
-                  <h3 className="text-sm font-medium text-gray-700 mb-4 flex items-center gap-2">
+                  <h3 className="text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
                     <span className="w-5 h-5 rounded-full text-white text-xs flex items-center justify-center" style={{ backgroundColor: "#5C0102" }}>3</span>
                     Parent / Guardian Contact
                   </h3>
+                  <p className="text-xs text-gray-400 mb-4">{STEP_INSTRUCTIONS[2]}</p>
                   <div>
                     <label className="block text-sm text-gray-700 mb-1.5">Parent/Guardian Name <span className="text-red-500">*</span></label>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -2128,26 +2380,30 @@ export default function StudentApplyCandidacy() {
               {/* Step 3: Party Affiliation and Elective Position */}
               {step === 3 && (
                 <div>
-                  <h3 className="text-sm font-medium text-gray-700 mb-4 flex items-center gap-2">
+                  <h3 className="text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
                     <span className="w-5 h-5 rounded-full text-white text-xs flex items-center justify-center" style={{ backgroundColor: "#5C0102" }}>4</span>
                     Party Affiliation and Elective Position
                   </h3>
+                  <p className="text-xs text-gray-400 mb-4">{STEP_INSTRUCTIONS[3]}</p>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div>
                       <label className="block text-sm text-gray-700 mb-1.5">Party Type <span className="text-red-500">*</span></label>
                       <select
                         value={partyMode}
                         onChange={(e) => setPartyMode(e.target.value as "existing" | "new" | "independent")}
-                        className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50"
+                        disabled={lockPartyPosition}
+                        className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] ${lockPartyPosition ? "bg-gray-100 text-gray-500 cursor-not-allowed" : "bg-gray-50"} border-gray-200`}
                       >
                         <option value="independent">Independent (No Party)</option>
                         {existingParties.length > 0 && <option value="existing">Existing party</option>}
                         {isSeniorHighGrade(form.gradeLevel) && <option value="new">Create new party</option>}
                       </select>
                       <p className="text-xs text-gray-400 mt-1">
-                        {isSeniorHighGrade(form.gradeLevel)
-                          ? "Creating a party makes you its President."
-                          : "Party creation is open to Grade 11-12 (SHS) students only — a party is founded by its President."}
+                        {lockPartyPosition
+                          ? "Your party and position were locked when you first applied — only your profile details can be revised."
+                          : isSeniorHighGrade(form.gradeLevel)
+                            ? "Creating a party makes you its President."
+                            : "Party creation is open to Grade 11-12 (SHS) students only — a party is founded by its President."}
                       </p>
                     </div>
 
@@ -2157,7 +2413,8 @@ export default function StudentApplyCandidacy() {
                         <select
                           value={form.partyAffiliation}
                           onChange={(e) => update("partyAffiliation", e.target.value)}
-                          className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50 ${errors.party ? "border-red-400" : "border-gray-200"}`}
+                          disabled={lockPartyPosition}
+                          className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] ${lockPartyPosition ? "bg-gray-100 text-gray-500 cursor-not-allowed" : "bg-gray-50"} ${errors.party ? "border-red-400" : "border-gray-200"}`}
                         >
                           {partyOptions.map(party => (
                             <option
@@ -2214,10 +2471,15 @@ export default function StudentApplyCandidacy() {
                           value={form.newPartyName}
                           onChange={(e) => update("newPartyName", e.target.value)}
                           placeholder="Enter party name"
-                          className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50 ${errors.party ? "border-red-400" : "border-gray-200"}`}
+                          disabled={lockPartyPosition}
+                          className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] ${lockPartyPosition ? "bg-gray-100 text-gray-500 cursor-not-allowed" : "bg-gray-50"} ${errors.party ? "border-red-400" : "border-gray-200"}`}
                         />
                         {errors.party && <p className="text-xs text-red-500 mt-1"><AlertCircle size={12} /> {errors.party}</p>}
-                        <p className="text-xs text-gray-400 mt-1">Only Grade 11-12 (SHS) students can create a party — its creator is automatically assigned President.</p>
+                        <p className="text-xs text-gray-400 mt-1">
+                          {lockPartyPosition
+                            ? "Locked to the party you created — the party name can be kept as is, but no longer changed during a revision."
+                            : "Only Grade 11-12 (SHS) students can create a party — its creator is automatically assigned President."}
+                        </p>
                       </div>
                     )}
 
@@ -2227,8 +2489,8 @@ export default function StudentApplyCandidacy() {
                         <select
                           value={form.position}
                           onChange={(e) => update("position", e.target.value)}
-                          disabled={partyMode === "new"}
-                          className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] ${partyMode === "new" ? "bg-gray-100 text-gray-500 cursor-not-allowed" : "bg-gray-50"} ${errors.position ? "border-red-400" : "border-gray-200"}`}
+                          disabled={partyMode === "new" || lockPartyPosition}
+                          className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] ${partyMode === "new" || lockPartyPosition ? "bg-gray-100 text-gray-500 cursor-not-allowed" : "bg-gray-50"} ${errors.position ? "border-red-400" : "border-gray-200"}`}
                         >
                           <option value="">Select position</option>
                           {seatChoices.map(seat => {
@@ -2248,7 +2510,11 @@ export default function StudentApplyCandidacy() {
                         </select>
                         {errors.position && <p className="text-xs text-red-500 mt-1"><AlertCircle size={12} /> {errors.position}</p>}
                         <p className="text-xs text-gray-400 mt-1">
-                          {partyMode === "existing" ? "Other students may contest the same position; your party President decides who wins. Positions marked filled already have an approved candidate." : "Locked to President for a new party."}
+                          {lockPartyPosition
+                            ? "Locked to the position on your original application."
+                            : partyMode === "existing"
+                              ? "Other students may contest the same position; your party President decides who wins. Positions marked filled already have an approved candidate."
+                              : "Locked to President for a new party."}
                         </p>
                       </div>
                     )}
@@ -2259,7 +2525,8 @@ export default function StudentApplyCandidacy() {
                         <select
                           value={form.position}
                           onChange={(e) => update("position", e.target.value)}
-                          className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50 ${errors.position ? "border-red-400" : "border-gray-200"}`}
+                          disabled={lockPartyPosition}
+                          className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] ${lockPartyPosition ? "bg-gray-100 text-gray-500 cursor-not-allowed" : "bg-gray-50"} ${errors.position ? "border-red-400" : "border-gray-200"}`}
                         >
                           <option value="">Select position</option>
                           {seatChoices.map(seat => (
@@ -2273,7 +2540,11 @@ export default function StudentApplyCandidacy() {
                           ))}
                         </select>
                         {errors.position && <p className="text-xs text-red-500 mt-1"><AlertCircle size={12} /> {errors.position}</p>}
-                        <p className="text-xs text-gray-400 mt-1">Independents do not share a seat — you may run for any position your grade is eligible for, even if another Independent is already in the running.</p>
+                        <p className="text-xs text-gray-400 mt-1">
+                          {lockPartyPosition
+                            ? "Locked to the position on your original application."
+                            : "Independents do not share a seat — you may run for any position your grade is eligible for, even if another Independent is already in the running."}
+                        </p>
                       </div>
                     )}
                   </div>
@@ -2283,10 +2554,11 @@ export default function StudentApplyCandidacy() {
               {/* Step 4: Introductory Profile */}
               {step === 4 && (
                 <div>
-                  <h3 className="text-sm font-medium text-gray-700 mb-4 flex items-center gap-2">
+                  <h3 className="text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
                     <span className="w-5 h-5 rounded-full text-white text-xs flex items-center justify-center" style={{ backgroundColor: "#5C0102" }}>5</span>
                     Introductory Profile
                   </h3>
+                  <p className="text-xs text-gray-400 mb-4">{STEP_INSTRUCTIONS[4]}</p>
                   <div className="space-y-4">
                     <div>
                       <label className="block text-sm text-gray-700 mb-1.5">
@@ -2365,10 +2637,11 @@ export default function StudentApplyCandidacy() {
               {/* Step 5: Leadership Capsule */}
               {step === 5 && (
                 <div>
-                  <h3 className="text-sm font-medium text-gray-700 mb-4 flex items-center gap-2">
+                  <h3 className="text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
                     <span className="w-5 h-5 rounded-full text-white text-xs flex items-center justify-center" style={{ backgroundColor: "#5C0102" }}>6</span>
                     Leadership Capsule
                   </h3>
+                  <p className="text-xs text-gray-400 mb-4">{STEP_INSTRUCTIONS[5]}</p>
                   <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-5 text-sm text-amber-800 leading-relaxed">
                     <p className="font-medium mb-1">IV. Leadership Capsule</p>
                     <p className="indent-7">
@@ -2437,10 +2710,11 @@ export default function StudentApplyCandidacy() {
               {/* Step 6: Generate Printable EAF */}
               {step === 6 && (
                 <div>
-                  <h3 className="text-sm font-medium text-gray-700 mb-4 flex items-center gap-2">
+                  <h3 className="text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
                     <span className="w-5 h-5 rounded-full text-white text-xs flex items-center justify-center" style={{ backgroundColor: "#5C0102" }}>7</span>
                     Generate Printable EAF
                   </h3>
+                  <p className="text-xs text-gray-400 mb-4">{STEP_INSTRUCTIONS[6]}</p>
 
                   <div className="bg-gray-50 rounded-xl p-4 space-y-3 mb-5">
                     <h4 className="text-sm font-medium text-gray-700">Summary of Information</h4>

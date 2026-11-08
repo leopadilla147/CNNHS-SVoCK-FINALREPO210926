@@ -20,6 +20,15 @@ import {
   type MasterlistMatchRecord,
 } from "../lib/supabaseData";
 import { useConfirm } from "../lib/useConfirm";
+import {
+  MONTH_NAMES,
+  birthYearOptions,
+  daysInMonth,
+  joinBirthdate,
+  splitBirthdate,
+  validateBirthdate,
+  type BirthdateParts,
+} from "../lib/birthdate";
 import cnnhsLogo from "../assets/CNNHS_Logo1.png";
 
 const GRADE_LEVELS = ["Grade 7", "Grade 8", "Grade 9", "Grade 10", "Grade 11", "Grade 12"];
@@ -84,6 +93,124 @@ const InputField = ({
     )}
   </div>
 );
+
+interface BirthdateFieldProps {
+  label: string;
+  /** Full "YYYY-MM-DD" value (empty string when nothing is picked yet). */
+  value: string;
+  onChange: (value: string) => void;
+  error?: string;
+}
+
+// Birthdate as three compact dropdowns (month / day / year) sized to fit a
+// date.  lib/birthdate gates the year list to the allowed age window — no
+// year from the last 5 years or beyond 100 years back is ever offered — and
+// validateBirthdate re-checks the exact date on submit.
+const BirthdateField = ({ label, value, onChange, error }: BirthdateFieldProps) => {
+  // The dropdowns keep a local draft so a half-picked date (e.g. just the
+  // month) stays visible; only a complete date is emitted to the form as
+  // "YYYY-MM-DD".  When the form value is replaced from outside (prefill),
+  // the draft adopts it.
+  const [parts, setParts] = useState<BirthdateParts>(() => splitBirthdate(value));
+  useEffect(() => {
+    if (value !== joinBirthdate(parts.year, parts.month, parts.day)) {
+      setParts(splitBirthdate(value));
+    }
+    // Re-sync only on outside changes; `parts` is the local draft itself.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  const years = birthYearOptions();
+  const currentYear = new Date().getFullYear();
+  // Without a year yet, size February by the current year; picking a year
+  // re-clamps the day (e.g. Feb 29 in a non-leap year drops to 28).
+  const maxDay = parts.month
+    ? daysInMonth(parts.year ? parseInt(parts.year, 10) : currentYear, parseInt(parts.month, 10))
+    : 31;
+
+  const emit = (next: BirthdateParts) => {
+    setParts(next);
+    onChange(joinBirthdate(next.year, next.month, next.day));
+  };
+
+  // Switching to a shorter month clamps an out-of-range day (Jan 31 -> Feb 28)
+  // rather than leaving an impossible date in state.
+  const changeMonth = (month: string) => {
+    const max = month
+      ? daysInMonth(parts.year ? parseInt(parts.year, 10) : currentYear, parseInt(month, 10))
+      : 31;
+    const day = parts.day && parseInt(parts.day, 10) > max ? String(max) : parts.day;
+    emit({ ...parts, month, day });
+  };
+
+  const changeYear = (year: string) => {
+    const max = parts.month
+      ? daysInMonth(year ? parseInt(year, 10) : currentYear, parseInt(parts.month, 10))
+      : 31;
+    const day = parts.day && parseInt(parts.day, 10) > max ? String(max) : parts.day;
+    emit({ ...parts, year, day });
+  };
+
+  const selectClass = `min-w-0 px-2 py-2.5 rounded-xl text-sm sm:text-[15px] font-medium transition-all duration-200 outline-none ${
+    error
+      ? "border border-red-400 border-b-[2.5px] border-b-red-500 bg-red-50/20 text-gray-900 shadow-[0_2px_6px_rgba(239,68,68,0.08),inset_0_1px_1px_rgba(255,255,255,0.8)] focus:ring-4 focus:ring-red-100 focus:border-red-500"
+      : "border border-gray-200/90 border-b-[2.5px] border-b-gray-300 bg-gray-50/70 text-gray-900 shadow-[0_2px_4px_rgba(0,0,0,0.02),inset_0_1px_2px_rgba(0,0,0,0.02)] focus:bg-white focus:border-[#5C0102] focus:border-b-[#5C0102] focus:ring-4 focus:ring-[#5C0102]/10 focus:shadow-[0_4px_12px_rgba(92,1,2,0.08),inset_0_1px_0_rgba(255,255,255,1)]"
+  }`;
+
+  return (
+    <div>
+      <label className="block text-xs sm:text-[13px] font-bold text-gray-800 tracking-wide mb-1.5">
+        {label} <span className="text-red-500 font-bold ml-0.5">*</span>
+      </label>
+      <div className="flex gap-2">
+        <select
+          aria-label="Birth month"
+          value={parts.month}
+          onChange={(e) => changeMonth(e.target.value)}
+          className={`${selectClass} flex-[1.5]`}
+        >
+          <option value="">Month</option>
+          {MONTH_NAMES.map((name, i) => (
+            <option key={name} value={i + 1}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="Birth day"
+          value={parts.day}
+          onChange={(e) => emit({ ...parts, day: e.target.value })}
+          className={`${selectClass} flex-[0.7]`}
+        >
+          <option value="">Day</option>
+          {Array.from({ length: maxDay }, (_, i) => i + 1).map((d) => (
+            <option key={d} value={d}>
+              {d}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="Birth year"
+          value={parts.year}
+          onChange={(e) => changeYear(e.target.value)}
+          className={`${selectClass} flex-[1]`}
+        >
+          <option value="">Year</option>
+          {years.map((y) => (
+            <option key={y} value={y}>
+              {y}
+            </option>
+          ))}
+        </select>
+      </div>
+      {error && (
+        <p className="text-xs sm:text-sm text-red-600 mt-1.5 flex items-center gap-1 font-semibold">
+          <AlertCircle size={14} className="shrink-0" /> {error}
+        </p>
+      )}
+    </div>
+  );
+};
 
 export default function RegisterPage() {
   const { students, setStudents, addLog } = useApp();
@@ -205,7 +332,15 @@ export default function RegisterPage() {
     if (!form.lastName.trim()) newErrors.lastName = "Last name is required.";
     if (!form.gradeLevel) newErrors.gradeLevel = "Grade level is required.";
     if (!form.gender) newErrors.gender = "Gender is required.";
-    if (!form.birthdate) newErrors.birthdate = "Birthdate is required.";
+    if (!form.birthdate) {
+      newErrors.birthdate = "Birthdate is required.";
+    } else {
+      // Age window rule (shared with candidacy): older than 5 years, at most
+      // 100 — the dropdowns already exclude those years, this guards the
+      // exact date (e.g. a late-2021 birthday that is still under 5).
+      const birthdateError = validateBirthdate(form.birthdate);
+      if (birthdateError) newErrors.birthdate = birthdateError;
+    }
     if (!form.lrn.trim()) {
       newErrors.lrn = "LRN is required.";
     } else if (!/^\d{12}$/.test(form.lrn.trim())) {
@@ -621,12 +756,10 @@ export default function RegisterPage() {
                   )}
                 </div>
 
-                <InputField
+                <BirthdateField
                   label="Birthdate"
-                  field="birthdate"
-                  type="date"
                   value={form.birthdate}
-                  onChange={update}
+                  onChange={(v) => update("birthdate", v)}
                   error={errors.birthdate}
                 />
               </div>

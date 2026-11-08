@@ -159,6 +159,13 @@ async function confirmMasterlistDialog() {
   fireEvent.click(within(dialog).getByRole("button", { name: /Add to Masterlist/i }));
 }
 
+/** The disable move runs through a final confirmation dialog (Radix renders
+ *  it with role="alertdialog"); confirming is what calls the RPC. */
+async function confirmDisableDialog() {
+  const dialog = await screen.findByRole("alertdialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: /Yes, Disable Accounts/i }));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockReviewStudentRpc.mockResolvedValue(undefined);
@@ -424,6 +431,8 @@ describe("AdminStudents disable student accounts (107)", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: /Transferring to Another School/i }));
     fireEvent.click(within(dialog).getByRole("checkbox"));
     fireEvent.click(within(dialog).getByRole("button", { name: /Disable 1 Account/i }));
+    // The move is gated behind a final confirmation listing the affected account.
+    await confirmDisableDialog();
 
     await waitFor(() =>
       expect(mockDisableStudentAccounts).toHaveBeenCalledWith(
@@ -488,6 +497,7 @@ describe("AdminStudents disable student accounts (107)", () => {
 
     // Submitting disables exactly the matched account.
     fireEvent.click(within(dialog).getByRole("button", { name: /Disable 1 Account/i }));
+    await confirmDisableDialog();
     await waitFor(() =>
       expect(mockDisableStudentAccounts).toHaveBeenCalledWith(
         ["s777"],
@@ -515,6 +525,47 @@ describe("AdminStudents disable student accounts (107)", () => {
 
     expect(await screen.findByText("No students selected yet.")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: /^Disable Accounts?$/i })).toBeDisabled();
+  });
+
+  it("requires a final confirmation before disabling and keeps the selection on cancel", async () => {
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: /Disable Student Accounts/i }));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("SSLG Adviser Password"), {
+      target: { value: "adviser-password" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Continue/i }));
+    expect(await screen.findByText("Reason")).toBeInTheDocument();
+
+    // Select the student and request the disable — the confirmation appears
+    // BEFORE the RPC fires, listing the count, reason, and the account.
+    fireEvent.click(within(dialog).getByRole("checkbox"));
+    fireEvent.click(within(dialog).getByRole("button", { name: /Disable 1 Account/i }));
+
+    const confirmDialog = await screen.findByRole("alertdialog");
+    expect(within(confirmDialog).getByText(/1 student account will be disabled/)).toBeInTheDocument();
+    expect(within(confirmDialog).getByText(/reason: Graduated/)).toBeInTheDocument();
+    expect(within(confirmDialog).getByText("Maria Santos")).toBeInTheDocument();
+    expect(within(confirmDialog).getByText("777777777777")).toBeInTheDocument();
+    expect(mockDisableStudentAccounts).not.toHaveBeenCalled();
+
+    // Cancel -> nothing happens; the panel keeps the selection.
+    fireEvent.click(within(confirmDialog).getByRole("button", { name: /Cancel/i }));
+    expect(mockDisableStudentAccounts).not.toHaveBeenCalled();
+    expect(within(dialog).getByText(/Selected for Disable/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: /Disable 1 Account/i })).toBeEnabled();
+
+    // Confirm -> the RPC finally runs with the gated password.
+    fireEvent.click(within(dialog).getByRole("button", { name: /Disable 1 Account/i }));
+    await confirmDisableDialog();
+    await waitFor(() =>
+      expect(mockDisableStudentAccounts).toHaveBeenCalledWith(
+        ["s777"],
+        "graduated",
+        "adviser-password"
+      )
+    );
   });
 });
 

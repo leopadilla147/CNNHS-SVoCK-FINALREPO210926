@@ -1397,7 +1397,7 @@ export default function AdminElectionSetup() {
       } else if (action === "end") {
         applyElectionPeriod({ ...electionPeriod, isActive: false, lifecycleStage: "results", votingEndedAt: new Date().toISOString() });
       } else {
-        // Void: the same period back to the Voting Stage, paused, votes gone.
+        // Void: the same period back to the Voting Stage, paused, votes retained.
         applyElectionPeriod({ ...electionPeriod, isActive: false, lifecycleStage: "voting", votingEndedAt: null });
       }
       addLog({
@@ -1407,7 +1407,7 @@ export default function AdminElectionSetup() {
           ? "The voting period was reopened with the Electoral Board password. Students can cast votes again."
           : action === "end"
             ? "The Voting Stage was ended with the Electoral Board password. The election stays at the Results stage and publishing is unlocked."
-            : "The election was voided with the Electoral Board password. All recorded votes were discarded and the same election period returned to the Voting Stage (paused). Stage 1-3 records are unchanged.",
+            : "The election was voided with the Electoral Board password. All recorded votes were retained and the same election period returned to the Voting Stage (paused). Stage 1-3 records are unchanged.",
         type: "warning",
       });
       showSuccess(
@@ -1415,7 +1415,7 @@ export default function AdminElectionSetup() {
           ? "Voting has been reopened. Students can cast votes again."
           : action === "end"
             ? "The Voting Stage has ended. Publishing results is now unlocked."
-            : "The election has been voided. All votes were discarded and the period is back in the Voting Stage (paused).",
+            : "The election has been voided. All votes were retained and the period is back in the Voting Stage (paused).",
       );
       setVoteGate(null);
       setGatePassword("");
@@ -2783,18 +2783,18 @@ export default function AdminElectionSetup() {
                 Publish & Proclaim Winners
               </button>
             )}
-            {/* 113 — Void Election: the escape hatch before the record is
-                committed.  Available from the moment the vote is closed
+            {/* 113/137 — Void Election: the escape hatch before the record
+                is committed.  Available from the moment the vote is closed
                 (or ended) until the results are published and the winners
                 proclaimed; afterwards the button is gone for good.  It
-                discards every recorded vote and returns the SAME period to
-                the Voting Stage, paused — Stage 1-3 records untouched.
-                Electoral Board password required. */}
+                RETAINS every recorded vote (137) and returns the SAME
+                period to the Voting Stage, paused — Stage 1-3 records
+                untouched.  Electoral Board password required. */}
             {currentStage === "results" && !electionPeriod.resultsPublished && !electionPeriod.proclaimed && (
               <button
                 onClick={() => { setGateError(null); setGatePassword(""); setVoteGate("void"); }}
                 disabled={loading}
-                title="Discard every recorded vote and restart the Voting Stage in this same election period."
+                title="Restart the Voting Stage in this same election period. All recorded votes are retained."
                 className="px-5 py-2.5 bg-red-100 text-red-700 border border-red-200 rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-red-200 disabled:opacity-50 ml-auto">
                 {loading ? <Loader2 size={16} className="animate-spin" /> : <XCircle size={16} />}
                 Void Election
@@ -2885,11 +2885,11 @@ export default function AdminElectionSetup() {
           )}
 
           {/* 131 — Finalize Election: the one-way close-out under the proclaimed
-              winners (right side).  It replaces the Reset Plan danger zone once
-              the record is committed: the period retires as 'completed', is
-              archived into Past Elections, and the plan returns to Stage 1
-              where the next School Year is set.  Electoral Board password
-              required. */}
+              winners (right side).  It replaces the Full Election Reset danger
+              zone once the record is committed: the period retires as
+              'completed', is archived into Past Elections, and the plan
+              returns to Stage 1 where the next School Year is set.  Electoral
+              Board password required. */}
           {(electionPeriod.proclaimed || electionPeriod.resultsPublished) && (
             <div className="flex flex-wrap items-center justify-end gap-2">
               <button
@@ -2937,8 +2937,11 @@ export default function AdminElectionSetup() {
           published / winners proclaimed).  From there the only exit is the
           Finalize Election button in Stage 5; a reset is still offered in
           every earlier stage, and it retires a dirty period as 'cancelled'
-          when it happens before the results. */}
-      {!electionPeriod.proclaimed && !electionPeriod.resultsPublished && (
+          when it happens before the results.  With no active election at
+          all (hasPeriod false — Stage 1 before the School Year is committed,
+          or right after a Finalize/archive) there is nothing to reset, so
+          the zone is hidden there too. */}
+      {hasPeriod && !electionPeriod.proclaimed && !electionPeriod.resultsPublished && (
       <div className="bg-white rounded-xl p-6 shadow-sm border border-red-100">
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -2962,7 +2965,7 @@ export default function AdminElectionSetup() {
             disabled={loading}
             className="px-4 py-2.5 bg-red-50 text-red-700 border border-red-200 rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-red-100 disabled:opacity-50 shrink-0"
           >
-            <RotateCcw size={15} /> Reset Plan
+            <RotateCcw size={15} /> Full Election Reset
           </button>
         </div>
       </div>
@@ -3061,7 +3064,7 @@ export default function AdminElectionSetup() {
                 className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-red-700 disabled:opacity-50"
               >
                 {loading ? <Loader2 size={15} className="animate-spin" /> : <RotateCcw size={15} />}
-                Reset Plan
+                Full Election Reset
               </button>
             </div>
           </div>
@@ -3175,7 +3178,7 @@ export default function AdminElectionSetup() {
                 ? "The voting period resumes immediately: students can cast votes again. This requires the Electoral Board password."
                 : voteGate === "end"
                   ? "The Voting Stage is finalized and the election stays at the Results stage. This requires the Electoral Board password."
-                  : "Every recorded vote is permanently discarded and the same election period returns to the Voting Stage (paused). Stage 1-3 records are unchanged. This requires the Electoral Board password."}
+                  : "All recorded votes are retained and the same election period returns to the Voting Stage (paused). Students who already voted cannot vote again. Stage 1-3 records are unchanged. This requires the Electoral Board password."}
             </p>
 
             <label className="block text-xs text-gray-600 mb-1" htmlFor="vote-gate-password">

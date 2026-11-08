@@ -89,6 +89,14 @@ function typeLrn(value = LRN) {
   fireEvent.change(screen.getByPlaceholderText("12-digit LRN"), { target: { value } });
 }
 
+// The birthdate is three dropdowns (month / day / year) sized to fit the date.
+function setBirthdate(ymd: string) {
+  const [year, month, day] = ymd.split("-").map((part) => String(parseInt(part, 10)));
+  fireEvent.change(screen.getByLabelText("Birth month"), { target: { value: month } });
+  fireEvent.change(screen.getByLabelText("Birth day"), { target: { value: day } });
+  fireEvent.change(screen.getByLabelText("Birth year"), { target: { value: year } });
+}
+
 function fillRegistrationForm(overrides: Record<string, string> = {}) {
   const v = {
     firstName: "Maria",
@@ -107,8 +115,7 @@ function fillRegistrationForm(overrides: Record<string, string> = {}) {
   const selects = screen.getAllByRole("combobox");
   fireEvent.change(selects[0], { target: { value: v.grade } });
   fireEvent.change(selects[1], { target: { value: v.gender } });
-  const date = document.querySelector('input[type="date"]') as HTMLInputElement;
-  fireEvent.change(date, { target: { value: v.birthdate } });
+  setBirthdate(v.birthdate);
   fireEvent.change(screen.getByPlaceholderText("your.email@example.com"), {
     target: { value: v.email },
   });
@@ -127,13 +134,13 @@ beforeEach(() => {
 
 describe("RegisterPage (LRN-first redesign)", () => {
   it("renders LRN first, then the name row, then grade/gender/birthdate in one 3-column row", () => {
-    const { container } = renderPage();
+    renderPage();
 
     const lrn = screen.getByPlaceholderText("12-digit LRN");
     const firstName = screen.getByPlaceholderText("e.g. Maria");
     const grade = screen.getAllByRole("combobox")[0];
     const gender = screen.getAllByRole("combobox")[1];
-    const birthdate = container.querySelector('input[type="date"]') as HTMLInputElement;
+    const birthdate = screen.getByLabelText("Birth month");
 
     // LRN -> Name row -> Grade/Gender/Birthdate row (document order)
     expect(lrn.compareDocumentPosition(firstName) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -151,6 +158,64 @@ describe("RegisterPage (LRN-first redesign)", () => {
     expect(detailRow!.children.length).toBe(3);
     expect(detailRow!.contains(gender)).toBe(true);
     expect(detailRow!.contains(birthdate)).toBe(true);
+  });
+
+  it("only offers birth years inside the 5-100 year age window", () => {
+    renderPage();
+
+    const year = screen.getByLabelText("Birth year") as HTMLSelectElement;
+    const values = Array.from(year.options)
+      .map((o) => o.value)
+      .filter(Boolean)
+      .map(Number);
+    const currentYear = new Date().getFullYear();
+
+    // Newest first, five years back at the top, one hundred years back at the
+    // bottom — recent and future dates are never offered.
+    expect(Math.max(...values)).toBe(currentYear - 5);
+    expect(Math.min(...values)).toBe(currentYear - 100);
+    expect([...values].sort((a, b) => b - a)).toEqual(values);
+  });
+
+  it("limits the day options to the selected month's length (leap years included)", () => {
+    renderPage();
+
+    const month = screen.getByLabelText("Birth month") as HTMLSelectElement;
+    const year = screen.getByLabelText("Birth year") as HTMLSelectElement;
+    const day = screen.getByLabelText("Birth day") as HTMLSelectElement;
+    const dayCount = () => Array.from(day.options).filter((o) => o.value !== "").length;
+
+    fireEvent.change(month, { target: { value: "2" } }); // February
+    fireEvent.change(year, { target: { value: "2021" } }); // non-leap
+    expect(dayCount()).toBe(28);
+    fireEvent.change(year, { target: { value: "2020" } }); // leap year
+    expect(dayCount()).toBe(29);
+  });
+
+  it("blocks registration when the birthdate falls inside the last 5 years", () => {
+    // Pin "today" so the under-5 scenario is deterministic (on the real
+    // Dec 31 the dropdown cannot even offer an under-5 date).
+    vi.useFakeTimers({ now: new Date(2026, 10, 9) });
+    try {
+      mockCheckLrnRegistration.mockResolvedValue({
+        inStudents: false,
+        studentStatus: null,
+        inMasterlist: false,
+      });
+
+      renderPage();
+      typeLrn();
+
+      // Late in the oldest offered year (currentYear - 5): selectable in the
+      // dropdown, but the exact date is still under the 5-year age floor.
+      fillRegistrationForm({ birthdate: "2021-12-15" });
+      fireEvent.click(screen.getByRole("button", { name: "Submit Registration" }));
+
+      expect(screen.getByText(/dates within the last 5 years are not allowed/i)).toBeInTheDocument();
+      expect(mockRegisterStudentDirect).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("blocks registration when the LRN is already approved", async () => {

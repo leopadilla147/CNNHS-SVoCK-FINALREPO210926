@@ -157,9 +157,11 @@ describe("AdminLiveResults", () => {
     expect(screen.getByText("Vote counting has ended")).toBeInTheDocument();
   });
 
-  it("stays visible after a Void Election — voting paused with the tallies reset", async () => {
-    // 129 — Void returns the same period to 'voting' (paused) after
-    // deleting its votes: the page stays up and every count reads 0.
+  it("stays visible after a Void Election — voting paused with the tallies retained", async () => {
+    // 129/137 — Void returns the same period to 'voting' (paused) and now
+    // KEEPS its votes (137): the page stays up and renders whatever the
+    // server returns — the retained tallies, or zeros when no ballots
+    // existed for the period.
     electionPeriod = period({ lifecycleStage: "voting", isActive: false });
     candidates = [candidate({ id: "c1" }), candidate({ id: "c2", givenName: "John" })];
     mockRpc.mockResolvedValue({ data: [], error: null });

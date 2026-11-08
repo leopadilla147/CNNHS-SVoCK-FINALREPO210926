@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "motion/react";
 import {
   Trophy,
@@ -19,9 +19,10 @@ import {
 } from "lucide-react";
 import { Link } from "react-router";
 import { useApp } from "../../context/AppContext";
-import { reviewPartyCandidacyRpc } from "../../lib/supabaseData";
+import { getProclaimedWinners, ProclaimedWinner, reviewPartyCandidacyRpc } from "../../lib/supabaseData";
 import { useConfirm } from "../../lib/useConfirm";
 import { buildPartyPositionBoard, candidatesInLivePeriod } from "../../lib/partyScope";
+import ProclaimedWinnersCard from "../../components/ProclaimedWinnersCard";
 
 const formatCandidateStatus = (status: string) =>
   status === "ongoingSubmission" ? "Ongoing Submission" : status.charAt(0).toUpperCase() + status.slice(1);
@@ -106,6 +107,22 @@ export default function StudentDashboard() {
   const myGate = myApplication?.partyAffiliation
     ? myApplication.positionApprovalStatus
     : undefined;
+
+  // Stage 5 — once the Electoral Board has proclaimed the winners, read the
+  // `proclamations` ledger so the dashboard can greet a winning candidate and
+  // list the full slate.  The reader soft-fails to [], so an un-proclaimed
+  // (or un-migrated) database simply renders nothing.
+  const [proclaimedWinners, setProclaimedWinners] = useState<ProclaimedWinner[]>([]);
+  useEffect(() => {
+    if (!electionPeriod.proclaimed || !electionPeriod.id) return;
+    let cancelled = false;
+    getProclaimedWinners(electionPeriod.id).then((rows) => {
+      if (!cancelled) setProclaimedWinners(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [electionPeriod.proclaimed, electionPeriod.id]);
 
   const handleReviewCandidacy = async (
     candidateId: string,
@@ -242,6 +259,16 @@ export default function StudentDashboard() {
           );
         })}
       </div>
+
+      {/* Stage 5 — the Board's proclamation: a student who won sees a
+          Congratulations banner on top of the full winners list; everyone
+          else sees the winners list alone.  Renders nothing until the Board
+          has proclaimed. */}
+      <ProclaimedWinnersCard
+        winners={proclaimedWinners}
+        myCandidateId={myApplication?.id}
+        schoolYear={electionPeriod.schoolYear}
+      />
 
       {/* Stage 3 (060) enrolment reminder — for every voter, only while the
           Fingerprint Registration window is still live */}

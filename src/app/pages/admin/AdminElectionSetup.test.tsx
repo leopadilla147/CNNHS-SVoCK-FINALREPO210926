@@ -415,9 +415,9 @@ describe("AdminElectionSetup", () => {
       candidacyOpen: false,
       rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
       fingerprintRegistrationStartAt: localIso(2, "08:00"),
-      startDate: "2026-11-02",
+      startDate: futureDate(1),
       startTime: "08:00",
-      endDate: "2026-11-02",
+      endDate: futureDate(1),
       endTime: "17:00",
     });
     candidates = fullRoster();
@@ -444,9 +444,9 @@ describe("AdminElectionSetup", () => {
       rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
       fingerprintRegistrationStartAt: localIso(2, "08:00"),
       fingerprintRegistrationEndAt: localIso(3, "17:00"),
-      startDate: "2026-11-02",
+      startDate: futureDate(1),
       startTime: "08:00",
-      endDate: "2026-11-02",
+      endDate: futureDate(1),
       endTime: "17:00",
     });
     candidates = fullRoster();
@@ -548,9 +548,9 @@ describe("AdminElectionSetup", () => {
       candidacyOpen: false,
       rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
       fingerprintRegistrationStartAt: localIso(2, "08:00"),
-      startDate: "2026-11-02",
+      startDate: futureDate(1),
       startTime: "08:00",
-      endDate: "2026-11-02",
+      endDate: futureDate(1),
       endTime: "17:00",
     });
     candidates = fullRoster();
@@ -570,9 +570,9 @@ describe("AdminElectionSetup", () => {
       candidacyOpen: false,
       rulesDiscussionAt: "2026-09-30T09:00:00.000Z",
       fingerprintRegistrationStartAt: localIso(2, "08:00"),
-      startDate: "2026-11-02",
+      startDate: futureDate(1),
       startTime: "08:00",
-      endDate: "2026-11-02",
+      endDate: futureDate(1),
       endTime: "17:00",
     });
     // Every position filled except one — the vote may not open.
@@ -1087,7 +1087,7 @@ describe("AdminElectionSetup", () => {
     });
   });
 
-  it("Void Election discards the votes and returns the period to the Voting Stage, paused", async () => {
+  it("Void Election keeps the votes and returns the period to the Voting Stage, paused", async () => {
     const user = userEvent.setup();
     electionPeriod = period({
       lifecycleStage: "results",
@@ -1100,9 +1100,9 @@ describe("AdminElectionSetup", () => {
       endDate: "2026-11-02",
       endTime: "17:00",
     });
-    // void_election_rpc (113) rewinds the SAME period to the Voting Stage,
-    // paused, with the votes gone; the page mirrors the row the server
-    // produced.
+    // void_election_rpc (113/137) rewinds the SAME period to the Voting
+    // Stage, paused, with every recorded vote retained; the page mirrors
+    // the row the server produced.
     mockReloadElectionPeriod.mockResolvedValue(
       period({
         lifecycleStage: "voting",
@@ -2068,9 +2068,9 @@ describe("AdminElectionSetup", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.click(screen.getByRole("button", { name: /Reset Plan/ }));
+    await user.click(screen.getByRole("button", { name: /Full Election Reset/ }));
     const dialog = await screen.findByRole("dialog");
-    await user.click(within(dialog).getByRole("button", { name: "Reset Plan" }));
+    await user.click(within(dialog).getByRole("button", { name: "Full Election Reset" }));
 
     expect(mockResetElectionPlanRpc).not.toHaveBeenCalled();
     expect(within(dialog).getByText("Enter the Electoral Board password to continue.")).toBeInTheDocument();
@@ -2080,11 +2080,11 @@ describe("AdminElectionSetup", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.click(screen.getByRole("button", { name: /Reset Plan/ }));
+    await user.click(screen.getByRole("button", { name: /Full Election Reset/ }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).queryByLabelText("New School Year")).not.toBeInTheDocument();
     await user.type(within(dialog).getByLabelText("Electoral Board Password"), "chief123");
-    await user.click(within(dialog).getByRole("button", { name: "Reset Plan" }));
+    await user.click(within(dialog).getByRole("button", { name: "Full Election Reset" }));
 
     await waitFor(() => {
       expect(mockResetElectionPlanRpc).toHaveBeenCalledWith("chief123");
@@ -2104,17 +2104,17 @@ describe("AdminElectionSetup", () => {
     });
     renderPage();
 
-    await user.click(screen.getByRole("button", { name: /Reset Plan/ }));
+    await user.click(screen.getByRole("button", { name: /Full Election Reset/ }));
     const dialog = await screen.findByRole("dialog");
     await user.type(within(dialog).getByLabelText("Electoral Board Password"), "chief123");
-    await user.click(within(dialog).getByRole("button", { name: "Reset Plan" }));
+    await user.click(within(dialog).getByRole("button", { name: "Full Election Reset" }));
 
     expect(await screen.findByLabelText("School Year")).toBeInTheDocument();
     expect(await screen.findByText("No active school year")).toBeInTheDocument();
   });
 
-  // 131 — Finalize Election replaces the Reset Plan danger zone once the
-  // record is committed (results published + winners proclaimed).
+  // 131 — Finalize Election replaces the Full Election Reset danger zone once
+  // the record is committed (results published + winners proclaimed).
   describe("Finalize Election (131)", () => {
     // Stage 5 after Publish & Proclaim Winners: the committed record.
     const committed = period({
@@ -2132,14 +2132,14 @@ describe("AdminElectionSetup", () => {
       schoolYear: "2026-2027",
     });
 
-    it("replaces the Reset Plan danger zone once the record is committed", async () => {
+    it("replaces the Full Election Reset danger zone once the record is committed", async () => {
       const user = userEvent.setup();
       electionPeriod = committed;
       renderPage();
 
       await gotoStage(user, "Results");
       expect(screen.getByRole("button", { name: /Finalize Election/ })).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: /Reset Plan/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: /Full Election Reset/ })).toBeNull();
     });
 
     it("still offers the reset — the cancelled path — before results are published", async () => {
@@ -2160,7 +2160,7 @@ describe("AdminElectionSetup", () => {
       renderPage();
 
       await gotoStage(user, "Results");
-      expect(screen.getByRole("button", { name: /Reset Plan/ })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Full Election Reset/ })).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: /Finalize Election/ })).toBeNull();
     });
 
@@ -2220,6 +2220,18 @@ describe("AdminElectionSetup", () => {
 
     expect(screen.getByText("No active school year")).toBeInTheDocument();
     expect(await screen.findByLabelText("School Year")).toBeInTheDocument();
+  });
+
+  it("hides the Full Election Reset danger zone when there is no active election", () => {
+    // hasPeriod false — no period record exists (Stage 1 before the School
+    // Year is committed, or right after a Finalize/archive). There is
+    // nothing to reset, so the danger zone never renders.
+    electionPeriod = { ...emptyElectionPeriod };
+    mockGetCurrentElectionId.mockResolvedValue(null);
+    renderPage();
+
+    expect(screen.queryByRole("button", { name: /Full Election Reset/ })).toBeNull();
+    expect(screen.queryByText("Reset Election Plan")).toBeNull();
   });
 
   it("explains that a reset with history archives instead of deleting", () => {

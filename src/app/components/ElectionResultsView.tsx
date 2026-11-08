@@ -23,6 +23,32 @@ const POSITION_INDEX = new Map<string, number>(
   POSITION_ORDER.map((position, index) => [position, index]),
 );
 
+/** Normalized token view of a personal name — case/punctuation-insensitive. */
+function nameTokens(name: string): string[] {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+}
+
+/**
+ * Whether an archived candidate row is the viewer: a token-subset match in
+ * either direction.  The archive name may carry an extension the student
+ * record lacks ("Jr.") or drop the middle name, so exact equality alone is
+ * too strict — but both names must carry at least two tokens so a bare
+ * first name can never match.
+ */
+export function candidateNameMatches(candidateName: string, myName: string): boolean {
+  if (!candidateName || !myName) return false;
+  const cand = nameTokens(candidateName);
+  const mine = nameTokens(myName);
+  if (cand.length < 2 || mine.length < 2) return false;
+  const supersetOf = (big: string[], small: string[]) => small.every((t) => big.includes(t));
+  return supersetOf(cand, mine) || supersetOf(mine, cand);
+}
+
 export function sortPositions(
   positions: PastElectionPositionResult[]
 ): PastElectionPositionResult[] {
@@ -45,7 +71,14 @@ function formatPercentage(part: number, whole: number): string {
   return `${Math.round((part / whole) * 100)}%`;
 }
 
-export function PositionCard({ position }: { position: PastElectionPositionResult }) {
+export function PositionCard({
+  position,
+  highlightName,
+}: {
+  position: PastElectionPositionResult;
+  /** The viewer's own candidate name — matching rows are ringed "You". */
+  highlightName?: string | null;
+}) {
   const ranked = position.candidates;
   const leaderVotes = ranked[0]?.votes ?? 0;
 
@@ -80,6 +113,7 @@ export function PositionCard({ position }: { position: PastElectionPositionResul
         <ul className="p-2 sm:p-3 space-y-2">
           {ranked.map((candidate, index) => {
             const share = formatPercentage(candidate.votes, position.votesCast);
+            const isMe = highlightName ? candidateNameMatches(candidate.name, highlightName) : false;
             return (
               <li
                 key={`${candidate.name}-${index}`}
@@ -87,6 +121,12 @@ export function PositionCard({ position }: { position: PastElectionPositionResul
                   candidate.proclaimedWinner
                     ? "bg-gradient-to-r from-[#6e0102] via-[#5C0102] to-[#780103] text-white border border-[#450001] border-b-[3.5px] border-b-[#2e0001] shadow-[0_8px_22px_rgba(92,1,2,0.28),inset_0_1px_0_rgba(255,255,255,0.22)] relative overflow-hidden"
                     : "bg-gradient-to-b from-white to-stone-50/70 border border-gray-100 border-b-[2.5px] border-b-gray-200/90 hover:border-gray-300/80 hover:shadow-[0_4px_14px_rgba(0,0,0,0.04)]"
+                } ${
+                  isMe
+                    ? candidate.proclaimedWinner
+                      ? "ring-2 ring-amber-300"
+                      : "border-[#5C0102] ring-2 ring-[#5C0102]/20"
+                    : ""
                 }`}
               >
                 <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -151,6 +191,19 @@ export function PositionCard({ position }: { position: PastElectionPositionResul
                               : "Tie Resolved By Electoral Board"}
                         </span>
                       )}
+                      {isMe && (
+                        /* The viewer's own row — the Apply-for-Candidacy
+                           Stage 5 view rings it and badges it "You". */
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-bold ${
+                            candidate.proclaimedWinner
+                              ? "bg-amber-300 text-[#5C0102] shadow-[0_2px_5px_rgba(0,0,0,0.2)]"
+                              : "bg-[#5C0102] text-white shadow-[0_2px_5px_rgba(92,1,2,0.25)]"
+                          }`}
+                        >
+                          You
+                        </span>
+                      )}
                     </div>
                     <p className={`text-sm truncate font-medium ${candidate.proclaimedWinner ? "text-white/80" : "text-gray-500"}`}>
                       {candidate.partyName || "Independent"} · {candidate.gradeLevel}
@@ -193,6 +246,9 @@ export interface ElectionResultsViewProps {
   eyebrowIcon?: ReactNode;
   /** When true, renders the horizontal draggable position tab bar */
   showPositionTabs?: boolean;
+  /** The viewer's own candidate name — matching rows are ringed and
+   *  badged "You" (the Apply-for-Candidacy Stage 5 view). */
+  highlightName?: string | null;
 }
 
 /**
@@ -205,6 +261,7 @@ export default function ElectionResultsView({
   eyebrow = "Official results",
   eyebrowIcon,
   showPositionTabs = false,
+  highlightName = null,
 }: ElectionResultsViewProps) {
   const positions = useMemo(() => sortPositions(results.positions), [results]);
   const [selectedPosition, setSelectedPosition] = useState<string>("All Positions");
@@ -401,7 +458,7 @@ export default function ElectionResultsView({
                   exit={{ opacity: 0, y: -10 }}
                   transition={{ duration: 0.22 }}
                 >
-                  <PositionCard position={position} />
+                  <PositionCard position={position} highlightName={highlightName} />
                 </motion.div>
               ))}
             </AnimatePresence>

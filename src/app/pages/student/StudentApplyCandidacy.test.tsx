@@ -219,3 +219,89 @@ describe("StudentApplyCandidacy — 109 stage lock", () => {
     expect(screen.queryByText("Application Rejected")).toBeNull();
   });
 });
+
+describe("StudentApplyCandidacy — revising a rejected founder's application", () => {
+  const FOUNDER_PARTY = "Nagkakaisang Kabataan Party";
+  const FOUNDER_PARTY_ID = "d4000000-0000-4000-8000-00000000abcd";
+
+  // A low-severity-rejected President (party creator) whose saved row carries
+  // everything steps 1-3 validate: the photo, the PSGC codes (111), and the
+  // guardian contact.  partyId puts the founder's own party into the party
+  // picker — the condition under which keeping their own party name used to
+  // be rejected as a duplicate.
+  function rejectedFounder(overrides: Partial<Candidate> = {}): Candidate {
+    return candidate({
+      status: "rejected",
+      rejectionTier: "low",
+      rejectionReason: "Blurry EAF photo",
+      gradeLevel: "Grade 12",
+      position: "President",
+      partyId: FOUNDER_PARTY_ID,
+      partyAffiliation: FOUNDER_PARTY,
+      picture: "data:image/jpeg;base64,c2FtcGxl",
+      addressProvinceCode: "0505000000",
+      addressCityCode: "0505013000",
+      addressBarangayCode: "0505013001",
+      parentGuardianName: "Maria Reyes Dela Cruz",
+      parentGuardianContact: "09187654321",
+      ...overrides,
+    });
+  }
+
+  async function openPartyStepOfRevision() {
+    renderPage();
+    fireEvent.click(screen.getByText("Revise and Resubmit"));
+    expect(await screen.findByText("Edit EAF Information")).toBeTruthy();
+    // Walk from step 1 to the Party Affiliation step; each Next validates
+    // the prefilled profile steps.
+    fireEvent.click(screen.getByText("Next"));
+    fireEvent.click(screen.getByText("Next"));
+    fireEvent.click(screen.getByText("Next"));
+    expect(
+      await screen.findByText("Party Affiliation and Elective Position")
+    ).toBeTruthy();
+  }
+
+  it("lets the founder keep their own party name without the duplicate error", async () => {
+    candidates = [rejectedFounder()];
+    await openPartyStepOfRevision();
+
+    // The wizard prefills "create new party" mode with the founder's own
+    // party name.  Leaving the step must not read that as a name clash.
+    fireEvent.click(screen.getByText("Next"));
+    expect(screen.queryByText(/This party already exists/i)).toBeNull();
+    expect(
+      await screen.findByText(/Answer in your own words/i)
+    ).toBeTruthy();
+  });
+
+  it("locks the party and position fields during the revision", async () => {
+    candidates = [rejectedFounder()];
+    await openPartyStepOfRevision();
+
+    // 124's update branch keeps party and position as originally filed, so
+    // the revise wizard shows them read-only instead of letting the student
+    // type a change the database would silently ignore.
+    expect(screen.getByDisplayValue(FOUNDER_PARTY)).toBeDisabled();
+    const partyTypeBlock = screen
+      .getByText(/only your profile details can be revised/i)
+      .closest("div") as HTMLElement;
+    expect(partyTypeBlock.querySelector("select")).toBeDisabled();
+  });
+
+  it("locks the party picker for a regular party member revising too", async () => {
+    candidates = [
+      rejectedFounder({
+        position: "Grade 12 Representative",
+        positionApprovalStatus: "presidentApproved",
+      }),
+    ];
+    await openPartyStepOfRevision();
+
+    expect(screen.queryByText(/This party already exists/i)).toBeNull();
+    const partyTypeBlock = screen
+      .getByText(/only your profile details can be revised/i)
+      .closest("div") as HTMLElement;
+    expect(partyTypeBlock.querySelector("select")).toBeDisabled();
+  });
+});

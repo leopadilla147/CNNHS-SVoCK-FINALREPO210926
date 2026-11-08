@@ -155,6 +155,14 @@ export default function AdminStudents() {
       "The parsed rows will be added to the student masterlist. Rows whose LRN already exists are skipped automatically.",
     confirmText: "Add to Masterlist",
   });
+  // 107 — final safeguard before the consequential move: after the password
+  // gate and selection, the adviser still confirms exactly WHO is about to
+  // lose access (count + reason + the selected names/LRNs).
+  const disableConfirm = useConfirm({
+    title: "Disable Selected Student Accounts?",
+    confirmText: "Yes, Disable Accounts",
+    destructive: true,
+  });
 
   // 107 — Disable Student Accounts: a password-gated dialog behind the
   // upload row.  Step "gate" verifies the acting adviser's OWN password
@@ -295,6 +303,29 @@ export default function AdminStudents() {
     } finally {
       setDisabling(false);
     }
+  };
+
+  // Final confirmation before the consequential move: the adviser sees the
+  // count, the reason, and exactly which accounts will lose access, then
+  // explicitly confirms before submitDisableAccounts runs.
+  const requestDisableAccounts = async () => {
+    if (disableSelection.size === 0) return;
+    const reasonLabel = disableReason === "graduated" ? "Graduated" : "Transferred to another school";
+    const ok = await disableConfirm.confirm({
+      description: `${disableSelection.size} student account${disableSelection.size === 1 ? "" : "s"} will be disabled — reason: ${reasonLabel}. They will immediately lose access to log in. This action is recorded in the audit logs.`,
+      content: (
+        <div className="mt-3 border border-gray-100 rounded-lg bg-gray-50 p-3 max-h-40 overflow-y-auto space-y-1 text-left">
+          {selectedDisableStudents.map((s) => (
+            <div key={s.id} className="flex items-center justify-between gap-3 text-xs">
+              <span className="font-medium text-gray-700 truncate">{s.firstName} {s.lastName}</span>
+              <span className="text-gray-400 font-mono flex-shrink-0">{s.lrn}</span>
+            </div>
+          ))}
+        </div>
+      ),
+    });
+    if (!ok) return;
+    await submitDisableAccounts();
   };
 
   // MASTER-01 display flow: masterlist rows whose LRN has no registered
@@ -1143,7 +1174,7 @@ export default function AdminStudents() {
                     Cancel
                   </button>
                   <button
-                    onClick={submitDisableAccounts}
+                    onClick={requestDisableAccounts}
                     disabled={disabling || disableSelection.size === 0}
                     className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm font-medium flex items-center gap-2 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
@@ -1460,6 +1491,10 @@ export default function AdminStudents() {
         </div>
       )}
       {approveConfirm.dialog}
+      {/* 107 — final confirm before disabling: count + reason + the exact
+          accounts that will lose access. Renders in a Radix portal, so it
+          layers above the disable overlay. */}
+      {disableConfirm.dialog}
       {/* 133 — rejection dialog: the Adviser records WHAT is wrong or
           missing; the joined explanation is stored on the students row and
           emailed to the student (notify_student_review). */}

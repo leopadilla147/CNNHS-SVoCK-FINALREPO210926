@@ -1,6 +1,6 @@
 -- Add AS608 fingerprint slot (template ID) to biometric_templates so the
 -- kiosk can store and retrieve enrolled fingerprints within the single main
--- Supabase project (hfeozvpwfxbdjhuhhkjg.supabase.co).
+-- Supabase project (mtsavbsrdyocoquflpvl.supabase.co).
 
 alter table public.biometric_templates
   add column if not exists fingerprint_id integer;

@@ -5,14 +5,15 @@
 -- 052 put on these tables.
 --
 -- Wipes: candidates, parties, votes, proclamations, period-linked
--- complaints, the 061 past-election snapshots, and every
--- election_periods row.
+-- complaints, the 061/064/085 past-election snapshots, 138's archived
+-- ballots (votes_archive), and every election_periods row.
 --
 -- WHY IT LOOKS LIKE THIS
 --   052 §5 made history permanent: a BEFORE DELETE trigger raises on any
 --   election_periods delete, and every historical FK is ON DELETE
 --   RESTRICT (candidates/parties/votes/proclamations/complaints ->
---   election_periods; votes/proclamations -> candidates; candidates ->
+--   election_periods, and 138's votes_archive -> election_periods;
+--   votes/proclamations -> candidates; candidates ->
 --   parties via the NOT DEFERRABLE composite (party_id,
 --   election_period_id)).  The trigger must be suspended and the deletes
 --   ordered child-first, or Postgres refuses.
@@ -34,7 +35,8 @@
 --
 -- BEFORE YOU RUN IT
 --   Confirm you hold dumps of votes, proclamations, complaints and
---   election_periods as well as candidates/parties.  This script is the
+--   election_periods as well as candidates/parties (and 138's
+--   votes_archive — the archived ballots).  This script is the
 --   only copy of nothing — once it commits, the rows are gone for good
 --   (052's trigger is restored immediately afterwards and will refuse any
 --   further delete).
@@ -52,8 +54,13 @@ delete from public.complaints where election_period_id is not null; -- -> electi
 delete from public.candidates;                                      -- -> parties (composite), election_periods
 delete from public.parties;                                         -- -> election_periods
 
--- 3. 061's snapshot tables.  Guarded so the script is also safe on a
---    database where 061 was never applied.
+-- 3. The 061/064/085 snapshot tables and 138's archived ballots.  Every
+--    one of them references election_periods ON DELETE RESTRICT, so all
+--    must go before step 4 — and votes_archive is the one that actually
+--    blocks it now: after a finalize/reset the retired periods' ballots
+--    live there, not in the live votes table step 2 emptied.  Guarded so
+--    the script is also safe on a database where 061/064/085/138 were
+--    never applied.
 do $$
 begin
   if to_regclass('public.past_election_candidates') is not null then
@@ -62,8 +69,17 @@ begin
   if to_regclass('public.past_election_positions') is not null then
     execute 'delete from public.past_election_positions';
   end if;
+  if to_regclass('public.past_parties') is not null then
+    execute 'delete from public.past_parties';
+  end if;
+  if to_regclass('public.past_election_complaints') is not null then
+    execute 'delete from public.past_election_complaints';
+  end if;
   if to_regclass('public.past_election_periods') is not null then
     execute 'delete from public.past_election_periods';
+  end if;
+  if to_regclass('public.votes_archive') is not null then
+    execute 'delete from public.votes_archive';
   end if;
 end;
 $$;
@@ -76,11 +92,55 @@ alter table public.election_periods enable trigger election_periods_no_delete;
 
 commit;
 
--- Verify — every column should read 0.
+-- Guarded + dynamic so the count is skipped (reported as null) on a
+-- database without the 061/064/085/138 archive tables.
+do $$
+declare
+  v_total bigint := 0;
+  v_count bigint;
+begin
+  if to_regclass('public.past_election_candidates') is not null then
+    execute 'select count(*) from public.past_election_candidates' into v_count;
+    v_total := v_total + v_count;
+  end if;
+  if to_regclass('public.past_election_positions') is not null then
+    execute 'select count(*) from public.past_election_positions' into v_count;
+    v_total := v_total + v_count;
+  end if;
+  if to_regclass('public.past_parties') is not null then
+    execute 'select count(*) from public.past_parties' into v_count;
+    v_total := v_total + v_count;
+  end if;
+  if to_regclass('public.past_election_complaints') is not null then
+    execute 'select count(*) from public.past_election_complaints' into v_count;
+    v_total := v_total + v_count;
+  end if;
+  if to_regclass('public.past_election_periods') is not null then
+    execute 'select count(*) from public.past_election_periods' into v_count;
+    v_total := v_total + v_count;
+  end if;
+  if to_regclass('public.votes_archive') is not null then
+    execute 'select count(*) from public.votes_archive' into v_count;
+    v_total := v_total + v_count;
+  end if;
+  perform set_config('svock.archive_rows_left', case
+    when to_regclass('public.past_election_candidates') is null
+     and to_regclass('public.past_election_positions') is null
+     and to_regclass('public.past_parties') is null
+     and to_regclass('public.past_election_complaints') is null
+     and to_regclass('public.past_election_periods') is null
+     and to_regclass('public.votes_archive') is null
+    then null else v_total::text end, false);
+end;
+$$;
+
+-- Verify — every column should read 0 (archive_rows_left is null when
+-- none of the 061/064/085/138 archive tables exist).
 select
   (select count(*) from public.election_periods) as periods,
   (select count(*) from public.candidates)       as candidates,
   (select count(*) from public.parties)          as parties,
   (select count(*) from public.votes)            as votes,
   (select count(*) from public.proclamations)    as proclamations,
-  (select count(*) from public.complaints where election_period_id is not null) as period_complaints;
+  (select count(*) from public.complaints where election_period_id is not null) as period_complaints,
+  nullif(current_setting('svock.archive_rows_left', true), '')::bigint          as archive_rows_left;

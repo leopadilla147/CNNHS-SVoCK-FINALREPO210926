@@ -1,20 +1,86 @@
-import { useEffect, useState } from "react";
-import { Paperclip, X } from "lucide-react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { Paperclip, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { ComplaintEvidence } from "../context/AppContext";
 import { isImageEvidence } from "../lib/complaints";
 
 /**
  * 096: full-screen zoom for an evidence image.  Closes on backdrop click,
- * the X button, or Escape.
+ * the X button, or Escape.  Escape is consumed here (capture phase +
+ * stopPropagation) so a page/modal underneath with its own Escape handler
+ * does not close at the same time as the lightbox.
+ *
+ * The image is zoomable: mouse wheel or the +/− controls scale it (1x–5x),
+ * double-click toggles between fit and 2.5x, and while zoomed it can be
+ * dragged to pan.  Dropping back to 1x recenters; a new image always opens
+ * fit and centered.
  */
-function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+export function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+  const [scale, setScale] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; baseX: number; baseY: number } | null>(null);
+
+  // A new image always opens fit and centered.
+  useEffect(() => {
+    setScale(1);
+    setOffset({ x: 0, y: 0 });
+  }, [src]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      onClose();
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
   }, [onClose]);
+
+  // Keep the pan offset inside what the scaled image actually covers
+  // (clientWidth/Height are the unscaled layout sizes, so multiply).
+  const clampOffset = (x: number, y: number, atScale: number) => {
+    const img = imgRef.current;
+    const viewport = viewportRef.current;
+    if (!img || !viewport) return { x, y };
+    const maxX = Math.max(0, (img.clientWidth * atScale - viewport.clientWidth) / 2);
+    const maxY = Math.max(0, (img.clientHeight * atScale - viewport.clientHeight) / 2);
+    return { x: Math.min(maxX, Math.max(-maxX, x)), y: Math.min(maxY, Math.max(-maxY, y)) };
+  };
+
+  // Wheel zoom over the whole viewport.  Non-passive so the page behind the
+  // fixed overlay cannot scroll while zooming.
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      setScale((prev) => Math.min(5, Math.max(1, prev * (e.deltaY < 0 ? 1.2 : 1 / 1.2))));
+    };
+    viewport.addEventListener("wheel", onWheel, { passive: false });
+    return () => viewport.removeEventListener("wheel", onWheel);
+  }, []);
+
+  // Re-clamp (and at 1x, recenter) whenever the scale changes.
+  useEffect(() => {
+    setOffset((prev) => (scale === 1 ? { x: 0, y: 0 } : clampOffset(prev.x, prev.y, scale)));
+  }, [scale]);
+
+  const zoomBy = (factor: number) => setScale((prev) => Math.min(5, Math.max(1, prev * factor)));
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLImageElement>) => {
+    if (scale <= 1) return;
+    dragRef.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, baseX: offset.x, baseY: offset.y };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onPointerMove = (e: ReactPointerEvent<HTMLImageElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    setOffset(clampOffset(drag.baseX + (e.clientX - drag.startX), drag.baseY + (e.clientY - drag.startY), scale));
+  };
+  const endDrag = (e: ReactPointerEvent<HTMLImageElement>) => {
+    if (dragRef.current?.pointerId === e.pointerId) dragRef.current = null;
+  };
 
   return (
     <div
@@ -32,12 +98,64 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
       >
         <X size={20} />
       </button>
-      <img
-        src={src}
-        alt={alt}
-        className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg shadow-2xl"
+
+      <div ref={viewportRef} className="flex items-center justify-center overflow-hidden">
+        <img
+          ref={imgRef}
+          src={src}
+          alt={alt}
+          draggable={false}
+          className={`max-h-[90vh] max-w-[90vw] object-contain rounded-lg shadow-2xl select-none ${
+            scale > 1 ? "cursor-grab active:cursor-grabbing" : "cursor-zoom-in"
+          }`}
+          style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}
+          onClick={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            setScale((prev) => (prev > 1 ? 1 : 2.5));
+          }}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+        />
+      </div>
+
+      {/* Zoom controls — clicking them must not close the lightbox. */}
+      <div
+        className="absolute bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full bg-white/10 px-1.5 py-1"
         onClick={(e) => e.stopPropagation()}
-      />
+      >
+        <button
+          type="button"
+          title="Zoom out"
+          aria-label="Zoom out"
+          disabled={scale <= 1}
+          onClick={() => zoomBy(1 / 1.25)}
+          className="p-2 rounded-full text-white hover:bg-white/20 transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
+        >
+          <ZoomOut size={18} />
+        </button>
+        <button
+          type="button"
+          title="Reset zoom"
+          aria-label="Reset zoom"
+          onClick={() => setScale(1)}
+          className="min-w-[3.25rem] px-1 py-1 rounded-full text-xs font-medium text-white hover:bg-white/20 transition-colors"
+        >
+          {Math.round(scale * 100)}%
+        </button>
+        <button
+          type="button"
+          title="Zoom in"
+          aria-label="Zoom in"
+          disabled={scale >= 5}
+          onClick={() => zoomBy(1.25)}
+          className="p-2 rounded-full text-white hover:bg-white/20 transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
+        >
+          <ZoomIn size={18} />
+        </button>
+      </div>
     </div>
   );
 }

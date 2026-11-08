@@ -260,7 +260,7 @@ with spec (lrn, position, party_id, picture_url) as (
   ('999900000034', 'Grade 10 Representative', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d401'::uuid, 'https://mtsavbsrdyocoquflpvl.supabase.co/storage/v1/object/public/candidate-pictures/candidate_388b250f-66be-410a-88a6-b6ef65de8b75_1786891842787.jpg'),
   ('999900000029', 'Grade 11 Representative', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d401'::uuid, 'https://mtsavbsrdyocoquflpvl.supabase.co/storage/v1/object/public/candidate-pictures/candidate_39447952-11af-44d6-8d4c-6b930cf5b0fa_1786898221473.jpg'),
   ('999900000030', 'Grade 12 Representative', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d401'::uuid, 'https://mtsavbsrdyocoquflpvl.supabase.co/storage/v1/object/public/candidate-pictures/candidate_3b2cd77c-c05b-4475-8d76-2b71c9ef0b7d_1786898037985.jpg'),
-  ('999900000042', 'President', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d402'::uuid, null),
+  ('999900000042', 'President', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d402'::uuid, 'https://mtsavbsrdyocoquflpvl.supabase.co/storage/v1/object/public/candidate-pictures/candidate_87606c2f-53ad-4195-b3e3-dfeb10b8b626_1786899001445.jpg'),
   ('999900000041', 'Vice President', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d402'::uuid, 'https://mtsavbsrdyocoquflpvl.supabase.co/storage/v1/object/public/candidate-pictures/candidate_45e6383e-d112-48ba-a03c-00e1c284e7ec_1786891280901.jpg'),
   ('999900000040', 'Secretary', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d402'::uuid, 'https://mtsavbsrdyocoquflpvl.supabase.co/storage/v1/object/public/candidate-pictures/candidate_49c5d6c8-4101-4321-b75b-d129e1f69317_1786891036718.jpg'),
   ('999900000046', 'Treasurer', 'b1a0f8e2-3c47-4d9a-9e21-7f0a61c3d402'::uuid, 'https://mtsavbsrdyocoquflpvl.supabase.co/storage/v1/object/public/candidate-pictures/candidate_4bdeb75f-b2cc-4b96-9f52-8542f1a70844_1786897451612.jpg'),
@@ -292,7 +292,7 @@ with spec (lrn, position, party_id, picture_url) as (
   ('999900000084', 'Vice President', null, 'https://mtsavbsrdyocoquflpvl.supabase.co/storage/v1/object/public/candidate-pictures/candidate_d9c5ee18-9899-4fb4-93fc-0438f31973dd_1786897520236.jpg'),
   ('999900000076', 'Secretary', null, 'https://mtsavbsrdyocoquflpvl.supabase.co/storage/v1/object/public/candidate-pictures/candidate_da4a0bc4-ffa1-4501-9e98-48c11f3b9f19_1786891166854.jpg'),
   ('999900000082', 'Treasurer', null, 'https://mtsavbsrdyocoquflpvl.supabase.co/storage/v1/object/public/candidate-pictures/candidate_da661475-eb73-4368-bca4-c8853bdcae5b_1786890893415.jpg'),
-  ('999900000075', 'Auditor', null, null)
+  ('999900000075', 'Auditor', null, 'https://mtsavbsrdyocoquflpvl.supabase.co/storage/v1/object/public/candidate-pictures/candidate_ba8b894e-edf4-45f3-bbcd-6aeb5e7f8db3_1786898352818.jpg')
 )
 insert into public.candidates (
   student_id, election_period_id,

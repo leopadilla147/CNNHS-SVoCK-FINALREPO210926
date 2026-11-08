@@ -7,6 +7,7 @@ import { positionRank } from "../../lib/partyScope";
 import { reviewCandidacyRpc, insertAuditLog } from "../../lib/supabaseData";
 import { isSupabaseConfigured } from "../../lib/supabase";
 import { useConfirm } from "../../lib/useConfirm";
+import { ImageLightbox } from "../../components/EvidencePreview";
 
 const PARTY_COLORS: Record<string, { bg: string; border: string; badge: string; text: string }> = {
   "Progress Party":  { bg: "#FFF5F5", border: "#5C0102", badge: "bg-red-100 text-red-700",    text: "#5C0102" },
@@ -57,6 +58,35 @@ const REJECTION_REASONS: { reason: string; tier: "low" | "high" }[] = [
   { reason: "Not a Bonafide Student", tier: "high" },
 ];
 
+/**
+ * The checklist is presented in its two severity groups so the reviewer sees
+ * the consequence BEFORE signing the rejection.  The tier is still derived,
+ * never asked for (any selected high reason makes it "high"), and the
+ * database enforces the difference on resubmission: a low-tier rejection
+ * lets the student revise and resubmit within the election period, while a
+ * high-tier rejection makes the submit RPC refuse any further application
+ * for that period ("disqualified").
+ */
+const REJECTION_SEVERITY_GROUPS: {
+  tier: "low" | "high";
+  title: string;
+  note: string;
+  badgeClass: string;
+}[] = [
+  {
+    tier: "low",
+    title: "Low Severity",
+    note: "Fixable — the student may revise and resubmit within this election period.",
+    badgeClass: "bg-amber-100 text-amber-700",
+  },
+  {
+    tier: "high",
+    title: "High Severity",
+    note: "Disqualifying — blocks resubmission for this election period.",
+    badgeClass: "bg-red-100 text-red-700",
+  },
+];
+
 export default function AdminCandidates() {
   const { currentUser, candidates, setCandidates, electionPeriod, addLog, insertNotification, students } = useApp();
   const isChief = currentUser?.commissionerRole === "chief";
@@ -74,6 +104,9 @@ export default function AdminCandidates() {
   const [statusFilter, setStatusFilter] = useState(() => readStatusFilter(searchParams.get("filter")));
   const [expandedParty, setExpandedParty] = useState<string | null>(null);
   const [selected, setSelected] = useState<Candidate | null>(null);
+  // Full-screen zoom for EAF document photos — opens in a lightbox modal,
+  // never in a new browser tab.
+  const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null);
   const [processing, setProcessing] = useState<string | null>(null);
   const [officialListPosted, setOfficialListPosted] = useState(false);
   const [rejectDialog, setRejectDialog] = useState<Candidate | null>(null);
@@ -741,7 +774,7 @@ export default function AdminCandidates() {
                           src={selected.eafFrontImage}
                           alt="EAF Front"
                           className="w-full rounded-lg border border-gray-200 cursor-pointer hover:opacity-90 transition-opacity"
-                          onClick={() => window.open(selected.eafFrontImage, "_blank")}
+                          onClick={() => selected.eafFrontImage && setZoomImage({ src: selected.eafFrontImage, alt: "EAF Front" })}
                         />
                       </div>
                     )}
@@ -752,7 +785,7 @@ export default function AdminCandidates() {
                           src={selected.eafBackImage}
                           alt="EAF Back"
                           className="w-full rounded-lg border border-gray-200 cursor-pointer hover:opacity-90 transition-opacity"
-                          onClick={() => window.open(selected.eafBackImage, "_blank")}
+                          onClick={() => selected.eafBackImage && setZoomImage({ src: selected.eafBackImage, alt: "EAF Back" })}
                         />
                       </div>
                     )}
@@ -832,6 +865,12 @@ export default function AdminCandidates() {
           </motion.div>
         </div>
       )}
+
+      {/* Full-screen zoom for the EAF document photos opened from the detail modal. */}
+      {zoomImage && (
+        <ImageLightbox src={zoomImage.src} alt={zoomImage.alt} onClose={() => setZoomImage(null)} />
+      )}
+
       {/* Rejection Reason Dialog */}
       {rejectDialog && (
         <div
@@ -851,60 +890,104 @@ export default function AdminCandidates() {
               </p>
             </div>
             <div className="p-5 space-y-4 text-sm">
-              {/* 112: one merged checklist — severity is derived, not asked. */}
+              {/* 112 merged the checklist into one list; it is now presented
+                  in its two severity groups so the consequence of a tick is
+                  visible before the rejection is signed.  The tier is still
+                  derived, never asked for. */}
               <div>
                 <h4 className="font-medium text-gray-800 mb-2 text-xs uppercase tracking-wide">
                   Reason for Rejection <span className="text-red-500">*</span>
                 </h4>
-                <div className="space-y-1.5">
-                  {REJECTION_REASONS.map(({ reason, tier }) => {
-                    const checked = rejectReasons.some((r) => r.reason === reason);
-                    return (
-                      <label
-                        key={reason}
-                        className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
-                          checked ? "border-[#5C0102] bg-red-50" : "border-gray-200 hover:border-gray-300"
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => {
-                            setRejectReasons((prev) =>
-                              checked
-                                ? prev.filter((r) => r.reason !== reason)
-                                : [...prev, { reason, tier }]
-                            );
-                          }}
-                          className="accent-[#5C0102]"
-                        />
-                        <span className="text-gray-700">{reason}</span>
-                      </label>
-                    );
-                  })}
-                  <label
-                    className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
-                      rejectOther ? "border-[#5C0102] bg-red-50" : "border-gray-200 hover:border-gray-300"
+                <div className="space-y-3">
+                  {REJECTION_SEVERITY_GROUPS.map((group) => (
+                    <div key={group.tier}>
+                      <div className="flex items-baseline gap-2 mb-1.5">
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${group.badgeClass}`}>
+                          {group.title}
+                        </span>
+                        <span className="text-[11px] text-gray-400">{group.note}</span>
+                      </div>
+                      <div className="space-y-1.5">
+                        {REJECTION_REASONS.filter((r) => r.tier === group.tier).map(({ reason }) => {
+                          const checked = rejectReasons.some((r) => r.reason === reason);
+                          return (
+                            <label
+                              key={reason}
+                              className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
+                                checked ? "border-[#5C0102] bg-red-50" : "border-gray-200 hover:border-gray-300"
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {
+                                  setRejectReasons((prev) =>
+                                    checked
+                                      ? prev.filter((r) => r.reason !== reason)
+                                      : [...prev, { reason, tier: group.tier }]
+                                  );
+                                }}
+                                className="accent-[#5C0102]"
+                              />
+                              <span className="text-gray-700">{reason}</span>
+                            </label>
+                          );
+                        })}
+                        {/* "Others" counts as low-tier — it only disqualifies
+                            alongside a high reason — so it lives here. */}
+                        {group.tier === "low" && (
+                          <>
+                            <label
+                              className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
+                                rejectOther ? "border-[#5C0102] bg-red-50" : "border-gray-200 hover:border-gray-300"
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={rejectOther}
+                                onChange={() => setRejectOther((prev) => !prev)}
+                                className="accent-[#5C0102]"
+                              />
+                              <span className="text-gray-700">Others</span>
+                            </label>
+                            {rejectOther && (
+                              <input
+                                type="text"
+                                value={rejectOtherText}
+                                onChange={(e) => setRejectOtherText(e.target.value)}
+                                placeholder="Specify the reason..."
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50"
+                              />
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {/* Live consequence of the current selection — mirrors what
+                    the student side and the submit RPC will enforce. */}
+                {rejectTier && (
+                  <div
+                    className={`mt-3 flex items-start gap-2 rounded-xl border p-3 text-xs ${
+                      rejectTier === "high"
+                        ? "bg-red-50 border-red-200 text-red-700"
+                        : "bg-amber-50 border-amber-200 text-amber-700"
                     }`}
                   >
-                    <input
-                      type="checkbox"
-                      checked={rejectOther}
-                      onChange={() => setRejectOther((prev) => !prev)}
-                      className="accent-[#5C0102]"
-                    />
-                    <span className="text-gray-700">Others</span>
-                  </label>
-                  {rejectOther && (
-                    <input
-                      type="text"
-                      value={rejectOtherText}
-                      onChange={(e) => setRejectOtherText(e.target.value)}
-                      placeholder="Specify the reason..."
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50"
-                    />
-                  )}
-                </div>
+                    {rejectTier === "high"
+                      ? <XCircle size={14} className="flex-shrink-0 mt-0.5" />
+                      : <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />}
+                    <span>
+                      <span className="font-medium">
+                        {rejectTier === "high" ? "High Severity — " : "Low Severity — "}
+                      </span>
+                      {rejectTier === "high"
+                        ? "the student is disqualified and cannot resubmit an application for this election period."
+                        : "the student may revise and resubmit their application within this election period."}
+                    </span>
+                  </div>
+                )}
               </div>
               <div>
                 <label className="block text-sm text-gray-700 mb-1.5">

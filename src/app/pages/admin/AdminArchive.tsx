@@ -4,6 +4,7 @@ import { useApp, Candidate } from "../../context/AppContext";
 import { Archive, FileText, Download, Search, Eye, Clock, CheckCircle, XCircle, Loader2, AlertCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ArchivePdfDocument, archivePdfFileName, downloadArchiveDocumentPdf } from "../../components/ArchiveDocumentPdf";
+import { ImageLightbox } from "../../components/EvidencePreview";
 
 // One row of the archive list.  It carries the SOURCE record (not just its
 // title) so the preview modal can render the actual documents — the display
@@ -289,6 +290,11 @@ function StatusBadge({ status }: { status: Candidate["status"] }) {
 // submitted EAF, shown in the EAF Photos section below (and included in the
 // PDF download).
 function CandidacyPreview({ candidate }: { candidate: Candidate }) {
+  // Full-screen zoom for the EAF photos — opens in a lightbox modal instead
+  // of a new browser tab.  Closing the lightbox must not close the archive
+  // preview behind it (the lightbox consumes Escape; the content stops
+  // backdrop-click propagation).
+  const [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(null);
   const docs: { label: string; present: boolean }[] = [
     { label: "EAF (Election Application Form)", present: candidate.documents.applicationForm },
     { label: "Introductory Profile", present: candidate.documents.introductoryProfile },
@@ -378,7 +384,7 @@ function CandidacyPreview({ candidate }: { candidate: Candidate }) {
                   src={candidate.eafFrontImage}
                   alt="EAF Front"
                   className="w-full rounded-lg border border-gray-200 cursor-pointer hover:opacity-90 transition-opacity"
-                  onClick={() => window.open(candidate.eafFrontImage, "_blank")}
+                  onClick={() => candidate.eafFrontImage && setZoomImage({ src: candidate.eafFrontImage, alt: "EAF Front" })}
                 />
               </div>
             )}
@@ -389,12 +395,16 @@ function CandidacyPreview({ candidate }: { candidate: Candidate }) {
                   src={candidate.eafBackImage}
                   alt="EAF Back"
                   className="w-full rounded-lg border border-gray-200 cursor-pointer hover:opacity-90 transition-opacity"
-                  onClick={() => window.open(candidate.eafBackImage, "_blank")}
+                  onClick={() => candidate.eafBackImage && setZoomImage({ src: candidate.eafBackImage, alt: "EAF Back" })}
                 />
               </div>
             )}
           </div>
         </div>
+      )}
+
+      {zoomImage && (
+        <ImageLightbox src={zoomImage.src} alt={zoomImage.alt} onClose={() => setZoomImage(null)} />
       )}
     </>
   );

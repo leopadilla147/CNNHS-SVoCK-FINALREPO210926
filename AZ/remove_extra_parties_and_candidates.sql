@@ -29,10 +29,10 @@
 --      candidacies -- audit_logs are permanent by design and untouched)
 --   5. this batch's 3 parties                         (by fixed id +
 --      period; party_members cascade via 011:49)
---   6. this period's frozen past-election snapshot rows (the 061/064/
---      085 past_* tables reference election_periods ON DELETE RESTRICT,
---      so they must go before the period -- see "ARCHIVED PERIODS"
---      below)
+--   6. this period's frozen past-election snapshot rows and archived
+--      ballots (the 061/064/085 past_* tables and 138's votes_archive
+--      reference election_periods ON DELETE RESTRICT, so they must go
+--      before the period -- see "ARCHIVED PERIODS" below)
 --   7. the election_periods row itself, but ONLY if nothing else is
 --      left in it -- see "COOPERATIVE PERIOD DELETE" below
 --
@@ -82,7 +82,13 @@
 --   past_election_candidates / past_election_positions / past_parties /
 --   past_election_complaints all reference election_periods ON DELETE
 --   RESTRICT -- 061/064/085), step 6 deletes THIS PERIOD's snapshot
---   rows so the period row can be deleted afterwards.  The snapshot is
+--   rows so the period row can be deleted afterwards.  138's
+--   votes_archive restricts the period the same way, so step 6 also
+--   removes THIS PERIOD's archived ballots: after a finalize/reset they
+--   are the period's whole ballot box (the live votes table is already
+--   empty for it, so step 2 finds nothing to delete there), and step 2
+--   erases the period's live ballots without a guard anyway, so their
+--   archived copies go the same way.  The snapshot is
 --   period-scoped and the guards
 --   above have already proven the period contains nothing but the two
 --   extra batches, so every frozen row it carries describes seeded test
@@ -93,7 +99,7 @@
 --   list_past_elections_rpc / get_past_election_results_rpc fall back to
 --   live derivation (061 §7) and still render the remaining batch.
 --   Guarded with to_regclass so the script also runs on a database
---   where 061/064/085 were never applied -- same pattern as
+--   where 061/064/085/138 were never applied -- same pattern as
 --   AZ/reset_election_data.sql.
 --
 -- RUNS AS: the SQL editor's owner role.  One transaction: a failure
@@ -215,6 +221,10 @@ where pr.candidate_id = c.id
 --    ACTION (031:255) and the queue row can outlive the vote when the
 --    period is kept for the other batch, so those pointers are
 --    detached first.
+--    On a database with 138 applied, a finalized/reset period's ballots
+--    no longer live here at all -- they sit in votes_archive, so this
+--    delete finds none of them; step 6 removes those (their period FK
+--    is what would block step 7 otherwise).
 -- ---------------------------------------------------------------------
 update public.kiosk_vote_queue
    set linked_vote_id = null
@@ -269,16 +279,21 @@ where p.election_period_id = pg_temp.seed_election_period_id()
 
 -- ---------------------------------------------------------------------
 -- 6) ARCHIVE SNAPSHOT -- this period's rows in the 061/064/085 past_*
---    tables.  All five reference election_periods ON DELETE RESTRICT,
---    so they must go before the period row in step 7.  The guards above
---    proved the period contains nothing but the two extra batches, so
---    every frozen row here describes seeded test data.  Removed even
---    when the period is KEPT for the other batch: the snapshot is
---    period-scoped and would otherwise linger in Past Elections listing
---    candidates this cleanup just deleted; the past-election RPCs fall
---    back to live derivation (061 §7) without it.  to_regclass-guarded
---    and dynamic so this also runs where 061/064/085 were never
---    applied -- same pattern as AZ/reset_election_data.sql.
+--    tables plus its archived ballots in 138's votes_archive.  All six
+--    reference election_periods ON DELETE RESTRICT, so they must go
+--    before the period row in step 7 -- and votes_archive is the one
+--    that actually blocks it now: after a finalize/reset the period's
+--    ballots live there, not in the live votes table step 2 emptied.
+--    The guards above proved the period contains nothing but the two
+--    extra batches, so every frozen row here describes seeded test
+--    data.  Removed even when the period is KEPT for the other batch:
+--    the snapshot is period-scoped and would otherwise linger in Past
+--    Elections listing candidates this cleanup just deleted (the
+--    past-election RPCs fall back to live derivation, 061 §7), and the
+--    archived ballots are this test election's ballot box.  Each table
+--    is to_regclass-guarded and deleted dynamically so this also runs
+--    where 061/064/085/138 were never applied -- same pattern as
+--    AZ/reset_election_data.sql.
 -- ---------------------------------------------------------------------
 do $$
 declare
@@ -311,9 +326,18 @@ begin
     get diagnostics v_count = row_count;
     v_removed := coalesce(v_removed || ', ', '') || v_count || ' past_election_periods row(s)';
   end if;
+  -- 138 -- the period's archived ballots.  Same RESTRICT FK to
+  -- election_periods as the past_* rows above; the live-side ballots
+  -- were already emptied in step 2, so this only ever finds rows when
+  -- a finalize/reset moved the period's ballots into the archive.
+  if to_regclass('public.votes_archive') is not null then
+    execute 'delete from public.votes_archive where election_period_id = $1' using v_uuid;
+    get diagnostics v_count = row_count;
+    v_removed := coalesce(v_removed || ', ', '') || v_count || ' votes_archive ballot(s)';
+  end if;
 
   if v_removed is null then
-    raise notice 'No past-election snapshot tables found (061/064/085 not applied); nothing to un-archive for period %.', v_uuid;
+    raise notice 'No archive tables found (061/064/085/138 not applied); nothing to un-archive for period %.', v_uuid;
   else
     raise notice 'Archive snapshot for period % removed: %.', v_uuid, v_removed;
   end if;
@@ -356,14 +380,14 @@ commit;
 -- ---------------------------------------------------------------------
 -- Verify: expect candidates_left_in_period = 0, parties_left_anywhere = 0,
 -- period_votes_left = 0, period_complaints_left = 0, archive_rows_left = 0
--- (null only if 061/064/085 were never applied) and period_exists = false
+-- (null only if 061/064/085/138 were never applied) and period_exists = false
 -- (or true with 0 of this batch's rows left if the other batch still lives
 -- there).  This file never deletes students, so present_students counts
 -- every lrn the batch claims: 96 = the 46 current lrns plus the 50 the
 -- older revision claimed (46 lrns + 4 retired PRO lrns).
 -- ---------------------------------------------------------------------
 -- Guarded + dynamic so the count is skipped (reported as null) on a
--- database without the 061/064/085 snapshot tables.
+-- database without the 061/064/085/138 archive tables.
 do $$
 declare
   v_total bigint := 0;
@@ -389,12 +413,17 @@ begin
     execute 'select count(*) from public.past_election_periods where election_period_id = $1' into v_count using pg_temp.seed_election_period_id();
     v_total := v_total + v_count;
   end if;
+  if to_regclass('public.votes_archive') is not null then
+    execute 'select count(*) from public.votes_archive where election_period_id = $1' into v_count using pg_temp.seed_election_period_id();
+    v_total := v_total + v_count;
+  end if;
   perform set_config('svock.archive_rows_left', case
     when to_regclass('public.past_election_candidates') is null
      and to_regclass('public.past_election_positions') is null
      and to_regclass('public.past_parties') is null
      and to_regclass('public.past_election_periods') is null
      and to_regclass('public.past_election_complaints') is null
+     and to_regclass('public.votes_archive') is null
     then null else v_total::text end, false);
 end;
 $$;

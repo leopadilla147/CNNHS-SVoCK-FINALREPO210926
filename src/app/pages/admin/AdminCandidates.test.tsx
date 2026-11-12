@@ -241,3 +241,63 @@ describe("AdminCandidates review order", () => {
     ]);
   });
 });
+
+describe("AdminCandidates rejection dialog junk guard (SAME-01)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseApp.mockReturnValue({
+      currentUser: {
+        id: "1",
+        name: "Screening Commissioner",
+        role: "admin",
+        commissionerRole: "screening_validation",
+      },
+      candidates: [candidate("pending", "1", "Pending Applicant")],
+      setCandidates: vi.fn(),
+      electionPeriod: {},
+      addLog: vi.fn(),
+      insertNotification: vi.fn(),
+      students: [],
+    });
+  });
+
+  async function openRejectDialog(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("button", { name: /Independent/ }));
+    await user.click(screen.getByRole("button", { name: /View Application Details/i }));
+    await user.click(screen.getByRole("button", { name: /Reject/i }));
+  }
+
+  it("keeps the Reject button disabled while the remarks are only dots and spaces", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openRejectDialog(user);
+
+    await user.click(screen.getByRole("checkbox", { name: "Incomplete Documents" }));
+    const remarks = screen.getByPlaceholderText(/Explain the decision for the student/i);
+    await user.type(remarks, ". . .");
+
+    expect(screen.getByRole("button", { name: "Reject Candidate" })).toBeDisabled();
+
+    // Real remarks enable the reject action.
+    await user.clear(remarks);
+    await user.type(remarks, "The submitted documents are incomplete.");
+    expect(screen.getByRole("button", { name: "Reject Candidate" })).toBeEnabled();
+  });
+
+  it("ignores a dots-only Others reason until it carries real words", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openRejectDialog(user);
+
+    // A junk-only "Others" text is not a reason: no tier is derived and the
+    // Reject button stays disabled even with real remarks.
+    await user.click(screen.getByRole("checkbox", { name: "Others" }));
+    await user.type(screen.getByPlaceholderText(/Specify the reason/i), ".");
+    await user.type(screen.getByPlaceholderText(/Explain the decision for the student/i), "Real remarks.");
+    expect(screen.getByRole("button", { name: "Reject Candidate" })).toBeDisabled();
+
+    await user.clear(screen.getByPlaceholderText(/Specify the reason/i));
+    await user.type(screen.getByPlaceholderText(/Specify the reason/i), "Submitted a falsified medical certificate.");
+    expect(screen.getByRole("button", { name: "Reject Candidate" })).toBeEnabled();
+  });
+});

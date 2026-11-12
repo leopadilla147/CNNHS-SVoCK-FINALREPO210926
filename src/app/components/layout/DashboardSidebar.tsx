@@ -16,7 +16,7 @@ import {
 } from "./roleNav";
 
 export function DashboardSidebar() {
-  const { currentUser, setCurrentUser, candidates, electionPeriod, students } = useApp();
+  const { currentUser, setCurrentUser, candidates, electionPeriod, students, refreshData } = useApp();
   const location = useLocation();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -108,6 +108,16 @@ export function DashboardSidebar() {
         return;
       }
       const result = (data ?? {}) as { new_parties?: number; new_candidates?: number };
+      // Auto-refresh: the RPC just wrote rows server-side, so re-pull every
+      // list from Supabase — Parties/Candidates pages show the injected rows
+      // at once instead of after a manual page reload.  Best-effort: the
+      // batch is already committed, so a failed refresh must not mask the
+      // success; the next login or load re-fetches anyway.
+      try {
+        await refreshData?.();
+      } catch {
+        // ignore — the seed data is committed and will appear on next load.
+      }
       toast.success(
         `Seed data injected: ${result.new_parties ?? 3} parties and ${result.new_candidates ?? 46} candidates added to the active election period.`,
       );

@@ -5,6 +5,7 @@ import type {
   DisqualifiedCandidate,
   ElectionStage,
 } from "../context/AppContext";
+import { hasMeaningfulText } from "./wordCount";
 
 /**
  * Pure complaint helpers (Phase 4, Plan 04-02 - GRIEV-05 / D-01).
@@ -183,17 +184,33 @@ export function todayDateStr(): string {
  */
 export function validateComplaintForm(input: ComplaintFormInput): ComplaintFormErrors {
   const errors: ComplaintFormErrors = {};
-  if (!resolveComplaintAgainst(input.complaintAgainst, input.otherAgainst)) {
-    errors.complaintAgainst = input.complaintAgainst === COMPLAINT_AGAINST_OTHERS
-      ? "Please specify who or what the complaint is against."
-      : "Please select who the complaint is against.";
+  // "Others" resolves to the free text, so the junk guard applies there: an
+  // answer of only dots and spaces is not a real subject/target (SAME-01).
+  if (input.complaintAgainst === COMPLAINT_AGAINST_OTHERS) {
+    const resolvedAgainst = resolveComplaintAgainst(input.complaintAgainst, input.otherAgainst);
+    if (!resolvedAgainst) {
+      errors.complaintAgainst = "Please specify who or what the complaint is against.";
+    } else if (!hasMeaningfulText(resolvedAgainst)) {
+      errors.complaintAgainst = "Who or what the complaint is against must contain actual words — punctuation and spaces alone are not allowed.";
+    }
+  } else if (!input.complaintAgainst.trim()) {
+    errors.complaintAgainst = "Please select who the complaint is against.";
   }
-  if (!resolveComplaintSubject(input.subject, input.otherSubject)) {
-    errors.subject = input.subject === COMPLAINT_SUBJECT_OTHERS
-      ? "Please specify the nature of your complaint."
-      : "Please select the nature of your complaint.";
+  if (input.subject === COMPLAINT_SUBJECT_OTHERS) {
+    const resolvedSubject = resolveComplaintSubject(input.subject, input.otherSubject);
+    if (!resolvedSubject) {
+      errors.subject = "Please specify the nature of your complaint.";
+    } else if (!hasMeaningfulText(resolvedSubject)) {
+      errors.subject = "The nature of the complaint must contain actual words — punctuation and spaces alone are not allowed.";
+    }
+  } else if (!input.subject.trim()) {
+    errors.subject = "Please select the nature of your complaint.";
   }
-  if (!input.description.trim()) errors.description = "Please provide a narrative report.";
+  if (!input.description.trim()) {
+    errors.description = "Please provide a narrative report.";
+  } else if (!hasMeaningfulText(input.description)) {
+    errors.description = "The narrative report must contain actual words — punctuation and spaces alone are not allowed.";
+  }
   if (!input.incidentDate) {
     errors.incidentDate = "Please select the date of the incident.";
   } else if (input.incidentDate > todayDateStr()) {

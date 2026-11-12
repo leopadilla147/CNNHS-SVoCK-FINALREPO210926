@@ -417,6 +417,14 @@ interface AppContextType {
   markAsRead: (id: string) => Promise<void>;
   markAllAsRead: () => void;
   insertNotification: (notif: Omit<AppNotification, "id" | "isRead" | "createdAt">) => void;
+  /**
+   * Re-runs the provider's full Supabase fetch, replacing every list in
+   * context.  Use after an RPC has committed server-side data that whole
+   * screens read (e.g. the Electoral Board's seed injection) so the current
+   * page shows the new rows without a page reload.  Best-effort for callers —
+   * the DB write already succeeded, so a failed refresh must not mask it.
+   */
+  refreshData: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -573,7 +581,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [allCandidates, electionPeriod]
   );
 
-  const loadSupabaseState = async () => {
+  // useCallback: exposed as context.refreshData so RPC-driven flows (seed
+  // injection, kiosk status changes) can re-pull every list without a reload;
+  // setters and fetchSupabaseState are all stable, so the deps are empty.
+  const loadSupabaseState = useCallback(async () => {
     const state = await fetchSupabaseState();
     if (!state) return;
 
@@ -588,7 +599,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setKioskStatuses(state.kioskStatuses);
     setHomepageSettingsState(state.homepageSettings);
     setLogs(state.logs);
-  };
+  }, []);
 
   // Re-run on login/logout, not just mount: the initial mount happens on
   // the login page where no session token exists yet, so the very first
@@ -863,6 +874,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       markAsRead,
       markAllAsRead,
       insertNotification,
+      refreshData: loadSupabaseState,
     }}>
       {children}
     </AppContext.Provider>

@@ -6,6 +6,7 @@ import { useApp, Candidate } from "../../context/AppContext";
 import { positionRank } from "../../lib/partyScope";
 import { reviewCandidacyRpc, insertAuditLog } from "../../lib/supabaseData";
 import { isSupabaseConfigured } from "../../lib/supabase";
+import { hasMeaningfulText } from "../../lib/wordCount";
 import { useConfirm } from "../../lib/useConfirm";
 import { ImageLightbox } from "../../components/EvidencePreview";
 
@@ -115,15 +116,18 @@ export default function AdminCandidates() {
   const [rejectOtherText, setRejectOtherText] = useState("");
   const [rejectDetails, setRejectDetails] = useState("");
   // The tier is derived, never asked for: any high-tier reason disqualifies.
-  // "Others" counts as low-tier (it only disqualifies alongside a high reason).
+  // "Others" counts as low-tier (it only disqualifies alongside a high reason)
+  // and only when the free text carries actual words — a dots-only answer is
+  // not a reason (SAME-01).
+  const otherReasonGiven = rejectOther && hasMeaningfulText(rejectOtherText);
   const rejectTier = rejectReasons.some((r) => r.tier === "high")
     ? "high"
-    : rejectReasons.length > 0 || (rejectOther && rejectOtherText.trim())
+    : rejectReasons.length > 0 || otherReasonGiven
     ? "low"
     : null;
   const rejectReason = [
     ...rejectReasons.map((r) => r.reason),
-    ...(rejectOther && rejectOtherText.trim() ? [rejectOtherText.trim()] : []),
+    ...(otherReasonGiven ? [rejectOtherText.trim()] : []),
   ].join("; ");
   const [actionError, setActionError] = useState<string | null>(null);
   const approveConfirm = useConfirm({ title: "Approve Candidate?", description: "This will approve the candidate's application for the election.", confirmText: "Approve" });
@@ -204,8 +208,10 @@ export default function AdminCandidates() {
 
   const handleRejectWithReason = async () => {
     // 112: at least one reason (preset or a written "Others") AND the
-    // Additional Remarks are both required before the RPC fires.
-    if (!rejectDialog || !rejectReason || !rejectTier || !rejectDetails.trim()) return;
+    // Additional Remarks are both required before the RPC fires — and the
+    // remarks must carry actual words; dots and spaces are not an
+    // explanation the student can act on (SAME-01).
+    if (!rejectDialog || !rejectReason || !rejectTier || !hasMeaningfulText(rejectDetails)) return;
     setActionError(null);
     setProcessing(rejectDialog.id);
     try {
@@ -1010,7 +1016,7 @@ export default function AdminCandidates() {
                 </button>
                 <button
                   onClick={handleRejectWithReason}
-                  disabled={!rejectReason || !rejectDetails.trim() || processing === rejectDialog.id}
+                  disabled={!rejectReason || !hasMeaningfulText(rejectDetails) || processing === rejectDialog.id}
                   className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-700 transition-colors disabled:opacity-60"
                 >
                   {processing === rejectDialog.id ? (

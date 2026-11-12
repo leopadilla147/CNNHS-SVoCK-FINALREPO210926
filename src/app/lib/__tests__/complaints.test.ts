@@ -236,6 +236,26 @@ describe("validateComplaintForm", () => {
     expect(validateComplaintForm({ ...valid, description: "   " }).description).toBe("Please provide a narrative report.");
   });
 
+  it("rejects a punctuation-and-spaces-only narrative report", () => {
+    expect(validateComplaintForm({ ...valid, description: ". . ." }).description).toBe(
+      "The narrative report must contain actual words — punctuation and spaces alone are not allowed."
+    );
+    expect(validateComplaintForm({ ...valid, description: "." }).description).toMatch(/actual words/);
+    expect(validateComplaintForm({ ...valid, description: "The candidate shouted at me during the meeting." }).description).toBeUndefined();
+  });
+
+  it("rejects a punctuation-only Others subject and against", () => {
+    expect(validateComplaintForm({ ...valid, subject: COMPLAINT_SUBJECT_OTHERS, otherSubject: ". ." }).subject).toBe(
+      "The nature of the complaint must contain actual words — punctuation and spaces alone are not allowed."
+    );
+    expect(validateComplaintForm({ ...valid, complaintAgainst: COMPLAINT_AGAINST_OTHERS, otherAgainst: ". ." }).complaintAgainst).toBe(
+      "Who or what the complaint is against must contain actual words — punctuation and spaces alone are not allowed."
+    );
+    expect(
+      validateComplaintForm({ ...valid, subject: COMPLAINT_SUBJECT_OTHERS, otherSubject: "Bribery during screening" }).subject
+    ).toBeUndefined();
+  });
+
   it("requires a date but allows a past incident date", () => {
     expect(validateComplaintForm({ ...valid, incidentDate: "" }).incidentDate).toBe("Please select the date of the incident.");
     expect(validateComplaintForm({ ...valid, incidentDate: "2026-10-21" }).incidentDate).toBeUndefined();

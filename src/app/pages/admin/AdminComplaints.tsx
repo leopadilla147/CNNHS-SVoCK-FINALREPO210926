@@ -9,6 +9,7 @@ import { positionRank } from "../../lib/partyScope";
 import { decideComplaintRpc, uploadComplaintEvidence, verifyGrievancePasswordRpc } from "../../lib/supabaseData";
 import { saveGrievanceResponseFormDocx } from "../../lib/docxGrievanceResponseForm";
 import { statusMeta, sortFiledFirst, complaintsForElection, validateEvidenceFiles, EVIDENCE_ACCEPT, EVIDENCE_MAX_FILES, EVIDENCE_TYPES_LABEL, COMPLAINT_DECISION_VALUES, COMPLAINT_DECISION_LABELS, complaintDecisionDefinition, formatSubmittedAt, COMPLAINT_SANCTION_VALUES, COMPLAINT_SANCTION_LABELS, complaintSanctionsSummary, disqualifiedCandidatesSummary } from "../../lib/complaints";
+import { hasMeaningfulText } from "../../lib/wordCount";
 import { EvidenceFileThumb, EvidenceAttachment } from "../../components/EvidencePreview";
 
 const formatBytes = (bytes: number) =>
@@ -71,6 +72,9 @@ export default function AdminComplaints() {
   // 090: the complaint that was blocked from resolving for lack of Findings —
   // drives the inline "required" error on the Findings input.
   const [findingsNeeded, setFindingsNeeded] = useState<string | null>(null);
+  // SAME-01: the failed guard also records WHY — an empty draft ("required")
+  // or a dots-and-spaces-only draft ("junk") show different messages.
+  const [findingsJunk, setFindingsJunk] = useState(false);
   // 097: the required decision classification for the open Findings.
   const [findingsDecision, setFindingsDecision] = useState<Complaint["decision"] | "">("");
   const [decisionNeeded, setDecisionNeeded] = useState<string | null>(null);
@@ -125,6 +129,7 @@ export default function AdminComplaints() {
     setShowFindings(null);
     setFindingsDraft("");
     setFindingsNeeded(null);
+    setFindingsJunk(false);
     setFindingsDecision("");
     setDecisionNeeded(null);
     setFindingsSanction("");
@@ -143,6 +148,7 @@ export default function AdminComplaints() {
       setShowFindings(complaint.id);
       setFindingsDraft(complaint.findings ?? "");
       setFindingsNeeded(null);
+      setFindingsJunk(false);
       setFindingsDecision("");
       setDecisionNeeded(null);
       setFindingsSanction("");
@@ -239,12 +245,16 @@ export default function AdminComplaints() {
     const needsDisqualified = effectiveSanction === "disqualification";
     const missingSanctions = substantiated && !effectiveSanction;
     const missingDisqualified = needsDisqualified && findingsDisqualified.length === 0;
-    if (!effectiveFindings || !effectiveDecision || missingSanctions || missingDisqualified) {
+    // SAME-01: a draft of only punctuation and spaces is not findings, even
+    // though it survives the trim() check.
+    const junkFindings = effectiveFindings.length > 0 && !hasMeaningfulText(effectiveFindings);
+    if (!effectiveFindings || junkFindings || !effectiveDecision || missingSanctions || missingDisqualified) {
       // 090/097/127: all mandatory — surface the requirement on the input
       // (auto-open the panel) instead of a dead button.
       setShowFindings(complaint.id);
       setFindingsDraft(complaint.findings ?? "");
-      setFindingsNeeded(effectiveFindings ? null : complaint.id);
+      setFindingsNeeded(effectiveFindings && !junkFindings ? null : complaint.id);
+      setFindingsJunk(junkFindings);
       setDecisionNeeded(effectiveDecision ? null : complaint.id);
       setSanctionsNeeded(missingSanctions ? complaint.id : null);
       setDisqualifiedNeeded(missingDisqualified ? complaint.id : null);
@@ -627,7 +637,10 @@ export default function AdminComplaints() {
                 )}
                 {findingsNeeded === complaint.id && (
                   <div className="flex items-center gap-1.5 text-xs text-red-600 mb-2">
-                    <AlertCircle size={12} /> Findings are required before this complaint can be resolved.
+                    <AlertCircle size={12} />{" "}
+                    {findingsJunk
+                      ? "Findings must contain actual words — punctuation and spaces alone are not allowed."
+                      : "Findings are required before this complaint can be resolved."}
                   </div>
                 )}
                 {decisionNeeded === complaint.id && (
@@ -641,6 +654,7 @@ export default function AdminComplaints() {
                   onChange={(e) => {
                     setFindingsDraft(e.target.value);
                     setFindingsNeeded(null);
+                    setFindingsJunk(false);
                   }}
                   className={`w-full px-3 py-2 border rounded-lg text-sm bg-gray-50 mb-2 focus:outline-none ${
                     findingsNeeded === complaint.id

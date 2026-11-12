@@ -8,7 +8,14 @@ import { type PastElectionResults, reapplyPartyCandidacyRpc, submitCandidacyRpc,
 import { isSupabaseConfigured, supabase } from "../../lib/supabase";
 import { useConfirm } from "../../lib/useConfirm";
 import { escapeHtml } from "../../lib/escapeHtml";
-import { MIN_WORDS, countWords as wordCount, wordCountError } from "../../lib/wordCount";
+import {
+  MIN_CAPSULE_DESCRIPTION_WORDS,
+  MIN_WORDS,
+  countWords as wordCount,
+  meaningfulTextError,
+  minWordCountError,
+  wordCountError,
+} from "../../lib/wordCount";
 import {
   GRADE_LEVELS,
   buildPartyOptions,
@@ -53,7 +60,7 @@ const STEP_INSTRUCTIONS = [
   "Provide the complete name and an active mobile number of your parent or legal guardian. They may be reached for election-related notices.",
   "Choose how you are running — join an existing party, create a new party (Grade 11-12 only; creating one makes you its President), or run as an Independent — then select the elective position you are vying for.",
   "Answer in your own words. Each essay must reach the minimum word count (the counter turns green when met), and the skills you tick must each be explained.",
-  "Follow the direction below: answer the guide question and write at least one SSLG/YES-O project or program for each core value — Maka-Diyos, Maka-Tao, Makakalikasan, and Makabansa.",
+  "Follow the direction below: answer the guide question and write at least one SSLG/YES-O project or program for each core value — Maka-Diyos, Maka-Tao, Makakalikasan, and Makabansa. Each description must reach the minimum word count (the counter turns green when met).",
   "Review the summary of your information below. When everything is correct, generate your EAF, print it, complete the missing fields and signatures, then upload clear photos of the front and back pages for review.",
 ];
 
@@ -843,25 +850,33 @@ export default function StudentApplyCandidacy() {
         break;
       case 4:
         {
-          const wcQualities = wordCountError(form.leadershipQualities, "Leadership qualities");
-          if (wcQualities) errs.leadershipQualities = wcQualities;
+          // VALID-01 plus the junk guard: an answer of only dots and spaces
+          // has no real words, so the meaningful check fires before the count.
+          for (const { field, label, value } of [
+            { field: "leadershipQualities", label: "Leadership qualities", value: form.leadershipQualities },
+            { field: "leadershipSkillsExplanation", label: "Skills explanation", value: form.leadershipSkillsExplanation },
+            { field: "threeYearVision", label: "Three-year vision", value: form.threeYearVision },
+          ]) {
+            const err = meaningfulTextError(value, label) ?? wordCountError(value, label);
+            if (err) errs[field] = err;
+          }
           if (form.leadershipSkills.length === 0) errs.leadershipSkills = "Select at least one organizational skill.";
-          const wcSkills = wordCountError(form.leadershipSkillsExplanation, "Skills explanation");
-          if (wcSkills) errs.leadershipSkillsExplanation = wcSkills;
-          const wcVision = wordCountError(form.threeYearVision, "Three-year vision");
-          if (wcVision) errs.threeYearVision = wcVision;
         }
         break;
       case 5:
         {
-          if (!form.makaDiyosProject.trim()) errs.makaDiyosProject = "Project name is required.";
-          if (!form.makaDiyosDescription.trim()) errs.makaDiyosDescription = "Description is required.";
-          if (!form.makaTaoProject.trim()) errs.makaTaoProject = "Project name is required.";
-          if (!form.makaTaoDescription.trim()) errs.makaTaoDescription = "Description is required.";
-          if (!form.makakalikasanProject.trim()) errs.makakalikasanProject = "Project name is required.";
-          if (!form.makakalikasanDescription.trim()) errs.makakalikasanDescription = "Description is required.";
-          if (!form.makabansaProject.trim()) errs.makabansaProject = "Project name is required.";
-          if (!form.makabansaDescription.trim()) errs.makabansaDescription = "Description is required.";
+          // Part IV guide question — required, and junk ("." / spaces only) is
+          // not an answer.
+          const cqErr = meaningfulTextError(form.capsuleQualities, "Answer");
+          if (cqErr) errs.capsuleQualities = cqErr;
+          for (const key of ["makaDiyos", "makaTao", "makakalikasan", "makabansa"] as const) {
+            const nameErr = meaningfulTextError(form[`${key}Project`], "Project name");
+            if (nameErr) errs[`${key}Project`] = nameErr;
+            const descErr =
+              meaningfulTextError(form[`${key}Description`], "Description") ??
+              minWordCountError(form[`${key}Description`], "Description", MIN_CAPSULE_DESCRIPTION_WORDS);
+            if (descErr) errs[`${key}Description`] = descErr;
+          }
         }
         break;
     }
@@ -2655,7 +2670,7 @@ export default function StudentApplyCandidacy() {
                   <div className="space-y-5">
                     <div>
                       <label className="block text-sm text-gray-700 mb-2 font-medium">
-                        What are your qualities that you believe can make a great leader?
+                        What are your qualities that you believe can make a great leader? <span className="text-red-500">*</span>
                       </label>
                       {/* Part IV's own answer — deliberately NOT the Introductory
                           Profile's "inspiring student leader" essay.  They used to
@@ -2665,8 +2680,9 @@ export default function StudentApplyCandidacy() {
                         value={form.capsuleQualities}
                         onChange={(e) => update("capsuleQualities", e.target.value)}
                         rows={4}
-                        className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50"
+                        className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50 ${errors.capsuleQualities ? "border-red-400" : "border-gray-200"}`}
                       />
+                      {errors.capsuleQualities && <p className="text-xs text-red-500 mt-1"><AlertCircle size={12} /> {errors.capsuleQualities}</p>}
                     </div>
 
                     {([
@@ -2674,7 +2690,9 @@ export default function StudentApplyCandidacy() {
                       { key: "makaTao", label: "Maka-Tao" },
                       { key: "makakalikasan", label: "Makakalikasan" },
                       { key: "makabansa", label: "Makabansa" },
-                    ] as const).map(({ key, label }) => (
+                    ] as const).map(({ key, label }) => {
+                      const description = form[`${key}Description` as keyof typeof form] as string;
+                      return (
                       <div key={key} className="border border-gray-200 rounded-xl p-4">
                         <h4 className="text-sm font-semibold text-gray-700 mb-3 uppercase tracking-wide">{label}</h4>
                         <div className="space-y-3">
@@ -2692,17 +2710,21 @@ export default function StudentApplyCandidacy() {
                           <div>
                             <label className="block text-xs text-gray-500 mb-1">Description <span className="text-red-500">*</span></label>
                             <textarea
-                              value={form[`${key}Description` as keyof typeof form] as string}
+                              value={description}
                               onChange={(e) => update(`${key}Description`, e.target.value)}
                               rows={3}
                               placeholder="Describe the project/program..."
                               className={`w-full px-4 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-[#5C0102] bg-gray-50 ${errors[`${key}Description`] ? "border-red-400" : "border-gray-200"}`}
                             />
+                            <p className={`text-xs mt-1 ${wordCount(description) >= MIN_CAPSULE_DESCRIPTION_WORDS ? "text-green-600" : "text-gray-400"}`}>
+                              {wordCount(description)}/{MIN_CAPSULE_DESCRIPTION_WORDS} words
+                            </p>
                             {errors[`${key}Description`] && <p className="text-xs text-red-500 mt-1"><AlertCircle size={12} /> {errors[`${key}Description`]}</p>}
                           </div>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}

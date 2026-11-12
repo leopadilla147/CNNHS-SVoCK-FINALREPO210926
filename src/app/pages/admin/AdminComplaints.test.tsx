@@ -205,6 +205,30 @@ describe("AdminComplaints sanctions (127)", () => {
     expect(mockDecideRpc).not.toHaveBeenCalled();
   });
 
+  it("blocks resolving on a punctuation-and-spaces-only findings draft (SAME-01)", async () => {
+    mockUseApp.mockReturnValue(appState());
+    renderPage();
+    const user = await openFindings();
+
+    await user.type(screen.getByPlaceholderText(/Explain the decision/i), ". . .");
+    await user.selectOptions(screen.getByLabelText("Complaint decision"), "substantiated");
+    await user.click(screen.getAllByRole("button", { name: "Resolved" })[1]);
+
+    expect(
+      await screen.findByText(/Findings must contain actual words — punctuation and spaces alone are not allowed\./i)
+    ).toBeInTheDocument();
+    expect(mockDecideRpc).not.toHaveBeenCalled();
+
+    // Real words clear the block — the resolve proceeds to the RPC.
+    const findings = screen.getByPlaceholderText(/Explain the decision/i);
+    await user.clear(findings);
+    await user.type(findings, "Verified by the Commission on Ethics.");
+    await user.click(screen.getByRole("radio", { name: "Verbal Warning" }));
+    await user.click(screen.getAllByRole("button", { name: "Resolved" })[1]);
+
+    expect(mockDecideRpc).toHaveBeenCalledTimes(1);
+  });
+
   it("requires at least one candidate to be disqualified when Disqualification is imposed", async () => {
     mockUseApp.mockReturnValue(appState({ candidates: [approvedCandidate] }));
     renderPage();

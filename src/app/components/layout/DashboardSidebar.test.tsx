@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DashboardSidebar } from "./DashboardSidebar";
 import type { CommissionerRole } from "../../context/AppContext";
 
-const { mockCurrentUser, mockElectionPeriod, mockConfirm, mockRpc, mockToastSuccess, mockToastError } =
+const { mockCurrentUser, mockElectionPeriod, mockConfirm, mockRpc, mockToastSuccess, mockToastError, mockRefreshData } =
   vi.hoisted(() => ({
     mockCurrentUser: {
       id: "electoral-1",
@@ -25,6 +25,7 @@ const { mockCurrentUser, mockElectionPeriod, mockConfirm, mockRpc, mockToastSucc
     mockRpc: vi.fn(),
     mockToastSuccess: vi.fn(),
     mockToastError: vi.fn(),
+    mockRefreshData: vi.fn(),
   }));
 
 vi.mock("../../context/AppContext", () => ({
@@ -33,6 +34,7 @@ vi.mock("../../context/AppContext", () => ({
     candidates: [],
     electionPeriod: mockElectionPeriod,
     setCurrentUser: vi.fn(),
+    refreshData: mockRefreshData,
   }),
 }));
 
@@ -74,6 +76,8 @@ describe("DashboardSidebar", () => {
     mockRpc.mockReset();
     mockToastSuccess.mockClear();
     mockToastError.mockClear();
+    mockRefreshData.mockReset();
+    mockRefreshData.mockResolvedValue(undefined);
   });
 
   it("shows Live Results for the Electoral Board", () => {
@@ -302,6 +306,28 @@ describe("DashboardSidebar", () => {
 
       await waitFor(() => expect(mockConfirm).toHaveBeenCalled());
       expect(mockRpc).not.toHaveBeenCalled();
+    });
+
+    it("auto-refreshes the context data after a successful injection", async () => {
+      mockConfirm.mockResolvedValueOnce(true);
+      mockRpc.mockResolvedValueOnce({ data: { new_parties: 3, new_candidates: 46 }, error: null });
+
+      renderSidebar();
+      fireEvent.click(screen.getByRole("button", { name: /Inject seed data/i }));
+
+      await waitFor(() => expect(mockRefreshData).toHaveBeenCalledTimes(1));
+      expect(mockToastSuccess).toHaveBeenCalled();
+    });
+
+    it("skips the auto-refresh when the rpc fails", async () => {
+      mockConfirm.mockResolvedValueOnce(true);
+      mockRpc.mockResolvedValueOnce({ data: null, error: { message: "boom" } });
+
+      renderSidebar();
+      fireEvent.click(screen.getByRole("button", { name: /Inject seed data/i }));
+
+      await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+      expect(mockRefreshData).not.toHaveBeenCalled();
     });
 
     it("reports a missing active election period instead of calling the rpc", async () => {
